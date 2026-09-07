@@ -1,0 +1,22 @@
+{
+  "short_name": "CMR System",
+  "name": "نظام غرفة المراقبة المركزية",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2921/2921222.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2921/2921222.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "./index.html",
+  "background_color": "#f4f6f9",
+  "theme_color": "#007bff",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "ar"
+}
