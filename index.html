@@ -636,6 +636,37 @@ function registerAuthListener(){
   });
 }
 
+/* ============================================================
+   نبض دوري: تحديث "آخر ظهور" أثناء استخدام التطبيق (كل 3 دقائق)
+   وأيضًا عند رجوع المستخدم للتطبيق بعد تصفّح شيء آخر
+   ============================================================ */
+let presenceInterval = null;
+function startPresenceHeartbeat(){
+  if(presenceInterval) return;
+  presenceInterval = setInterval(async ()=>{
+    if(document.visibilityState==='visible' && !isAppLocked()){
+      try{ await supa.rpc('touch_my_presence'); }catch(e){}
+    }
+  }, 3*60000);
+  document.addEventListener('visibilitychange', async ()=>{
+    if(document.visibilityState==='visible' && currentProfile && !isAppLocked()){
+      try{ await supa.rpc('touch_my_presence'); }catch(e){}
+    }
+  });
+}
+function fmtRelativeTime(iso){
+  if(!iso) return 'لم يسجّل دخول بعد';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs/60000);
+  if(mins<3) return '🟢 متصل الآن';
+  if(mins<60) return `منذ ${mins} دقيقة`;
+  const hrs = Math.floor(mins/60);
+  if(hrs<24) return `منذ ${hrs} ساعة`;
+  const days = Math.floor(hrs/24);
+  if(days<30) return `منذ ${days} يوم`;
+  return new Date(iso).toLocaleDateString('ar-EG');
+}
+
 async function loadProfileAndEnterApp(){
   try{
     const { data: profile, error } = await supa.from('profiles').select('*').eq('id', currentSession.user.id).single();
@@ -649,6 +680,8 @@ async function loadProfileAndEnterApp(){
     enterApp();
     subscribeRealtime();
     flushPendingQueue();
+    try{ await supa.rpc('touch_my_login'); }catch(e){ console.warn('تعذّر تسجيل وقت الدخول (غير خطير)', e); }
+    startPresenceHeartbeat();
   }catch(e){
     console.error('فشل تحميل الملف الشخصي', e);
     if(e.code==='PGRST116' || (e.message||'').includes('multiple (or no) rows')){
@@ -1365,6 +1398,11 @@ function renderUsersList(){
         </div>
         <span class="pill ${u.status==='active'?'ok':'bad'}">${u.status==='active'?'فعّال':'موقوف'}</span>
       </div>
+      <div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--muted)">
+        <div>🔓 آخر دخول: <b style="color:var(--text)">${u.last_login_at ? new Date(u.last_login_at).toLocaleString('ar-EG') : 'لم يسجّل دخول بعد'}</b></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">👁️ آخر ظهور: <b style="color:${u.last_seen_at && (Date.now()-new Date(u.last_seen_at).getTime())<3*60000 ? 'var(--success)':'var(--text)'}">${fmtRelativeTime(u.last_seen_at)}</b></div>
+      <button class="btn sm" style="margin-top:8px" onclick="openUserActivityLog('${u.id}','${u.display_name.replace(/'/g,"")}')">📋 سجل نشاطه</button>
       ${u.role!=='admin' ? `
       <div class="field" style="margin-top:10px"><label>الدور</label>
         <select class="input" id="role_${u.id}" onchange="updateUserRole('${u.id}', this.value)">
@@ -1418,6 +1456,27 @@ async function updateUserStatus(id, status){
     await logAudit(status==='suspended'?'إيقاف حساب':'إعادة تفعيل حساب', u.display_name);
     toast('✅ تم التحديث'); loadUsers();
   }catch(e){ toast('🚫 تعذّر التحديث'); }
+}
+async function openUserActivityLog(userId, userName){
+  openModal(`
+    <div class="modal-head"><h3>📋 سجل نشاط: ${userName}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div id="userActivityHost"><div class="empty">جاري التحميل...</div></div>
+  `);
+  try{
+    const {data, error} = await supa.from('audit_log').select('*').eq('actor_id', userId).order('ts',{ascending:false}).limit(100);
+    if(error) throw error;
+    const host = document.getElementById('userActivityHost');
+    if(!host) return;
+    if(!data || !data.length){ host.innerHTML = '<div class="empty">لا يوجد نشاط مسجّل لهذا المستخدم بعد.</div>'; return; }
+    host.innerHTML = data.map(r=>`
+      <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px">
+        <div style="color:var(--muted-2);font-size:10.5px;margin-bottom:2px">${new Date(r.ts).toLocaleString('ar-EG')}</div>
+        <div><b style="color:var(--accent)">${r.action}</b>${r.details?' — '+r.details:''}</div>
+      </div>`).join('');
+  }catch(e){
+    const host = document.getElementById('userActivityHost');
+    if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل السجل: ${e.message||''}</div>`;
+  }
 }
 
 /* ============================================================
@@ -2110,6 +2169,12 @@ function renderSettingsView(){
       ${isAdmin() ? `<button class="btn" onclick="goTo('users')">👥 إدارة المستخدمين</button>` : ''}
     </div>
     <button class="btn block" style="margin-top:10px" onclick="generateCertificate()">🏆 إصدار شهادة تقدير الأداء</button>
+
+    <div class="site-card" style="margin-top:14px;border-color:var(--accent)">
+      <div class="site-name" style="font-size:14px;margin-bottom:6px">🔄 تحديث التطبيق</div>
+      <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">لو حسّيت إن آخر تحديث مني مش ظاهر عندك (خصوصًا في نسخة الـ APK)، اضغط الزر ده لمسح النسخة المخزّنة وجلب أحدث نسخة فورًا.</p>
+      <button class="btn primary block" onclick="forceAppUpdate()">⚡ فرض التحديث الآن</button>
+    </div>
 
     <div class="site-card" style="margin-top:14px">
       <div class="site-name" style="font-size:14px;margin-bottom:8px">🔒 القفل السريع على هذا الجهاز</div>
@@ -4808,6 +4873,26 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('./service-worker.js').catch(()=>{ /* يُتجاهل بأمان (مثلًا عند الفتح كملف محلي) */ });
   });
 }
+
+/* ============================================================
+   فرض تحديث التطبيق: مسح كل النسخ المخزّنة (Cache) وService Worker
+   القديم، ثم إعادة تحميل الصفحة من الإنترنت مباشرة بدون أي كاش
+   ============================================================ */
+async function forceAppUpdate(){
+  toast('جاري تحديث التطبيق...');
+  try{
+    if('caches' in window){
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k=> caches.delete(k)));
+    }
+    if('serviceWorker' in navigator){
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=> r.unregister()));
+    }
+  }catch(e){ console.warn('تعذّر مسح الكاش بالكامل (غير خطير)', e); }
+  setTimeout(()=>{ location.href = location.origin + location.pathname + '?refresh=' + Date.now(); }, 300);
+}
+
 </script>
 </body>
 </html>
