@@ -699,6 +699,8 @@ function enterApp(){
   const roleLabels = { admin:'👑 Admin', manager:'مدير', supervisor:'مشرف', colleague:'زميل' };
   document.getElementById('userBadge').innerHTML = `${currentProfile.display_name} · <span class="pill ${isAdmin()?'role-admin':''}" style="padding:1px 7px;font-size:9.5px">${roleLabels[currentProfile.role]||currentProfile.role}</span>`;
   document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view==='dashboard'));
+  const reportNavBtn = document.querySelector('.navbtn[data-view="report"]');
+  if(reportNavBtn) reportNavBtn.style.display = hasPerm('view_report') ? 'flex' : 'none';
   currentView = 'dashboard';
   updateQuickLockBtn();
   try{ history.replaceState({rcView:'dashboard'}, '', '#dashboard'); }catch(e){}
@@ -1338,27 +1340,58 @@ function renderDonut(up, down, label){
 /* ============================================================
    شاشة: سجل التدقيق (الكل يشاهد، غير قابل للتعديل أو الحذف)
    ============================================================ */
+let auditFilter = { text:'', from:'', to:'' };
+let auditLogData = [];
 function renderAuditPlaceholder(){
+  if(!hasPerm('view_audit_log')) return `<div class="view active"><div class="empty">🚫 لا تملك صلاحية عرض سجل التدقيق. تواصل مع الأدمن لتفعيلها.</div></div>`;
   return `<div class="view active">
-    <div class="section-title" style="margin-top:0"><h2>سجل التدقيق</h2></div>
+    <div class="section-title" style="margin-top:0"><h2>سجل التدقيق</h2>
+      ${hasPerm('export_audit_log')? `<button class="btn sm" onclick="exportAuditLogCsv()">📃 تصدير CSV</button>`:''}
+    </div>
+    <div class="field"><input class="input" placeholder="🔍 بحث بالمستخدم أو العملية..." value="${auditFilter.text}" oninput="auditFilter.text=this.value; renderAuditLogList()"></div>
+    <div class="row2">
+      <div class="field"><label style="font-size:10.5px">من تاريخ</label><input class="input" type="date" value="${auditFilter.from}" onchange="auditFilter.from=this.value; renderAuditLogList()"></div>
+      <div class="field"><label style="font-size:10.5px">إلى تاريخ</label><input class="input" type="date" value="${auditFilter.to}" onchange="auditFilter.to=this.value; renderAuditLogList()"></div>
+    </div>
     <div id="auditListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
 async function loadAuditLog(){
+  if(!hasPerm('view_audit_log')) return; // حماية إضافية حتى لو استُدعيت الدالة مباشرة
   try{
-    const { data, error } = await supa.from('audit_log').select('*').order('ts', {ascending:false}).limit(100);
+    const { data, error } = await supa.from('audit_log').select('*').order('ts', {ascending:false}).limit(300);
     if(error) throw error;
-    const host = document.getElementById('auditListHost');
-    if(!host) return;
-    if(!data || !data.length){ host.innerHTML = '<div class="empty">لا توجد عمليات مسجلة بعد.</div>'; return; }
-    host.innerHTML = data.map(r=>`
-      <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px">
-        <div style="display:flex;justify-content:space-between;color:var(--muted-2);font-size:10.5px;margin-bottom:2px">
-          <span>${new Date(r.ts).toLocaleString('ar-EG')}</span><span>👤 ${r.actor_name}</span>
-        </div>
-        <div><b style="color:var(--accent)">${r.action}</b> — ${r.details||''}</div>
-      </div>`).join('');
-  }catch(e){ console.error(e); const host=document.getElementById('auditListHost'); if(host) host.innerHTML='<div class="empty">تعذّر تحميل السجل.</div>'; }
+    auditLogData = data||[];
+    renderAuditLogList();
+  }catch(e){ console.error(e); const host=document.getElementById('auditListHost'); if(host) host.innerHTML='<div class="empty">تعذّر تحميل السجل — تحقق من صلاحياتك.</div>'; }
+}
+function renderAuditLogList(){
+  const host = document.getElementById('auditListHost');
+  if(!host) return;
+  const f = auditFilter;
+  const list = auditLogData.filter(r=>{
+    const matchText = !f.text || r.actor_name.includes(f.text) || r.action.includes(f.text) || (r.details||'').includes(f.text);
+    const day = r.ts.slice(0,10);
+    const matchFrom = !f.from || day>=f.from;
+    const matchTo = !f.to || day<=f.to;
+    return matchText && matchFrom && matchTo;
+  });
+  if(!list.length){ host.innerHTML = '<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
+  host.innerHTML = list.map(r=>`
+    <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px">
+      <div style="display:flex;justify-content:space-between;color:var(--muted-2);font-size:10.5px;margin-bottom:2px">
+        <span>${new Date(r.ts).toLocaleString('ar-EG')}</span><span>👤 ${r.actor_name}</span>
+      </div>
+      <div><b style="color:var(--accent)">${r.action}</b> — ${r.details||''}</div>
+    </div>`).join('');
+}
+function exportAuditLogCsv(){
+  if(!hasPerm('export_audit_log')){ toast('🚫 لا تملك صلاحية التصدير'); return; }
+  const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  const rows = [['التاريخ','المستخدم','العملية','التفاصيل'].map(esc).join(',')];
+  auditLogData.forEach(r=> rows.push([new Date(r.ts).toLocaleString('ar-EG'), r.actor_name, r.action, r.details||''].map(esc).join(',')));
+  saveOrShareFile(new Blob(['\ufeff'+rows.join('\n')],{type:'text/csv;charset=utf-8'}), `سجل-التدقيق-${new Date().toISOString().slice(0,10)}.csv`);
+  logAudit('تصدير سجل التدقيق', `${auditLogData.length} سجل`);
 }
 
 /* ============================================================
@@ -1384,7 +1417,9 @@ async function loadUsers(){
 }
 const PERM_LABELS = {
   view_stats:'الإحصائيات', view_comparisons:'المقارنات', view_faults:'الأعطال', view_repairs:'الإصلاحات',
-  view_archive:'الأرشيف', export_pdf:'تحميل PDF', export_excel:'تحميل Excel', export_word:'تحميل Word', export_image:'التقرير المصور'
+  view_archive:'الأرشيف', export_pdf:'تحميل PDF', export_excel:'تحميل Excel', export_word:'تحميل Word', export_image:'التقرير المصور',
+  view_audit_log:'عرض سجل التدقيق', export_audit_log:'تصدير سجل التدقيق',
+  create_report:'إنشاء التقارير', view_report:'عرض شاشة التقرير', print_report:'طباعة التقرير', delete_report:'حذف من الأرشيف'
 };
 function renderUsersList(){
   const host = document.getElementById('usersListHost');
@@ -1657,6 +1692,7 @@ function generateCertificate(){
 
 
 function renderReportView(){
+  if(!hasPerm('view_report')) return `<div class="view active"><div class="empty">🚫 لا تملك صلاحية عرض شاشة التقرير. تواصل مع الأدمن لتفعيلها.</div></div>`;
   if(!reportMeta.preparer && currentProfile) reportMeta.preparer = currentProfile.display_name;
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>التقرير اليومي</h2></div>
@@ -1713,7 +1749,7 @@ function renderReportView(){
       ${reportMeta.signatureDataUrl ? `<p style="font-size:11px;color:var(--success);margin-top:6px">✅ تم حفظ التوقيع</p>` : ''}
     </div>
 
-    <button class="btn primary block" onclick="generateReportPreview()">📋 إنشاء المعاينة</button>
+    ${hasPerm('create_report') ? `<button class="btn primary block" onclick="generateReportPreview()">📋 إنشاء المعاينة</button>` : `<p style="font-size:11px;color:var(--muted-2);text-align:center;margin-top:10px">🚫 لا تملك صلاحية إنشاء التقارير.</p>`}
     <div id="reportPreviewHost" style="margin-top:16px"></div>
   </div>`;
 }
@@ -1778,12 +1814,13 @@ function generateReportPreview(){
       <p style="text-align:center;color:var(--accent);font-size:10.5px;margin-top:2px">إعداد وتشغيل النظام: إبراهيم رمضان</p>
     </div>
     <div class="btn-row" style="margin-top:12px">
-      ${isAdmin() ? `<button class="btn primary" onclick="saveReportToArchive()">💾 حفظ في الأرشيف (يعتمد التقرير)</button>` : ''}
+      ${(isAdmin()||hasPerm('create_report')) ? `<button class="btn primary" onclick="saveReportToArchive()">💾 حفظ في الأرشيف (يعتمد التقرير)</button>` : ''}
       <button class="btn" onclick="copyReportText()">📄 نسخ كنص</button>
       ${hasPerm('export_excel') ? `<button class="btn" onclick="exportExcelReport()">📊 Excel</button>` : ''}
       ${hasPerm('export_pdf') ? `<button class="btn" onclick="exportPdfReport()">🧾 PDF</button>` : ''}
       ${hasPerm('export_word') ? `<button class="btn" onclick="exportWordReport()">📝 Word</button>` : ''}
       ${hasPerm('export_image') ? `<button class="btn" onclick="exportImageReport()">🖼️ صورة</button>` : ''}
+      ${hasPerm('print_report') ? `<button class="btn" onclick="window.print()">🖨️ طباعة</button>` : ''}
       <button class="btn" onclick="openQRModal()">📱 QR</button>
       <button class="btn" onclick="exportCSVReport()">📃 CSV</button>
     </div>`;
@@ -1809,7 +1846,7 @@ function copyReportText(){
 }
 
 async function saveReportToArchive(){
-  if(!isAdmin()){ toast('🚫 حفظ التقرير في الأرشيف متاح للأدمن فقط'); return; }
+  if(!isAdmin() && !hasPerm('create_report')){ toast('🚫 لا تملك صلاحية حفظ التقارير في الأرشيف'); return; }
   saveReportMetaFromForm();
   const sites = factoriesData.map(computeFactory);
   const t = computeTotals(sites);
@@ -2088,8 +2125,23 @@ function openArchiveEntry(id){
     ${a.signature_url? `<div style="margin-top:10px"><p style="font-size:11px;color:var(--muted)">التوقيع:</p><img src="${a.signature_url}" style="height:56px;background:#fff;border-radius:6px"></div>`:''}
     <div class="btn-row" style="margin-top:12px">
       <button class="btn primary" onclick='navigator.clipboard.writeText(${JSON.stringify(a.report_text||"")}).then(()=>toast("تم النسخ"))'>📄 نسخ النص</button>
+      ${(isAdmin()||hasPerm('delete_report')) ? `<button class="btn danger" onclick="confirmDeleteArchiveEntry('${a.id}')">🗑 حذف من الأرشيف</button>` : ''}
     </div>
   `);
+}
+function confirmDeleteArchiveEntry(id){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">حذف هذا التقرير من الأرشيف نهائيًا؟ لا يمكن التراجع.</p>
+    <button class="btn danger block" onclick="deleteArchiveEntry('${id}')">حذف نهائيًا</button>`);
+}
+async function deleteArchiveEntry(id){
+  if(!isAdmin() && !hasPerm('delete_report')){ toast('🚫 لا تملك صلاحية الحذف'); return; }
+  try{
+    const {error} = await supa.from('reports_archive').delete().eq('id', id);
+    if(error) throw error;
+    await logAudit('حذف تقرير من الأرشيف', id);
+    closeModal(); toast('✅ تم الحذف'); loadArchive();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 
 
@@ -2158,7 +2210,7 @@ function renderSettingsView(){
       <p style="font-size:12.5px;color:var(--muted);margin-top:8px">الاسم: ${currentProfile.display_name}<br>الدور: ${isAdmin()?'👑 Admin':currentProfile.role}<br>البريد: ${currentSession.user.email}</p>
     </div>
     <div class="btn-row">
-      <button class="btn" onclick="goTo('audit')">🕵️ سجل التدقيق</button>
+      ${hasPerm('view_audit_log') ? `<button class="btn" onclick="goTo('audit')">🕵️ سجل التدقيق</button>` : ''}
       <button class="btn" onclick="goTo('faults')">📋 الأعطال</button>
       <button class="btn" onclick="goTo('compare')">📊 المقارنات</button>
       <button class="btn" onclick="goTo('maintenance')">🛠️ الصيانة الوقائية</button>
