@@ -6,6 +6,12 @@
 <meta name="theme-color" content="#0B1220">
 <meta name="author" content="إبراهيم رمضان">
 <title>غرفة المراقبة المركزية — النسخة السحابية</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="غرفة المراقبة">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' fill='%230B1220'/%3E%3Ccircle cx='96' cy='88' r='46' fill='none' stroke='%2338D9C9' stroke-width='12'/%3E%3Ccircle cx='96' cy='88' r='14' fill='%2338D9C9'/%3E%3Crect x='72' y='142' width='48' height='12' rx='6' fill='%2338D9C9'/%3E%3C/svg%3E">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B1220'/%3E%3Ccircle cx='32' cy='30' r='16' fill='none' stroke='%2338D9C9' stroke-width='4'/%3E%3Ccircle cx='32' cy='30' r='5' fill='%2338D9C9'/%3E%3Crect x='24' y='47' width='16' height='4' rx='2' fill='%2338D9C9'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,6 +36,8 @@ body.light-mode{
 .lightbox img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;}
 .lightbox-close{position:absolute;top:calc(16px + var(--safe-top));left:16px;width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:16px;cursor:pointer;z-index:2;}
 .lightbox-zoom-controls{position:absolute;bottom:calc(20px + var(--safe-bottom));display:flex;gap:10px;z-index:2;}
+.lightbox-nav-btn{position:absolute;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:26px;cursor:pointer;z-index:2;line-height:1;}
+#lightboxPrev{right:14px;} #lightboxNext{left:14px;}
 .lightbox-zoom-controls button{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:18px;cursor:pointer;}
 .alert-item{display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .alert-item .dismiss{background:none;border:none;color:inherit;opacity:.6;font-size:14px;cursor:pointer;flex:none;padding:2px 4px;}
@@ -187,7 +195,10 @@ tbody td:first-child{text-align:right;font-weight:700;}
 <div class="toast" id="toast"></div>
 <div class="lightbox" id="lightbox" onclick="closeLightbox(event)">
   <button class="lightbox-close" onclick="closeLightbox(event)">✕</button>
+  <button class="lightbox-nav-btn" id="lightboxPrev" onclick="event.stopPropagation(); navLightbox(-1)" style="display:none">‹</button>
   <img id="lightboxImg" src="" onclick="event.stopPropagation()">
+  <button class="lightbox-nav-btn" id="lightboxNext" onclick="event.stopPropagation(); navLightbox(1)" style="display:none">›</button>
+  <div id="lightboxCounter" style="position:absolute;top:calc(16px + var(--safe-top));left:50%;transform:translateX(-50%);color:#fff;font-size:12px;background:rgba(255,255,255,.12);padding:4px 12px;border-radius:20px;display:none">1/1</div>
   <div class="lightbox-zoom-controls" onclick="event.stopPropagation()">
     <button onclick="zoomLightbox(0.8)">➖</button>
     <button onclick="zoomLightbox(1.25)">➕</button>
@@ -305,6 +316,23 @@ async function ensureQrLib(){
   ]);
   return QR_LIB_READY;
 }
+let PPTX_LIB_READY = false, ZIP_LIB_READY = false;
+async function ensurePptxLib(){
+  if(typeof PptxGenJS !== 'undefined'){ PPTX_LIB_READY = true; return true; }
+  PPTX_LIB_READY = await loadScriptWithFallback([
+    'https://cdnjs.cloudflare.com/ajax/libs/pptxgenjs/3.12.0/pptxgen.bundle.js',
+    'https://unpkg.com/pptxgenjs@3.12.0/dist/pptxgen.bundle.js'
+  ]);
+  return PPTX_LIB_READY;
+}
+async function ensureZipLib(){
+  if(typeof JSZip !== 'undefined'){ ZIP_LIB_READY = true; return true; }
+  ZIP_LIB_READY = await loadScriptWithFallback([
+    'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
+  ]);
+  return ZIP_LIB_READY;
+}
 
 /* ============================================================
    نظام حفظ/مشاركة موحّد للملفات المُصدَّرة
@@ -356,16 +384,37 @@ document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id
    الصندوق المكبر للصور (Lightbox) — فتح/تكبير/تصغير/إغلاق
    ============================================================ */
 let __lbScale = 1;
+let __lbGallery = null;
+let __lbIndex = 0;
 function openImageLightbox(url){
-  __lbScale = 1;
-  const img = document.getElementById('lightboxImg');
-  img.src = url; img.style.transform = 'scale(1)';
+  openGalleryLightbox([url], 0);
+}
+function openGalleryLightbox(urls, index){
+  __lbGallery = urls; __lbIndex = index||0; __lbScale = 1;
+  renderLightboxImage();
   document.getElementById('lightbox').classList.add('open');
+}
+function renderLightboxImage(){
+  const img = document.getElementById('lightboxImg');
+  img.src = __lbGallery[__lbIndex]; img.style.transform = 'scale(1)';
+  const multi = __lbGallery.length > 1;
+  document.getElementById('lightboxPrev').style.display = multi ? 'block' : 'none';
+  document.getElementById('lightboxNext').style.display = multi ? 'block' : 'none';
+  const counter = document.getElementById('lightboxCounter');
+  counter.style.display = multi ? 'block' : 'none';
+  counter.textContent = `${__lbIndex+1}/${__lbGallery.length}`;
+}
+function navLightbox(dir){
+  if(!__lbGallery || __lbGallery.length<2) return;
+  __lbIndex = (__lbIndex + dir + __lbGallery.length) % __lbGallery.length;
+  __lbScale = 1;
+  renderLightboxImage();
 }
 function closeLightbox(e){
   if(e) e.stopPropagation();
   document.getElementById('lightbox').classList.remove('open');
   document.getElementById('lightboxImg').src = '';
+  __lbGallery = null;
 }
 function zoomLightbox(factor){
   __lbScale = Math.max(0.5, Math.min(4, __lbScale*factor));
@@ -714,11 +763,34 @@ async function loadSettings(){
     if(data) appSettings = data;
   }catch(e){ console.warn('تعذّر تحميل الإعدادات، سيُستخدم الافتراضي', e); }
 }
+let dashSummary = { lighting:{total:0,open:0}, store:{items:0}, roomNeeds:{total:0,done:0,inProgress:0,notDone:0} };
+async function loadDashboardSummaries(){
+  try{
+    const {data} = await supa.from('lighting_needs').select('status');
+    const list = data||[];
+    dashSummary.lighting = { total:list.length, open:list.filter(l=>l.status!=='تم الإصلاح' && l.status!=='مغلقة').length };
+  }catch(e){ dashSummary.lighting = {total:0,open:0}; }
+  try{
+    const {data} = await supa.from('store_items').select('id');
+    dashSummary.store = { items:(data||[]).length };
+  }catch(e){ dashSummary.store = {items:0}; }
+  try{
+    const {data} = await supa.from('room_needs').select('status');
+    const list = data||[];
+    dashSummary.roomNeeds = {
+      total:list.length,
+      done:list.filter(r=>r.status==='تم التنفيذ').length,
+      inProgress:list.filter(r=>r.status==='قيد التنفيذ').length,
+      notDone:list.filter(r=>r.status==='لم يتم التنفيذ').length
+    };
+  }catch(e){ dashSummary.roomNeeds = {total:0,done:0,inProgress:0,notDone:0}; }
+}
 async function loadAllData(){
   updateOfflineBanner();
   await loadSettings();
   await loadFactories();
   await loadMaintenanceLog();
+  await loadDashboardSummaries();
   if(hasPerm('view_archive')){
     try{ const {data} = await supa.from('reports_archive').select('*').order('report_date',{ascending:false}).limit(60); archiveData = data||[]; }catch(e){}
   }
@@ -904,10 +976,14 @@ function renderCurrentView(){
   else if(currentView==='maintenance') { host.innerHTML = renderPreventiveMaintenanceView(); loadPreventiveTasks(); }
   else if(currentView==='cameras') { host.innerHTML = renderCamerasPlaceholder(currentViewCtx); loadCameras(currentViewCtx); }
   else if(currentView==='screens') { host.innerHTML = renderScreensPlaceholder(currentViewCtx); loadScreens(currentViewCtx); }
+  else if(currentView==='layouts') { host.innerHTML = renderLayoutsPlaceholder(currentViewCtx); loadLayouts(currentViewCtx); }
+  else if(currentView==='network') { host.innerHTML = renderNetworkPlaceholder(currentViewCtx); loadNetworkData(currentViewCtx); }
+  else if(currentView==='ups') { host.innerHTML = renderUpsPlaceholder(currentViewCtx); loadUpsData(currentViewCtx); }
   else if(currentView==='faults') { host.innerHTML = renderFaultsPlaceholder(); loadFaults(); }
   else if(currentView==='store') { host.innerHTML = renderStorePlaceholder(); loadStoreData(); }
   else if(currentView==='cameramods') { host.innerHTML = renderCameraModsPlaceholder(); loadCameraMods(); }
   else if(currentView==='lighting') { host.innerHTML = renderLightingPlaceholder(); loadLightingNeeds(); }
+  else if(currentView==='roomneeds') { host.innerHTML = renderRoomNeedsPlaceholder(); loadRoomNeeds(); }
   renderAlertsBar();
 }
 
@@ -948,6 +1024,9 @@ function renderFactoriesListHTML(){
         <div class="btn-row">
           <button class="btn sm" onclick="goTo('cameras','${s.id}')">🎥 الكاميرات</button>
           <button class="btn sm" onclick="goTo('screens','${s.id}')">🖥️ الشاشات</button>
+          <button class="btn sm" onclick="goTo('layouts','${s.id}')">🗺️ الخرائط</button>
+          <button class="btn sm" onclick="goTo('network','${s.id}')">🗄️ الشبكة</button>
+          <button class="btn sm" onclick="goTo('ups','${s.id}')">🔋 UPS</button>
           ${isAdmin() ? `<button class="btn sm" onclick="openFactoryForm('${s.id}')">✏️ تعديل</button>
           <button class="btn sm danger" onclick="confirmDeleteFactory('${s.id}','${s.name.replace(/'/g,"")}')">🗑 حذف</button>` : ''}
         </div>
@@ -1139,10 +1218,25 @@ function renderDashboard(){
       <button class="btn sm" onclick="goTo('faults')">📋 الأعطال</button>
       <button class="btn sm" onclick="goTo('compare')">📊 مقارنة المصانع</button>
       <button class="btn sm" onclick="goTo('maintenance')">🛠️ الصيانة الوقائية</button>
-      <button class="btn sm" onclick="goTo('store')">📦 المخزن</button>
       <button class="btn sm" onclick="goTo('cameramods')">🎥 كاميرات للتعديل</button>
-      <button class="btn sm" onclick="goTo('lighting')">💡 الإضاءة</button>
     </div>
+
+    <div class="section-title"><h2 style="font-size:14px">إدارة الغرفة</h2></div>
+    <div class="stat-grid">
+      <div class="stat-card" style="cursor:pointer" onclick="goTo('lighting')"><div class="label">💡 الإضاءة</div><div class="value" style="font-size:20px">${dashSummary.lighting.total}</div><div class="sub">${dashSummary.lighting.open} تحتاج متابعة</div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="goTo('store')"><div class="label">📦 المخزن</div><div class="value" style="font-size:20px">${dashSummary.store.items}</div><div class="sub">صنف مسجّل</div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="goTo('roomneeds')"><div class="label">📋 احتياجات الغرفة</div><div class="value" style="font-size:20px">${dashSummary.roomNeeds.total}</div><div class="sub">${dashSummary.roomNeeds.notDone} لم يُنفَّذ</div></div>
+    </div>
+    ${dashSummary.roomNeeds.total>0 ? `
+    <div class="site-card" style="cursor:pointer;margin-top:10px" onclick="goTo('roomneeds')">
+      <div class="site-name" style="font-size:13px;margin-bottom:8px">📋 ملخص احتياجات الغرفة</div>
+      <div class="mini-grid">
+        <div class="mini"><div class="n">${dashSummary.roomNeeds.total}</div><div class="t">الإجمالي</div></div>
+        <div class="mini"><div class="n" style="color:var(--success)">${dashSummary.roomNeeds.done}</div><div class="t">تم التنفيذ</div></div>
+        <div class="mini"><div class="n" style="color:var(--amber)">${dashSummary.roomNeeds.inProgress}</div><div class="t">قيد التنفيذ</div></div>
+        <div class="mini"><div class="n" style="color:var(--danger)">${dashSummary.roomNeeds.notDone}</div><div class="t">لم يتم التنفيذ</div></div>
+      </div>
+    </div>` : ''}
 
     ${sites.length>0 ? `
     <div class="section-title"><h2>نسبة تشغيل الكاميرات لكل موقع</h2></div>
@@ -2012,6 +2106,7 @@ function renderSettingsView(){
       <button class="btn" onclick="goTo('store')">📦 المخزن</button>
       <button class="btn" onclick="goTo('cameramods')">🎥 كاميرات للتعديل</button>
       <button class="btn" onclick="goTo('lighting')">💡 الإضاءة</button>
+      <button class="btn" onclick="goTo('roomneeds')">📋 احتياجات الغرفة</button>
       ${isAdmin() ? `<button class="btn" onclick="goTo('users')">👥 إدارة المستخدمين</button>` : ''}
     </div>
     <button class="btn block" style="margin-top:10px" onclick="generateCertificate()">🏆 إصدار شهادة تقدير الأداء</button>
@@ -2044,6 +2139,21 @@ function renderSettingsView(){
       <div class="field"><label>حد التنبيه لعدد الكاميرات المنقطعة لكل موقع</label><input class="input" type="number" id="st_threshold" value="${appSettings.alert_threshold}"></div>
       <div class="field"><label>حد التنبيه لأقل نسبة تشغيل مقبولة (%)</label><input class="input" type="number" id="st_pct" value="${appSettings.alert_pct_threshold}"></div>
       <button class="btn primary sm" onclick="saveAppSettings()">💾 حفظ إعدادات التنبيهات</button>
+    </div>
+
+    <div class="section-title"><h2>📤 مركز التصدير الشامل (Export Center)</h2></div>
+    <div class="site-card">
+      <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">تصدير مستقل يجمع كل بيانات التطبيق (المصانع، الكاميرات، الشاشات، المخزن، الشبكة، UPS، الخرائط، الأعطال) — منفصل تمامًا عن أزرار التصدير الفردية في كل قسم.</p>
+      <div class="btn-row">
+        <button class="btn" onclick="exportAllExcel()">📊 Excel شامل</button>
+        <button class="btn" onclick="exportAllPdf()">🧾 PDF شامل</button>
+        <button class="btn" onclick="exportAllWord()">📝 Word شامل</button>
+        <button class="btn" onclick="exportAllPptx()">📽️ PowerPoint</button>
+        <button class="btn" onclick="exportAllImage()">🖼️ صورة Infographic</button>
+        <button class="btn" onclick="exportAllCsv()">📃 CSV</button>
+        <button class="btn" onclick="exportAllJson()">🗂️ JSON</button>
+      </div>
+      <button class="btn primary block" style="margin-top:10px" onclick="exportAllFormats()">⬇️ تصدير الكل (ZIP واحد شامل كل الصيغ)</button>
     </div>
 
     <div class="section-title"><h2>النسخ الاحتياطي والاستعادة</h2></div>
@@ -2152,11 +2262,16 @@ function renderCompareResult(){
 /* ============================================================
    شاشة: الصيانة الوقائية (Admin يجدول، الكل يشاهد)
    ============================================================ */
+let maintenanceFilter = { text:'', site:'' };
 function renderPreventiveMaintenanceView(){
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>الصيانة الوقائية</h2>
       ${isAdmin()? `<button class="btn primary sm" onclick="openMaintenanceForm()">+ جدولة صيانة</button>`:''}
     </div>
+    <div class="field"><input class="input" placeholder="🔍 بحث بنوع الصيانة أو الملاحظات..." value="${maintenanceFilter.text}" oninput="maintenanceFilter.text=this.value; renderMaintenanceList()"></div>
+    <div class="field"><select class="input" onchange="maintenanceFilter.site=this.value; renderMaintenanceList()">
+      <option value="">كل المواقع</option>${factoriesData.map(s=>`<option ${maintenanceFilter.site===s.name?'selected':''}>${s.name}</option>`).join('')}
+    </select></div>
     <div id="maintListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
@@ -2169,14 +2284,22 @@ async function loadPreventiveTasks(){
   }catch(e){
     console.warn('جدول الصيانة الوقائية غير موجود بعد في قاعدة البيانات', e);
     const host = document.getElementById('maintListHost');
-    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تفعيل جدول إضافي في قاعدة البيانات. راجع ملف schema_part2.sql وشغّله في Supabase.</div>`;
+    if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل بيانات الصيانة: ${e.message||'تحقق من تفعيل جدول preventive_maintenance'}</div>`;
     return;
   }
+  renderMaintenanceList();
+}
+function renderMaintenanceList(){
   const host = document.getElementById('maintListHost');
   if(!host) return;
-  if(!preventiveTasks.length){ host.innerHTML = '<div class="empty">لا توجد مهام صيانة مجدولة بعد.</div>'; return; }
+  const f = maintenanceFilter;
+  const list = preventiveTasks.filter(t=>
+    (!f.text || t.maintenance_type.includes(f.text) || (t.notes||'').includes(f.text)) &&
+    (!f.site || t.target_name===f.site)
+  );
+  if(!list.length){ host.innerHTML = '<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
   const today = new Date().toISOString().slice(0,10);
-  host.innerHTML = preventiveTasks.map(t=>`
+  host.innerHTML = list.map(t=>`
     <div class="site-card">
       <div style="display:flex;justify-content:space-between">
         <div class="site-name" style="font-size:14px">${t.target_name}</div>
@@ -2184,42 +2307,64 @@ async function loadPreventiveTasks(){
       </div>
       <div class="site-meta">${t.maintenance_type} — ${fmtDateAr(t.scheduled_date)} — تتكرر: ${t.recurrence||'مرة واحدة'}</div>
       ${t.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${t.notes}</p>`:''}
-      ${isAdmin()? `<div class="btn-row"><button class="btn sm danger" onclick="deleteMaintenanceTask('${t.id}')">🗑 حذف</button></div>`:''}
+      ${isAdmin()? `<div class="btn-row">
+        <button class="btn sm" onclick="openMaintenanceForm('${t.id}')">✏️ تعديل</button>
+        <button class="btn sm danger" onclick="deleteMaintenanceTask('${t.id}')">🗑 حذف</button>
+      </div>`:''}
     </div>`).join('');
 }
-function openMaintenanceForm(){
+function openMaintenanceForm(id){
+  const t = id ? preventiveTasks.find(x=>x.id===id) : null;
+  const isNew = !t;
+  const d = t || {target_name:'', maintenance_type:'', scheduled_date:'', recurrence:'', notes:''};
   const sites = factoriesData.map(computeFactory);
   openModal(`
-    <div class="modal-head"><h3>+ جدولة صيانة وقائية</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>الموقع</label><select class="input" id="mt_site">${sites.map(s=>`<option>${s.name}</option>`).join('')}</select></div>
-    <div class="field"><label>نوع الصيانة</label><input class="input" id="mt_type" placeholder="مثال: تنظيف عدسات الكاميرات"></div>
-    <div class="field"><label>موعد الصيانة</label><input class="input" type="date" id="mt_date"></div>
-    <div class="field"><label>التكرار</label><select class="input" id="mt_recur"><option value="">مرة واحدة</option><option value="شهري">شهري</option><option value="ربع سنوي">ربع سنوي</option><option value="سنوي">سنوي</option></select></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="mt_notes"></textarea></div>
-    <button class="btn primary block" onclick="saveMaintenanceTask()">💾 حفظ</button>
+    <div class="modal-head"><h3>${isNew?'+ جدولة صيانة وقائية':'تعديل مهمة صيانة'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>الموقع</label><select class="input" id="mt_site">${sites.map(s=>`<option ${d.target_name===s.name?'selected':''}>${s.name}</option>`).join('')}</select></div>
+    <div class="field"><label>نوع الصيانة</label><input class="input" id="mt_type" value="${d.maintenance_type||''}" placeholder="مثال: تنظيف عدسات الكاميرات"></div>
+    <div class="field"><label>موعد الصيانة</label><input class="input" type="date" id="mt_date" value="${d.scheduled_date||''}"></div>
+    <div class="field"><label>التكرار</label><select class="input" id="mt_recur">
+      ${['','شهري','ربع سنوي','سنوي'].map(r=>`<option value="${r}" ${d.recurrence===r?'selected':''}>${r||'مرة واحدة'}</option>`).join('')}
+    </select></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="mt_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveMaintenanceTask('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
-async function saveMaintenanceTask(){
+async function saveMaintenanceTask(id){
   if(!isAdmin()) return;
   const payload = {
     target_name: document.getElementById('mt_site').value,
     maintenance_type: document.getElementById('mt_type').value.trim(),
     scheduled_date: document.getElementById('mt_date').value,
     recurrence: document.getElementById('mt_recur').value,
-    notes: document.getElementById('mt_notes').value.trim(),
-    created_by: currentProfile.id
+    notes: document.getElementById('mt_notes').value.trim()
   };
   if(!payload.maintenance_type || !payload.scheduled_date){ toast('أدخل نوع الصيانة والموعد'); return; }
   try{
-    const {error} = await supa.from('preventive_maintenance').insert(payload);
-    if(error) throw error;
-    await logAudit('جدولة صيانة وقائية', `${payload.target_name} — ${payload.maintenance_type}`);
-    closeModal(); toast('✅ تم الجدولة'); loadPreventiveTasks();
-  }catch(e){ toast('⚠️ تعذّر الحفظ — تأكد من تفعيل جدول preventive_maintenance'); }
+    if(id){
+      const {error} = await supa.from('preventive_maintenance').update(payload).eq('id', id);
+      if(error) throw error;
+      await logAudit('تعديل مهمة صيانة', `${payload.target_name} — ${payload.maintenance_type}`);
+    } else {
+      payload.created_by = currentProfile.id;
+      const {error} = await supa.from('preventive_maintenance').insert(payload);
+      if(error) throw error;
+      await logAudit('جدولة صيانة وقائية', `${payload.target_name} — ${payload.maintenance_type}`);
+    }
+    closeModal(); toast('✅ تم الحفظ'); loadPreventiveTasks();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف')); }
 }
-async function deleteMaintenanceTask(id){
-  try{ await supa.from('preventive_maintenance').delete().eq('id', id); await logAudit('حذف مهمة صيانة', id); toast('تم الحذف'); loadPreventiveTasks(); }
-  catch(e){ toast('تعذّر الحذف'); }
+function deleteMaintenanceTask(id){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">حذف مهمة الصيانة هذه نهائيًا؟</p>
+    <button class="btn danger block" onclick="confirmDeleteMaintenanceTask('${id}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteMaintenanceTask(id){
+  try{
+    const {error} = await supa.from('preventive_maintenance').delete().eq('id', id);
+    if(error) throw error;
+    await logAudit('حذف مهمة صيانة', id); closeModal(); toast('✅ تم الحذف'); loadPreventiveTasks();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 
 /* ============================================================
@@ -2255,12 +2400,25 @@ function openLegacyDownCamerasModal(factoryId){
           ${url? `<img src="${url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${url}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
           <div style="flex:1;font-size:13px">${name}</div>
           ${isAdmin() ? `<label class="btn sm" style="cursor:pointer">${url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadLegacyCameraPhoto('${factoryId}',${idx},this)"></label>` : ''}
+          ${isAdmin() && url ? `<button class="btn sm danger" onclick="removeLegacyCameraPhoto('${factoryId}',${idx})">🗑 حذف</button>` : ''}
         </div>`;
       }).join('')}
     ${f.root_causes? `<div style="margin-top:6px;font-size:12px;color:var(--muted);background:var(--bg-2);border-radius:8px;padding:8px 10px"><b style="color:var(--amber)">المشكلات الجذرية:</b> ${f.root_causes}</div>`:''}
     <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 هذا العرض احتياطي مؤقت. لتفعيل سجلات كاميرات فردية كاملة (رقم/حالة/تاريخ عطل لكل كاميرا)، شغّل ملف schema_part3.sql في Supabase.</p>
     ${isAdmin()? `<button class="btn primary block" style="margin-top:8px" onclick="closeModal(); openFactoryForm('${factoryId}')">✏️ تعديل بيانات الموقع</button>`:''}
   `);
+}
+async function removeLegacyCameraPhoto(factoryId, idx){
+  try{
+    const f = factoriesData.find(x=>x.id===factoryId);
+    const newPhotos = {...(f.camera_photos||{})};
+    delete newPhotos[idx];
+    const { error } = await supa.from('factories').update({camera_photos:newPhotos}).eq('id', factoryId);
+    if(error) throw error;
+    await logAudit('حذف صورة كاميرا منقطعة', f.name);
+    toast('✅ تم حذف الصورة'); await loadFactories();
+    openLegacyDownCamerasModal(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 async function uploadLegacyCameraPhoto(factoryId, idx, inputEl){
   const file = inputEl.files && inputEl.files[0]; if(!file) return;
@@ -2311,7 +2469,7 @@ async function loadCameras(factoryId){
           <div class="site-name" style="font-size:14px">${c.camera_name}</div>
           ${c.fault_reason? `<div class="site-meta">السبب: ${c.fault_reason}</div>`:''}
         </div>
-        ${c.photo_url? `<img src="${c.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="window.open('${c.photo_url}','_blank')">`:''}
+        ${c.photo_url? `<img src="${c.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">`:''}
       </div>
       <div style="margin-top:8px">
         ${isAdmin() ? `<select class="input" style="font-size:12px;padding:6px 8px" onchange="quickUpdateCameraStatus('${c.id}', this.value)">
@@ -2320,8 +2478,9 @@ async function loadCameras(factoryId){
       </div>
       ${isAdmin() ? `<div class="btn-row">
         <button class="btn sm" onclick="openCameraForm('${c.factory_id}','${c.id}')">✏️ تعديل</button>
-        <label class="btn sm" style="cursor:pointer">📷 صورة<input type="file" accept="image/*" style="display:none" onchange="uploadCameraPhotoDirect('${c.id}', this)"></label>
-        <button class="btn sm danger" onclick="deleteCameraRecord('${c.id}')">🗑</button>
+        <label class="btn sm" style="cursor:pointer">📷 ${c.photo_url?'استبدال الصورة':'رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadCameraPhotoDirect('${c.id}', this)"></label>
+        ${c.photo_url ? `<button class="btn sm danger" onclick="removeCameraPhotoDirect('${c.id}')">🗑 حذف الصورة</button>` : ''}
+        <button class="btn sm danger" onclick="deleteCameraRecord('${c.id}')">🗑 حذف الكاميرا</button>
       </div>` : ''}
     </div>`).join('');
 }
@@ -2420,6 +2579,15 @@ async function uploadCameraPhotoDirect(camId, inputEl){
     toast('✅ تم رفع الصورة'); const c=camerasData.find(x=>x.id===camId); loadCameras(c?c.factory_id:currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
+async function removeCameraPhotoDirect(camId){
+  try{
+    const {error} = await supa.from('cameras').update({photo_url:null}).eq('id', camId);
+    if(error) throw error;
+    const c=camerasData.find(x=>x.id===camId);
+    await logAudit('حذف صورة كاميرا', c?c.camera_name:camId);
+    toast('✅ تم حذف الصورة'); loadCameras(c?c.factory_id:currentViewCtx);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+}
 
 /* ============================================================
    شاشة: إدارة الشاشات الفردية لكل مصنع
@@ -2506,63 +2674,91 @@ async function deleteScreenRecord(screenId, factoryId){
    شاشة: الأعطال (سجل مستقل بدرجة الخطورة و SLA)
    ============================================================ */
 let faultsData = [];
+let faultsFilter = { text:'', factory:'', status:'', severity:'' };
 function renderFaultsPlaceholder(){
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>📋 الأعطال</h2>
       ${isAdmin()? `<button class="btn primary sm" onclick="openFaultForm()">+ تسجيل عطل</button>`:''}
     </div>
+    <div class="field"><input class="input" placeholder="🔍 بحث باسم الجهاز أو النوع..." value="${faultsFilter.text}" oninput="faultsFilter.text=this.value; renderFaultsList()"></div>
+    <div class="row2">
+      <div class="field"><select class="input" onchange="faultsFilter.factory=this.value; renderFaultsList()">
+        <option value="">كل المصانع</option>${factoriesData.map(s=>`<option value="${s.id}" ${faultsFilter.factory===s.id?'selected':''}>${s.name}</option>`).join('')}
+      </select></div>
+      <div class="field"><select class="input" onchange="faultsFilter.severity=this.value; renderFaultsList()">
+        <option value="">كل درجات الخطورة</option><option>عالية</option><option>متوسطة</option><option>منخفضة</option>
+      </select></div>
+    </div>
+    <div class="field"><select class="input" onchange="faultsFilter.status=this.value; renderFaultsList()">
+      <option value="">كل الحالات</option>${['مفتوح','جاري الإصلاح','تم الإصلاح','مغلق','متوقف بانتظار قطع غيار'].map(s=>`<option>${s}</option>`).join('')}
+    </select></div>
     <div id="faultsListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
 const FAULT_SEVERITY_COLOR = {'عالية':'bad','متوسطة':'warn','منخفضة':'ok'};
 async function loadFaults(){
   try{
-    const {data, error} = await supa.from('faults').select('*').order('reported_at',{ascending:false}).limit(100);
+    const {data, error} = await supa.from('faults').select('*').order('reported_at',{ascending:false}).limit(300);
     if(error) throw error;
     faultsData = data||[];
   }catch(e){
     console.warn('تعذّر تحميل الأعطال', e);
     const host = document.getElementById('faultsListHost');
-    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part3.sql في Supabase أولًا.</div>`;
+    if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل بيانات الأعطال: ${e.message||'تحقق من تفعيل جدول faults'}</div>`;
     return;
   }
+  renderFaultsList();
+}
+function renderFaultsList(){
   const host = document.getElementById('faultsListHost');
   if(!host) return;
-  if(!faultsData.length){ host.innerHTML='<div class="empty">لا توجد أعطال مسجّلة.</div>'; return; }
-  host.innerHTML = faultsData.map(f=>{
+  const f = faultsFilter;
+  const list = faultsData.filter(x=>
+    (!f.text || x.device_name.includes(f.text) || (x.fault_type||'').includes(f.text)) &&
+    (!f.factory || x.factory_id===f.factory) && (!f.status || x.status===f.status) && (!f.severity || x.severity===f.severity)
+  );
+  if(!list.length){ host.innerHTML='<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
+  host.innerHTML = list.map(f=>{
     const responseMin = f.response_started_at ? Math.round((new Date(f.response_started_at)-new Date(f.reported_at))/60000) : null;
     const repairHrs = f.resolved_at ? ((new Date(f.resolved_at)-new Date(f.reported_at))/3600000).toFixed(1) : null;
+    const factoryName = factoriesData.find(s=>s.id===f.factory_id)?.name || '';
     return `<div class="site-card">
       <div style="display:flex;justify-content:space-between">
         <div class="site-name" style="font-size:14px">${f.device_name} <span class="pill ${FAULT_SEVERITY_COLOR[f.severity]}" style="margin-right:6px">${f.severity}</span></div>
         <span class="pill ${f.status==='مغلق'||f.status==='تم الإصلاح'?'ok':(f.status==='مفتوح'?'bad':'warn')}">${f.status}</span>
       </div>
-      <div class="site-meta">${f.fault_type||''} ${f.description?'— '+f.description:''}</div>
+      <div class="site-meta">${factoryName} ${f.fault_type?'· '+f.fault_type:''} ${f.description?'— '+f.description:''}</div>
       <div style="font-size:11px;color:var(--muted-2);margin-top:6px">أُبلغ عنه: ${new Date(f.reported_at).toLocaleString('ar-EG')}
         ${responseMin!=null?` · زمن الاستجابة: ${responseMin} دقيقة`:''}${repairHrs!=null?` · زمن الإصلاح: ${repairHrs} ساعة`:''}</div>
-      ${isAdmin() ? `<div class="field" style="margin-top:8px"><select class="input" style="font-size:12px;padding:6px 8px" onchange="updateFaultStatus('${f.id}', this.value)">
-        ${['مفتوح','جاري الإصلاح','تم الإصلاح','مغلق','متوقف بانتظار قطع غيار'].map(s=>`<option ${f.status===s?'selected':''}>${s}</option>`).join('')}
-      </select></div>` : ''}
+      ${isAdmin() ? `<div class="btn-row" style="margin-top:8px">
+        <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateFaultStatus('${f.id}', this.value)">
+          ${['مفتوح','جاري الإصلاح','تم الإصلاح','مغلق','متوقف بانتظار قطع غيار'].map(s=>`<option ${f.status===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <button class="btn sm" onclick="openFaultForm('${f.id}')">✏️ تعديل</button>
+        <button class="btn sm danger" onclick="deleteFault('${f.id}')">🗑 حذف</button>
+      </div>` : ''}
     </div>`;
   }).join('');
 }
-function openFaultForm(){
-  const sites = factoriesData;
+function openFaultForm(id){
+  const f = id ? faultsData.find(x=>x.id===id) : null;
+  const isNew = !f;
+  const d = f || {factory_id:factoriesData[0]?.id||'', device_type:'camera', device_name:'', fault_type:'', severity:'متوسطة', description:'', responsible:''};
   openModal(`
-    <div class="modal-head"><h3>+ تسجيل عطل جديد</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>المصنع</label><select class="input" id="ft_factory">${sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
+    <div class="modal-head"><h3>${isNew?'+ تسجيل عطل جديد':'تعديل بيانات العطل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>المصنع</label><select class="input" id="ft_factory">${factoriesData.map(s=>`<option value="${s.id}" ${d.factory_id===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div>
     <div class="row2">
-      <div class="field"><label>نوع الجهاز</label><select class="input" id="ft_devtype"><option value="camera">كاميرا</option><option value="screen">شاشة</option></select></div>
-      <div class="field"><label>درجة الخطورة</label><select class="input" id="ft_severity"><option>عالية</option><option selected>متوسطة</option><option>منخفضة</option></select></div>
+      <div class="field"><label>نوع الجهاز</label><select class="input" id="ft_devtype"><option value="camera" ${d.device_type==='camera'?'selected':''}>كاميرا</option><option value="screen" ${d.device_type==='screen'?'selected':''}>شاشة</option></select></div>
+      <div class="field"><label>درجة الخطورة</label><select class="input" id="ft_severity">${['عالية','متوسطة','منخفضة'].map(s=>`<option ${d.severity===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>اسم/رقم الجهاز</label><input class="input" id="ft_devname" placeholder="مثال: كاميرا بوابة الملح"></div>
-    <div class="field"><label>نوع العطل</label><input class="input" id="ft_type" placeholder="مثال: انقطاع الصورة"></div>
-    <div class="field"><label>الوصف</label><textarea class="input" id="ft_desc"></textarea></div>
-    <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="ft_resp"></div>
-    <button class="btn primary block" onclick="saveFaultForm()">💾 تسجيل العطل</button>
+    <div class="field"><label>اسم/رقم الجهاز</label><input class="input" id="ft_devname" value="${d.device_name}" placeholder="مثال: كاميرا بوابة الملح"></div>
+    <div class="field"><label>نوع العطل</label><input class="input" id="ft_type" value="${d.fault_type||''}" placeholder="مثال: انقطاع الصورة"></div>
+    <div class="field"><label>الوصف</label><textarea class="input" id="ft_desc">${d.description||''}</textarea></div>
+    <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="ft_resp" value="${d.responsible||''}"></div>
+    <button class="btn primary block" onclick="saveFaultForm('${isNew?'':id}')">💾 ${isNew?'تسجيل العطل':'حفظ التعديل'}</button>
   `);
 }
-async function saveFaultForm(){
+async function saveFaultForm(id){
   const payload = {
     factory_id: document.getElementById('ft_factory').value,
     device_type: document.getElementById('ft_devtype').value,
@@ -2570,16 +2766,22 @@ async function saveFaultForm(){
     fault_type: document.getElementById('ft_type').value.trim(),
     severity: document.getElementById('ft_severity').value,
     description: document.getElementById('ft_desc').value.trim(),
-    responsible: document.getElementById('ft_resp').value.trim(),
-    created_by: currentProfile.id
+    responsible: document.getElementById('ft_resp').value.trim()
   };
   if(!payload.device_name){ toast('أدخل اسم الجهاز'); return; }
   try{
-    const {error} = await supa.from('faults').insert(payload);
-    if(error) throw error;
-    await logAudit('تسجيل عطل جديد', `${payload.device_name} — ${payload.severity}`);
-    closeModal(); toast('✅ تم تسجيل العطل'); loadFaults();
-  }catch(e){ toast('🚫 تعذّر التسجيل: '+(e.message||'')); }
+    if(id){
+      const {error} = await supa.from('faults').update(payload).eq('id', id);
+      if(error) throw error;
+      await logAudit('تعديل بيانات عطل', payload.device_name);
+    } else {
+      payload.created_by = currentProfile.id;
+      const {error} = await supa.from('faults').insert(payload);
+      if(error) throw error;
+      await logAudit('تسجيل عطل جديد', `${payload.device_name} — ${payload.severity}`);
+    }
+    closeModal(); toast('✅ تم الحفظ'); loadFaults();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف')); }
 }
 async function updateFaultStatus(id, newStatus){
   const f = faultsData.find(x=>x.id===id);
@@ -2592,7 +2794,19 @@ async function updateFaultStatus(id, newStatus){
     if(error) throw error;
     await logAudit('تحديث حالة عطل', f.device_name, f.status, newStatus);
     toast('✅ تم التحديث'); loadFaults();
-  }catch(e){ toast('🚫 تعذّر التحديث'); }
+  }catch(e){ console.error(e); toast('🚫 تعذّر التحديث: '+(e.message||'')); }
+}
+function deleteFault(id){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">حذف سجل هذا العطل نهائيًا؟</p>
+    <button class="btn danger block" onclick="confirmDeleteFault('${id}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteFault(id){
+  try{
+    const {error} = await supa.from('faults').delete().eq('id', id);
+    if(error) throw error;
+    await logAudit('حذف سجل عطل', id); closeModal(); toast('✅ تم الحذف'); loadFaults();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 
 /* ============================================================
@@ -2619,6 +2833,7 @@ function renderStorePlaceholder(){
     <div id="storeListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
+let storeItemImagesData = [];
 async function loadStoreData(){
   try{
     const [{data: items, error: e1}, {data: txns, error: e2}] = await Promise.all([
@@ -2633,9 +2848,15 @@ async function loadStoreData(){
     if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part4.sql في Supabase أولًا.</div>`;
     return;
   }
+  try{
+    const {data: imgs, error: e3} = await supa.from('store_item_images').select('*').order('sort_order');
+    if(e3) throw e3;
+    storeItemImagesData = imgs||[];
+  }catch(e){ storeItemImagesData = []; /* صور الأصناف تحتاج schema_part5.sql — لا تمنع باقي المخزن من العمل */ }
   renderStoreSummary();
   renderStoreList();
 }
+function getItemImages(itemId){ return storeItemImagesData.filter(im=>im.item_id===itemId); }
 function renderStoreSummary(){
   const host = document.getElementById('storeSummaryHost');
   if(!host) return;
@@ -2658,21 +2879,27 @@ function renderStoreList(){
   host.innerHTML = items.map(item=>{
     const balance = computeItemBalance(item.id);
     const txns = storeTransactionsData.filter(t=>t.item_id===item.id).slice(0,5);
+    const images = getItemImages(item.id);
     return `<div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div><div class="site-name" style="font-size:14px">${item.item_name}</div><div class="site-meta">${item.item_type||'—'}</div></div>
         <span class="pill ${balance>0?'ok':'bad'}" style="font-size:13px;font-weight:800">الرصيد: ${balance}</span>
       </div>
       ${item.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${item.notes}</p>`:''}
+      ${images.length ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
+        ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
+        ${images.length>5? `<div style="width:52px;height:52px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);flex:none">+${images.length-5}</div>`:''}
+      </div>` : ''}
       <div class="table-wrap" style="margin-top:8px"><table style="font-size:11px">
-        <thead><tr><th>التاريخ</th><th>وارد</th><th>صادر</th><th>السبب</th><th>الجهة</th></tr></thead>
-        <tbody>${txns.map(t=>`<tr><td>${fmtDateAr(t.transaction_date)}</td><td class="num-ok" style="color:var(--success)">${t.in_qty||0}</td><td style="color:var(--danger)">${t.out_qty||0}</td><td>${t.reason||'—'}</td><td>${t.destination||'—'}</td></tr>`).join('') || '<tr><td colspan="5">لا توجد حركات</td></tr>'}</tbody>
+        <thead><tr><th>التاريخ</th><th>وارد</th><th>صادر</th><th>السبب</th><th>الجهة</th>${isAdmin()?'<th></th>':''}</tr></thead>
+        <tbody>${txns.map(t=>`<tr><td>${fmtDateAr(t.transaction_date)}</td><td class="num-ok" style="color:var(--success)">${t.in_qty||0}</td><td style="color:var(--danger)">${t.out_qty||0}</td><td>${t.reason||'—'}</td><td>${t.destination||'—'}</td>${isAdmin()?`<td><button class="btn sm danger" style="padding:2px 6px;font-size:10px" onclick="deleteStoreTransaction('${t.id}','${item.id}')">🗑</button></td>`:''}</tr>`).join('') || `<tr><td colspan="${isAdmin()?6:5}">لا توجد حركات</td></tr>`}</tbody>
       </table></div>
-      ${isAdmin()? `<div class="btn-row">
-        <button class="btn sm primary" onclick="openStoreTransactionForm('${item.id}')">↔️ تسجيل حركة</button>
+      <div class="btn-row">
+        <button class="btn sm" onclick="openItemGalleryModal('${item.id}')">🖼️ الصور (${images.length})</button>
+        ${isAdmin()? `<button class="btn sm primary" onclick="openStoreTransactionForm('${item.id}')">↔️ تسجيل حركة</button>
         <button class="btn sm" onclick="openStoreItemForm('${item.id}')">✏️ تعديل الصنف</button>
-        <button class="btn sm danger" onclick="deleteStoreItem('${item.id}')">🗑 حذف الصنف</button>
-      </div>`:''}
+        <button class="btn sm danger" onclick="deleteStoreItem('${item.id}')">🗑 حذف الصنف</button>` : ''}
+      </div>
     </div>`;
   }).join('');
 }
@@ -2707,6 +2934,72 @@ async function confirmDeleteStoreItem(id){
   try{ await supa.from('store_items').delete().eq('id',id); await logAudit('حذف صنف مخزن', id); closeModal(); toast('تم الحذف'); loadStoreData(); }
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
+
+/* ============================================================
+   معرض صور الصنف: إضافة متعددة / عرض / تكبير وتنقل / حذف
+   ============================================================ */
+function openItemGalleryModal(itemId){
+  const item = storeItemsData.find(x=>x.id===itemId);
+  const images = getItemImages(itemId);
+  openModal(`
+    <div class="modal-head"><h3>🖼️ صور: ${item.item_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div id="itemGalleryDropzone" style="border:2px dashed var(--border);border-radius:12px;padding:18px;text-align:center;margin-bottom:12px">
+      <p style="font-size:12px;color:var(--muted);margin:0 0 8px">اسحب الصور هنا أو اضغط للاختيار (يمكن اختيار أكثر من صورة)</p>
+      <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadItemImages('${itemId}', this)"></label>
+    </div>
+    <div id="itemGalleryGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      ${images.length===0 ? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
+        images.map((im,i)=>`
+        <div style="position:relative">
+          <img src="${im.image_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>
+          ${isAdmin()? `<button onclick="deleteItemImage('${im.id}','${itemId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;cursor:pointer">🗑</button>`:''}
+        </div>`).join('')}
+    </div>
+  `);
+  const dz = document.getElementById('itemGalleryDropzone');
+  dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.style.borderColor='var(--accent)'; });
+  dz.addEventListener('dragleave', ()=>{ dz.style.borderColor='var(--border)'; });
+  dz.addEventListener('drop', e=>{
+    e.preventDefault(); dz.style.borderColor='var(--border)';
+    if(e.dataTransfer.files.length) uploadItemImages(itemId, {files:e.dataTransfer.files});
+  });
+}
+async function uploadItemImages(itemId, inputEl){
+  const files = Array.from(inputEl.files||[]);
+  if(!files.length) return;
+  toast(`جاري رفع ${files.length} صورة...`);
+  let ok=0, fail=0;
+  for(const file of files){
+    try{
+      const compressed = await compressImageFile(file);
+      const path = `items/${itemId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
+      const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(upErr) throw upErr;
+      const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      const {error} = await supa.from('store_item_images').insert({item_id:itemId, image_url:pub.publicUrl, sort_order:storeItemImagesData.length, created_by:currentProfile.id});
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(e); fail++; }
+  }
+  const {data: imgs} = await supa.from('store_item_images').select('*').order('sort_order');
+  storeItemImagesData = imgs||[];
+  toast(fail? `تم رفع ${ok}، وفشل ${fail}` : `✅ تم رفع ${ok} صورة`);
+  const item = storeItemsData.find(x=>x.id===itemId);
+  if(ok) await logAudit('إضافة صور صنف', `${item?item.item_name:itemId}: ${ok} صورة`);
+  openItemGalleryModal(itemId);
+  renderStoreList();
+}
+async function deleteItemImage(imageId, itemId){
+  try{
+    const {error} = await supa.from('store_item_images').delete().eq('id', imageId);
+    if(error) throw error;
+    storeItemImagesData = storeItemImagesData.filter(x=>x.id!==imageId);
+    toast('✅ تم حذف الصورة');
+    openItemGalleryModal(itemId);
+    renderStoreList();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+}
+
 function openStoreTransactionForm(itemId){
   const item = storeItemsData.find(x=>x.id===itemId);
   openModal(`
@@ -2740,8 +3033,25 @@ async function saveStoreTransactionForm(itemId){
     closeModal(); toast('✅ تم تسجيل الحركة'); loadStoreData();
   }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
+function deleteStoreTransaction(txnId, itemId){
+  openModal(`
+    <div class="modal-head"><h3>تأكيد حذف الحركة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">هل تريد حذف هذه الحركة نهائيًا؟ سيتم إعادة حساب الرصيد تلقائيًا.</p>
+    <button class="btn danger block" onclick="confirmDeleteStoreTransaction('${txnId}','${itemId}')">حذف نهائيًا</button>
+  `);
+}
+async function confirmDeleteStoreTransaction(txnId, itemId){
+  try{
+    const {error} = await supa.from('store_transactions').delete().eq('id', txnId);
+    if(error) throw error;
+    const item = storeItemsData.find(x=>x.id===itemId);
+    await logAudit('حذف حركة مخزن', item?item.item_name:itemId);
+    closeModal(); toast('✅ تم حذف الحركة'); loadStoreData();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+}
 async function exportStoreExcel(){
   const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
+  toast('جاري تجهيز الملف والصور...');
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('حركة المخزن', {views:[{rightToLeft:true}]});
   ws.columns = [{width:14},{width:20},{width:14},{width:8},{width:8},{width:10},{width:22},{width:18},{width:20}];
@@ -2752,11 +3062,26 @@ async function exportStoreExcel(){
     storeTransactionsData.filter(x=>x.item_id===t.item_id && x.transaction_date<=t.transaction_date).forEach(x=> running += (x.in_qty||0)-(x.out_qty||0));
     ws.addRow([fmtDateAr(t.transaction_date), item?item.item_name:'—', item?item.item_type:'', t.in_qty||0, t.out_qty||0, running, t.reason||'', t.destination||'', t.notes||'']);
   });
+  // ورقة صور الأصناف — مُضمَّنة فعليًا (وليست روابط)
+  if(storeItemImagesData.length){
+    await urlsToDataUris(storeItemImagesData.map(im=>im.image_url));
+    const ws2 = wb.addWorksheet('صور الأصناف', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws2.columns = [{width:26},{width:20}];
+    ws2.getCell('A1').value='الصنف'; ws2.getCell('B1').value='الصورة';
+    ['A1','B1'].forEach(c=>{ ws2.getCell(c).font={bold:true,color:{argb:'FFFFFFFF'}}; ws2.getCell(c).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF12716A'}}; });
+    storeItemImagesData.forEach((im,i)=>{
+      const r=i+2; const it=storeItemsData.find(x=>x.id===im.item_id);
+      ws2.getCell(`A${r}`).value = it?it.item_name:''; ws2.getRow(r).height=80;
+      addEmbeddedImage(wb, ws2, __imgDataCache[im.image_url], 1, r-1, 100, 100);
+    });
+  }
   const buf = await wb.xlsx.writeBuffer();
   await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `حركة-المخزن-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 async function exportStorePdf(){
   const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  toast('جاري تجهيز الملف والصور...');
+  await urlsToDataUris(storeItemImagesData.map(im=>im.image_url));
   const el = document.createElement('div');
   el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
   el.innerHTML = `<h2 style="text-align:center">تقرير حركة المخزن — غرفة المراقبة المركزية</h2>
@@ -2765,7 +3090,13 @@ async function exportStorePdf(){
       ${storeTransactionsData.map(t=>{ const item=storeItemsData.find(i=>i.id===t.item_id);
         return `<tr><td>${fmtDateAr(t.transaction_date)}</td><td>${item?item.item_name:'—'}</td><td>${item?item.item_type:''}</td><td>${t.in_qty||0}</td><td>${t.out_qty||0}</td><td>${t.reason||''}</td><td>${t.destination||''}</td></tr>`;
       }).join('')}
-    </table>`;
+    </table>
+    ${storeItemImagesData.length ? `<h2 style="text-align:center;margin-top:24px">صور الأصناف</h2>
+      <div>${storeItemsData.map(it=>{
+        const imgs = storeItemImagesData.filter(im=>im.item_id===it.id);
+        if(!imgs.length) return '';
+        return `<div style="margin-bottom:10px"><b>${it.item_name}</b><br>${imgs.map(im=> __imgDataCache[im.image_url] ? `<img src="${__imgDataCache[im.image_url]}" style="width:90px;height:90px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:4px">` : '').join('')}</div>`;
+      }).join('')}</div>` : ''}`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
   el.remove();
@@ -2838,12 +3169,18 @@ function renderCameraModsList(){
         <div style="flex:1;text-align:center">
           <div style="font-size:10.5px;color:var(--muted-2);margin-bottom:4px">قبل التعديل</div>
           ${c.photo_before_url? `<img src="${c.photo_before_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_before_url}')">` : `<div style="height:90px;background:var(--bg-2);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted-2)">لا توجد</div>`}
-          ${isAdmin()? `<label class="btn sm" style="cursor:pointer;margin-top:4px;width:100%;justify-content:center">${c.photo_before_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadModPhoto('${c.id}','before',this)"></label>`:''}
+          ${isAdmin()? `<div style="display:flex;gap:4px;margin-top:4px">
+            <label class="btn sm" style="cursor:pointer;flex:1;justify-content:center">${c.photo_before_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadModPhoto('${c.id}','before',this)"></label>
+            ${c.photo_before_url? `<button class="btn sm danger" onclick="removeModPhoto('${c.id}','before')">🗑</button>`:''}
+          </div>`:''}
         </div>
         <div style="flex:1;text-align:center">
           <div style="font-size:10.5px;color:var(--muted-2);margin-bottom:4px">بعد التعديل</div>
           ${c.photo_after_url? `<img src="${c.photo_after_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_after_url}')">` : `<div style="height:90px;background:var(--bg-2);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted-2)">لا توجد</div>`}
-          ${isAdmin()? `<label class="btn sm" style="cursor:pointer;margin-top:4px;width:100%;justify-content:center">${c.photo_after_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadModPhoto('${c.id}','after',this)"></label>`:''}
+          ${isAdmin()? `<div style="display:flex;gap:4px;margin-top:4px">
+            <label class="btn sm" style="cursor:pointer;flex:1;justify-content:center">${c.photo_after_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadModPhoto('${c.id}','after',this)"></label>
+            ${c.photo_after_url? `<button class="btn sm danger" onclick="removeModPhoto('${c.id}','after')">🗑</button>`:''}
+          </div>`:''}
         </div>
       </div>
       ${c.photo_before_url && c.photo_after_url ? `<button class="btn sm block" style="margin-top:8px" onclick="compareBeforeAfter('${c.id}')">🔍 مقارنة قبل وبعد</button>` : ''}
@@ -2927,6 +3264,16 @@ async function uploadModPhoto(id, which, inputEl){
     if(error) throw error;
     toast('✅ تم رفع الصورة'); loadCameraMods();
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
+}
+async function removeModPhoto(id, which){
+  try{
+    const col = which==='before' ? 'photo_before_url' : 'photo_after_url';
+    const {error} = await supa.from('camera_modifications').update({[col]: null}).eq('id', id);
+    if(error) throw error;
+    const c = cameraModsData.find(x=>x.id===id);
+    await logAudit('حذف صورة '+(which==='before'?'قبل التعديل':'بعد التعديل'), c?c.camera_name:id);
+    toast('✅ تم حذف الصورة'); loadCameraMods();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 function compareBeforeAfter(id){
   const c = cameraModsData.find(x=>x.id===id); if(!c) return;
@@ -3029,11 +3376,12 @@ function renderLightingList(){
       ${l.photo_url? `<img src="${l.photo_url}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${l.photo_url}')">` : ''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
         <label class="btn sm" style="cursor:pointer">${l.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadLightingPhoto('${l.id}',this)"></label>
+        ${l.photo_url ? `<button class="btn sm danger" onclick="removeLightingPhoto('${l.id}')">🗑 حذف الصورة</button>` : ''}
         <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateLightingStatus('${l.id}', this.value)">
           ${['تحتاج إضاءة','تم الإبلاغ','قيد التنفيذ','تم الإصلاح','مغلقة'].map(s=>`<option ${l.status===s?'selected':''}>${s}</option>`).join('')}
         </select>
         <button class="btn sm" onclick="openLightingForm('${l.id}')">✏️</button>
-        <button class="btn sm danger" onclick="deleteLightingNeed('${l.id}')">🗑</button>
+        <button class="btn sm danger" onclick="deleteLightingNeed('${l.id}')">🗑 حذف السجل</button>
       </div>`:''}
     </div>`).join('');
 }
@@ -3098,6 +3446,15 @@ async function uploadLightingPhoto(id, inputEl){
     toast('✅ تم رفع الصورة'); loadLightingNeeds();
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
+async function removeLightingPhoto(id){
+  try{
+    const {error} = await supa.from('lighting_needs').update({photo_url:null}).eq('id', id);
+    if(error) throw error;
+    const l = lightingData.find(x=>x.id===id);
+    await logAudit('حذف صورة إضاءة', l?l.place_name:id);
+    toast('✅ تم حذف الصورة'); loadLightingNeeds();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+}
 async function exportLightingExcel(){
   const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
   const wb = new ExcelJS.Workbook();
@@ -3124,6 +3481,1312 @@ async function exportLightingPdf(){
 }
 
 /* ============================================================
+   الوحدة: احتياجات الغرفة (Room Needs) — تظهر ملخصًا في الرئيسية
+   ============================================================ */
+let roomNeedsData = [];
+let roomNeedsFilter = { text:'', status:'', priority:'' };
+function renderRoomNeedsPlaceholder(){
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>📋 احتياجات الغرفة</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openRoomNeedForm()">+ إضافة احتياج</button>`:''}
+    </div>
+    <div id="roomNeedsSummaryHost"></div>
+    <div class="field"><input class="input" placeholder="🔍 بحث..." oninput="roomNeedsFilter.text=this.value; renderRoomNeedsList()"></div>
+    <div class="row2">
+      <div class="field"><select class="input" onchange="roomNeedsFilter.status=this.value; renderRoomNeedsList()">
+        <option value="">كل الحالات</option><option>لم يتم التنفيذ</option><option>قيد التنفيذ</option><option>تم التنفيذ</option>
+      </select></div>
+      <div class="field"><select class="input" onchange="roomNeedsFilter.priority=this.value; renderRoomNeedsList()">
+        <option value="">كل الأولويات</option><option>منخفضة</option><option>متوسطة</option><option>عالية</option><option>عاجلة</option>
+      </select></div>
+    </div>
+    ${isAdmin()? `<div class="btn-row" style="margin-bottom:8px">
+      <button class="btn sm" onclick="exportRoomNeedsExcel()">📊 Excel</button>
+      <button class="btn sm" onclick="exportRoomNeedsPdf()">🧾 PDF</button>
+      <button class="btn sm" onclick="window.print()">🖨️ طباعة</button>
+    </div>`:''}
+    <div id="roomNeedsListHost"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+const ROOMNEED_STATUS_COLOR = {'لم يتم التنفيذ':'bad','قيد التنفيذ':'warn','تم التنفيذ':'ok'};
+async function loadRoomNeeds(){
+  try{
+    const {data, error} = await supa.from('room_needs').select('*').order('created_at',{ascending:false});
+    if(error) throw error;
+    roomNeedsData = data||[];
+  }catch(e){
+    console.warn(e);
+    const host = document.getElementById('roomNeedsListHost');
+    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part6.sql في Supabase أولًا.</div>`;
+    return;
+  }
+  const sumHost = document.getElementById('roomNeedsSummaryHost');
+  if(sumHost) sumHost.innerHTML = `<div class="mini-grid" style="margin-bottom:10px">
+    <div class="mini"><div class="n">${roomNeedsData.length}</div><div class="t">الإجمالي</div></div>
+    <div class="mini"><div class="n" style="color:var(--success)">${roomNeedsData.filter(r=>r.status==='تم التنفيذ').length}</div><div class="t">تم التنفيذ</div></div>
+    <div class="mini"><div class="n" style="color:var(--amber)">${roomNeedsData.filter(r=>r.status==='قيد التنفيذ').length}</div><div class="t">قيد التنفيذ</div></div>
+    <div class="mini"><div class="n" style="color:var(--danger)">${roomNeedsData.filter(r=>r.status==='لم يتم التنفيذ').length}</div><div class="t">لم يتم التنفيذ</div></div>
+  </div>`;
+  renderRoomNeedsList();
+}
+function renderRoomNeedsList(){
+  const host = document.getElementById('roomNeedsListHost');
+  if(!host) return;
+  const f = roomNeedsFilter;
+  const list = roomNeedsData.filter(r=> (!f.text || r.title.includes(f.text)) && (!f.status||r.status===f.status) && (!f.priority||r.priority===f.priority));
+  if(!list.length){ host.innerHTML='<div class="empty">لا توجد نتائج.</div>'; return; }
+  host.innerHTML = list.map(r=>`
+    <div class="site-card">
+      <div style="display:flex;justify-content:space-between">
+        <div class="site-name" style="font-size:14px">${r.title}</div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+          <span class="pill ${PRIORITY_COLOR[r.priority]}">${r.priority}</span>
+          <span class="pill ${ROOMNEED_STATUS_COLOR[r.status]}">${r.status}</span>
+        </div>
+      </div>
+      ${r.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${r.description}</p>`:''}
+      <div style="font-size:10.5px;color:var(--muted-2);margin-top:4px">أُضيف: ${fmtDateAr(r.created_at.slice(0,10))}${r.fulfilled_date?` · نُفِّذ: ${fmtDateAr(r.fulfilled_date)}`:''}</div>
+      ${r.photo_url? `<img src="${r.photo_url}" style="width:100%;max-height:150px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
+      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
+      ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
+        <label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRoomNeedPhoto('${r.id}',this)"></label>
+        ${r.photo_url ? `<button class="btn sm danger" onclick="removeRoomNeedPhoto('${r.id}')">🗑 حذف الصورة</button>` : ''}
+        <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateRoomNeedStatus('${r.id}', this.value)">
+          ${['لم يتم التنفيذ','قيد التنفيذ','تم التنفيذ'].map(s=>`<option ${r.status===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <button class="btn sm" onclick="openRoomNeedForm('${r.id}')">✏️</button>
+        <button class="btn sm danger" onclick="deleteRoomNeed('${r.id}')">🗑 حذف السجل</button>
+      </div>`:''}
+    </div>`).join('');
+}
+function openRoomNeedForm(id){
+  const r = id ? roomNeedsData.find(x=>x.id===id) : null;
+  const isNew = !r;
+  const d = r || {title:'', description:'', priority:'متوسطة', status:'لم يتم التنفيذ', notes:'', fulfilled_date:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'إضافة احتياج جديد':'تعديل احتياج'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>عنوان الاحتياج</label><input class="input" id="rn_title" value="${d.title}" placeholder="مثال: كرسي مكتب جديد"></div>
+    <div class="field"><label>الوصف</label><textarea class="input" id="rn_desc">${d.description||''}</textarea></div>
+    <div class="row2">
+      <div class="field"><label>الأولوية</label><select class="input" id="rn_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
+      <div class="field"><label>الحالة</label><select class="input" id="rn_status">${['لم يتم التنفيذ','قيد التنفيذ','تم التنفيذ'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>تاريخ التنفيذ/التوفير (إن وُجد)</label><input class="input" type="date" id="rn_fulfilled" value="${d.fulfilled_date||''}"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="rn_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveRoomNeedForm('${isNew?'':id}')">💾 حفظ</button>
+  `);
+}
+async function saveRoomNeedForm(id){
+  const title = document.getElementById('rn_title').value.trim();
+  if(!title){ toast('أدخل عنوان الاحتياج'); return; }
+  const payload = {
+    title, description: document.getElementById('rn_desc').value.trim(),
+    priority: document.getElementById('rn_priority').value, status: document.getElementById('rn_status').value,
+    fulfilled_date: document.getElementById('rn_fulfilled').value || null,
+    notes: document.getElementById('rn_notes').value.trim(), updated_by: currentProfile.id
+  };
+  try{
+    if(id){ const {error}=await supa.from('room_needs').update(payload).eq('id',id); if(error) throw error; await logAudit('تعديل احتياج غرفة', title); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('room_needs').insert(payload); if(error) throw error; await logAudit('إضافة احتياج غرفة', title); }
+    closeModal(); toast('✅ تم الحفظ'); loadRoomNeeds(); loadDashboardSummaries();
+  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function updateRoomNeedStatus(id, status){
+  try{
+    const payload = {status};
+    if(status==='تم التنفيذ') payload.fulfilled_date = new Date().toISOString().slice(0,10);
+    await supa.from('room_needs').update(payload).eq('id',id);
+    const r=roomNeedsData.find(x=>x.id===id); await logAudit('تحديث حالة احتياج غرفة', r?r.title:id, r?.status, status);
+    toast('✅ تم التحديث'); loadRoomNeeds(); loadDashboardSummaries();
+  }catch(e){ toast('🚫 تعذّر التحديث'); }
+}
+async function uploadRoomNeedPhoto(id, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  toast('جاري رفع الصورة...');
+  try{
+    const compressed = await compressImageFile(file);
+    const path = `roomneeds/${id}-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const {error} = await supa.from('room_needs').update({photo_url: pub.publicUrl}).eq('id', id);
+    if(error) throw error;
+    toast('✅ تم رفع الصورة'); loadRoomNeeds();
+  }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
+}
+async function removeRoomNeedPhoto(id){
+  try{ await supa.from('room_needs').update({photo_url:null}).eq('id',id); toast('✅ تم حذف الصورة'); loadRoomNeeds(); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+function deleteRoomNeed(id){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <button class="btn danger block" onclick="confirmDeleteRoomNeed('${id}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteRoomNeed(id){
+  try{ await supa.from('room_needs').delete().eq('id',id); await logAudit('حذف احتياج غرفة', id); closeModal(); toast('تم الحذف'); loadRoomNeeds(); loadDashboardSummaries(); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+async function exportRoomNeedsExcel(){
+  const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('احتياجات الغرفة', {views:[{rightToLeft:true}]});
+  ws.addRow(['العنوان','الوصف','الأولوية','الحالة','تاريخ الإضافة','تاريخ التنفيذ']).font={bold:true};
+  roomNeedsData.forEach(r=> ws.addRow([r.title,r.description||'',r.priority,r.status,fmtDateAr(r.created_at.slice(0,10)),r.fulfilled_date?fmtDateAr(r.fulfilled_date):'']));
+  ws.columns.forEach(c=>c.width=22);
+  const buf = await wb.xlsx.writeBuffer();
+  await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `احتياجات-الغرفة-${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+async function exportRoomNeedsPdf(){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  const el = document.createElement('div');
+  el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
+  el.innerHTML = `<h2 style="text-align:center">تقرير احتياجات الغرفة</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>العنوان</th><th>الوصف</th><th>الأولوية</th><th>الحالة</th></tr>
+      ${roomNeedsData.map(r=>`<tr><td>${r.title}</td><td>${r.description||''}</td><td>${r.priority}</td><td>${r.status}</td></tr>`).join('')}
+    </table>`;
+  document.body.appendChild(el);
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  el.remove();
+  await saveOrShareFile(blob, `تقرير-احتياجات-الغرفة-${new Date().toISOString().slice(0,10)}.pdf`);
+}
+
+
+/* ============================================================
+   الوحدة: خرائط المصانع (Factory Layouts) — صورة أو PDF
+   ============================================================ */
+let layoutsData = [];
+function renderLayoutsPlaceholder(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🗺️ الخرائط والـ Layout: ${f?f.name:'—'}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openLayoutForm('${factoryId}')">+ إضافة خريطة</button>`:''}
+    </div>
+    <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+    <div id="layoutsListHost" style="margin-top:12px"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadLayouts(factoryId){
+  try{
+    const {data, error} = await supa.from('factory_layouts').select('*').eq('factory_id', factoryId).order('created_at',{ascending:false});
+    if(error) throw error;
+    layoutsData = data||[];
+  }catch(e){
+    console.warn(e);
+    const host = document.getElementById('layoutsListHost');
+    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part5.sql في Supabase أولًا.</div>`;
+    return;
+  }
+  const host = document.getElementById('layoutsListHost');
+  if(!host) return;
+  if(!layoutsData.length){ host.innerHTML='<div class="empty">لا توجد خرائط مضافة بعد.</div>'; return; }
+  host.innerHTML = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px">${layoutsData.map(l=>`
+    <div class="site-card" style="padding:10px">
+      ${l.file_type==='pdf'
+        ? `<div style="height:110px;background:var(--bg-2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer" onclick="window.open('${l.file_url}','_blank')">📄</div>`
+        : `<img src="${l.file_url}" style="width:100%;height:110px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${l.file_url}')">`}
+      <div style="font-size:12.5px;font-weight:700;margin-top:6px">${l.layout_name}</div>
+      ${l.notes? `<div style="font-size:10.5px;color:var(--muted)">${l.notes}</div>`:''}
+      ${l.original_file_url? `<div style="font-size:9.5px;color:var(--amber);margin-top:2px">✏️ مُعدَّلة</div>`:''}
+      ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
+        ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
+        ${l.original_file_url? `<button class="btn sm" onclick="restoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
+        <button class="btn sm danger" onclick="deleteLayout('${l.id}','${l.factory_id}')">🗑 حذف</button>
+      </div>`:''}
+    </div>`).join('')}</div>`;
+}
+function openLayoutForm(factoryId){
+  openModal(`
+    <div class="modal-head"><h3>+ إضافة خريطة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم الخريطة</label><input class="input" id="ly_name" placeholder="مثال: الدور الأرضي / شبكة الكاميرات"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="ly_notes"></textarea></div>
+    <div class="field"><label>الملف (صورة أو PDF)</label><input class="input" type="file" id="ly_file" accept="image/*,application/pdf"></div>
+    <button class="btn primary block" onclick="saveLayoutForm('${factoryId}')">💾 رفع وحفظ</button>
+  `);
+}
+async function saveLayoutForm(factoryId){
+  const name = document.getElementById('ly_name').value.trim();
+  const fileEl = document.getElementById('ly_file');
+  const file = fileEl.files[0];
+  if(!name){ toast('أدخل اسم الخريطة'); return; }
+  if(!file){ toast('اختر ملف الخريطة'); return; }
+  toast('جاري رفع الملف...');
+  try{
+    const isPdf = file.type === 'application/pdf';
+    let uploadBlob = file, ext = 'pdf';
+    if(!isPdf){ uploadBlob = await compressImageFile(file, 1400, 0.75); ext='jpg'; }
+    const path = `layouts/${factoryId}-${Date.now()}.${ext}`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, uploadBlob, {contentType: isPdf?'application/pdf':'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const {error} = await supa.from('factory_layouts').insert({
+      factory_id: factoryId, layout_name: name, file_url: pub.publicUrl, file_type: isPdf?'pdf':'image',
+      notes: document.getElementById('ly_notes').value.trim(), created_by: currentProfile.id
+    });
+    if(error) throw error;
+    const f = factoriesData.find(x=>x.id===factoryId);
+    await logAudit('إضافة خريطة مصنع', `${f?f.name:''}: ${name}`);
+    closeModal(); toast('✅ تم رفع الخريطة'); loadLayouts(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+}
+async function deleteLayout(id, factoryId){
+  const l = layoutsData.find(x=>x.id===id);
+  const fid = l ? l.factory_id : factoryId;
+  try{
+    await supa.from('factory_layouts').delete().eq('id', id);
+    await logAudit('حذف خريطة مصنع', l?l.layout_name:id);
+    toast('✅ تم الحذف'); loadLayouts(fid);
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+async function restoreOriginalLayout(id){
+  const l = layoutsData.find(x=>x.id===id);
+  if(!l || !l.original_file_url) return;
+  try{
+    const {error} = await supa.from('factory_layouts').update({file_url: l.original_file_url}).eq('id', id);
+    if(error) throw error;
+    await logAudit('استعادة الخريطة الأصلية', l.layout_name);
+    toast('✅ تم استعادة النسخة الأصلية'); loadLayouts(l.factory_id);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الاستعادة: '+(e.message||'')); }
+}
+
+/* ============================================================
+   محرر تعديل الخريطة: رسم حر / أسهم / أشكال / علامات / نصوص
+   مع تحديد ونقل وتغيير حجم و Undo/Redo وتكبير أثناء التعديل
+   يحتفظ دائمًا بالصورة الأصلية منفصلة عن النسخة المعدَّلة
+   ============================================================ */
+let layoutEditor = null;
+function openLayoutEditor(layoutId){
+  const l = layoutsData.find(x=>x.id===layoutId);
+  if(!l || l.file_type!=='image'){ toast('التعديل متاح فقط على الخرائط المصوَّرة'); return; }
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:[], history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1 };
+  openModal(`
+    <div class="modal-head"><h3>✏️ تعديل الخريطة: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="layoutToolbar">
+      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص']].map(([t,l2])=>
+        `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
+      <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
+    </div>
+    <div style="display:flex;gap:5px;margin-bottom:8px">
+      <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
+      <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
+      <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
+      <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
+      <button class="btn sm" onclick="zoomLayoutEditor(1.25)">➕</button>
+    </div>
+    <div style="overflow:auto;max-height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;text-align:center">
+      <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:top center;max-width:none"></canvas>
+    </div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 الصورة الأصلية محفوظة دائمًا ويمكن استعادتها لاحقًا من زر "الأصل".</p>
+    <button class="btn primary block" style="margin-top:8px" onclick="saveLayoutEdit()">💾 حفظ التعديل (نسخة جديدة)</button>
+  `);
+  setTimeout(()=> initLayoutCanvas(l.file_url), 60);
+}
+function initLayoutCanvas(imgUrl){
+  const canvas = document.getElementById('layoutEditCanvas');
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = ()=>{
+    const maxW = 1000;
+    const scale = img.width > maxW ? maxW/img.width : 1;
+    canvas.width = Math.round(img.width*scale); canvas.height = Math.round(img.height*scale);
+    layoutEditor.bgImage = img;
+    redrawLayoutCanvas();
+    attachLayoutCanvasEvents(canvas);
+  };
+  img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل (قد تحتاج الصورة دعم CORS)');
+  img.src = imgUrl;
+}
+function redrawLayoutCanvas(){
+  const canvas = document.getElementById('layoutEditCanvas'); if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(layoutEditor.bgImage) ctx.drawImage(layoutEditor.bgImage,0,0,canvas.width,canvas.height);
+  layoutEditor.elements.forEach((el,i)=> drawLayoutElement(ctx, el, i===layoutEditor.selectedIndex));
+}
+function drawLayoutElement(ctx, el, selected){
+  ctx.strokeStyle = el.color; ctx.fillStyle = el.color; ctx.lineWidth = 3; ctx.lineCap='round'; ctx.lineJoin='round';
+  if(el.type==='pen'){ ctx.beginPath(); el.points.forEach((p,i)=> i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke(); }
+  else if(el.type==='arrow'){
+    ctx.beginPath(); ctx.moveTo(el.x1,el.y1); ctx.lineTo(el.x2,el.y2); ctx.stroke();
+    const angle = Math.atan2(el.y2-el.y1, el.x2-el.x1);
+    ctx.beginPath(); ctx.moveTo(el.x2,el.y2);
+    ctx.lineTo(el.x2-14*Math.cos(angle-0.4), el.y2-14*Math.sin(angle-0.4));
+    ctx.lineTo(el.x2-14*Math.cos(angle+0.4), el.y2-14*Math.sin(angle+0.4));
+    ctx.closePath(); ctx.fill();
+  }
+  else if(el.type==='rect'){ ctx.strokeRect(el.x,el.y,el.w,el.h); }
+  else if(el.type==='circle'){ ctx.beginPath(); ctx.ellipse(el.cx,el.cy,Math.abs(el.rx),Math.abs(el.ry),0,0,2*Math.PI); ctx.stroke(); }
+  else if(el.type==='pin'){
+    ctx.beginPath(); ctx.arc(el.x,el.y,9,0,2*Math.PI); ctx.fill();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+    if(el.label){ ctx.fillStyle=el.color; ctx.font='bold 14px Arial'; ctx.textAlign='right'; ctx.fillText(el.label, el.x-14, el.y+5); }
+  }
+  else if(el.type==='text'){ ctx.font='bold 18px Arial'; ctx.textAlign='left'; ctx.fillText(el.text, el.x, el.y); }
+  if(selected){
+    const box = layoutElementBBox(el);
+    ctx.strokeStyle='#38D9C9'; ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
+    ctx.strokeRect(box.x-6, box.y-6, box.w+12, box.h+12); ctx.setLineDash([]);
+  }
+}
+function layoutElementBBox(el){
+  if(el.type==='pen'){ const xs=el.points.map(p=>p.x), ys=el.points.map(p=>p.y); return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)}; }
+  if(el.type==='arrow'){ return {x:Math.min(el.x1,el.x2),y:Math.min(el.y1,el.y2),w:Math.abs(el.x2-el.x1),h:Math.abs(el.y2-el.y1)}; }
+  if(el.type==='rect'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
+  if(el.type==='circle'){ return {x:el.cx-el.rx,y:el.cy-el.ry,w:el.rx*2,h:el.ry*2}; }
+  if(el.type==='pin'){ return {x:el.x-9,y:el.y-9,w:18,h:18}; }
+  if(el.type==='text'){ return {x:el.x,y:el.y-18,w:(el.text.length*10),h:22}; }
+  return {x:0,y:0,w:0,h:0};
+}
+function pointInBBox(x,y,box){ return x>=box.x && x<=box.x+box.w && y>=box.y && y<=box.y+box.h; }
+function setLayoutTool(t){
+  layoutEditor.tool = t; layoutEditor.selectedIndex = -1;
+  document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
+  const btn = document.getElementById('tool_'+t); if(btn) btn.classList.add('primary');
+  redrawLayoutCanvas();
+}
+function pushLayoutHistory(){
+  layoutEditor.history.push(JSON.stringify(layoutEditor.elements));
+  if(layoutEditor.history.length>50) layoutEditor.history.shift();
+  layoutEditor.redoStack = [];
+}
+function layoutEditorUndo(){
+  if(!layoutEditor.history.length) return;
+  layoutEditor.redoStack.push(JSON.stringify(layoutEditor.elements));
+  layoutEditor.elements = JSON.parse(layoutEditor.history.pop());
+  layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
+}
+function layoutEditorRedo(){
+  if(!layoutEditor.redoStack.length) return;
+  layoutEditor.history.push(JSON.stringify(layoutEditor.elements));
+  layoutEditor.elements = JSON.parse(layoutEditor.redoStack.pop());
+  layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
+}
+function deleteSelectedLayoutElement(){
+  if(layoutEditor.selectedIndex<0) { toast('حدّد عنصرًا أولًا (أداة تحديد)'); return; }
+  pushLayoutHistory();
+  layoutEditor.elements.splice(layoutEditor.selectedIndex,1);
+  layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
+}
+function zoomLayoutEditor(factor){
+  layoutEditor.zoom = Math.max(0.5, Math.min(3, layoutEditor.zoom*factor));
+  document.getElementById('layoutEditCanvas').style.transform = `scale(${layoutEditor.zoom})`;
+}
+function getCanvasPos(canvas, evt){
+  const rect = canvas.getBoundingClientRect();
+  const p = evt.touches ? evt.touches[0] : evt;
+  return { x:(p.clientX-rect.left)*(canvas.width/rect.width), y:(p.clientY-rect.top)*(canvas.height/rect.height) };
+}
+function attachLayoutCanvasEvents(canvas){
+  let dragging=false, start=null, dragOffset=null;
+  function down(evt){
+    evt.preventDefault();
+    const pos = getCanvasPos(canvas, evt);
+    const tool = layoutEditor.tool;
+    if(tool==='select'){
+      let found=-1;
+      for(let i=layoutEditor.elements.length-1;i>=0;i--){ if(pointInBBox(pos.x,pos.y,layoutElementBBox(layoutEditor.elements[i]))){ found=i; break; } }
+      layoutEditor.selectedIndex = found;
+      if(found>=0){ dragging=true; dragOffset=pos; pushLayoutHistory(); }
+      redrawLayoutCanvas();
+      return;
+    }
+    if(tool==='pin'){
+      const label = prompt('اسم العلامة (اختياري):','') || '';
+      pushLayoutHistory();
+      layoutEditor.elements.push({type:'pin', x:pos.x, y:pos.y, label, color:layoutEditor.color});
+      redrawLayoutCanvas(); return;
+    }
+    if(tool==='text'){
+      const text = prompt('اكتب النص:','');
+      if(text){ pushLayoutHistory(); layoutEditor.elements.push({type:'text', x:pos.x, y:pos.y, text, color:layoutEditor.color}); redrawLayoutCanvas(); }
+      return;
+    }
+    dragging=true; start=pos;
+    if(tool==='pen'){ pushLayoutHistory(); layoutEditor.elements.push({type:'pen', points:[pos], color:layoutEditor.color}); }
+  }
+  function move(evt){
+    if(!dragging) return;
+    evt.preventDefault();
+    const pos = getCanvasPos(canvas, evt);
+    const tool = layoutEditor.tool;
+    if(tool==='select' && layoutEditor.selectedIndex>=0){
+      const el = layoutEditor.elements[layoutEditor.selectedIndex];
+      const dx = pos.x-dragOffset.x, dy = pos.y-dragOffset.y; dragOffset=pos;
+      if(el.type==='pen') el.points.forEach(p=>{p.x+=dx;p.y+=dy;});
+      else if(el.type==='arrow'){ el.x1+=dx;el.y1+=dy;el.x2+=dx;el.y2+=dy; }
+      else if(el.type==='rect'){ el.x+=dx;el.y+=dy; }
+      else if(el.type==='circle'){ el.cx+=dx;el.cy+=dy; }
+      else if(el.type==='pin'||el.type==='text'){ el.x+=dx;el.y+=dy; }
+      redrawLayoutCanvas(); return;
+    }
+    if(tool==='pen'){ layoutEditor.elements[layoutEditor.elements.length-1].points.push(pos); redrawLayoutCanvas(); return; }
+    // معاينة حية للأشكال أثناء السحب
+    redrawLayoutCanvas();
+    const ctx = canvas.getContext('2d');
+    if(tool==='arrow') drawLayoutElement(ctx, {type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color}, false);
+    else if(tool==='rect') drawLayoutElement(ctx, {type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),color:layoutEditor.color}, false);
+    else if(tool==='circle') drawLayoutElement(ctx, {type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color}, false);
+  }
+  function up(evt){
+    if(!dragging) return;
+    dragging=false;
+    const tool = layoutEditor.tool;
+    if(['arrow','rect','circle'].includes(tool)){
+      const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
+      pushLayoutHistory();
+      if(tool==='arrow') layoutEditor.elements.push({type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color});
+      else if(tool==='rect') layoutEditor.elements.push({type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),color:layoutEditor.color});
+      else if(tool==='circle') layoutEditor.elements.push({type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color});
+      redrawLayoutCanvas();
+    }
+  }
+  canvas.addEventListener('mousedown', down); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  canvas.addEventListener('touchstart', down, {passive:false}); canvas.addEventListener('touchmove', move, {passive:false}); canvas.addEventListener('touchend', up);
+}
+async function saveLayoutEdit(){
+  const canvas = document.getElementById('layoutEditCanvas');
+  if(!canvas){ toast('تعذّر الحفظ'); return; }
+  toast('جاري حفظ التعديل...');
+  try{
+    const l = layoutsData.find(x=>x.id===layoutEditor.layoutId);
+    const blob = await new Promise(res=> canvas.toBlob(res, 'image/jpeg', 0.9));
+    const path = `layouts/${layoutEditor.layoutId}-edited-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, blob, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const payload = { file_url: pub.publicUrl };
+    if(!l.original_file_url) payload.original_file_url = l.file_url; // نحفظ الأصل أول مرة فقط
+    const {error} = await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
+    if(error) throw error;
+    await logAudit('تعديل خريطة (رسم/علامات)', l.layout_name);
+    toast('✅ تم حفظ النسخة المعدَّلة'); closeModal(); loadLayouts(layoutEditor.factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+
+/* ============================================================
+   الوحدة: البنية التحتية للشبكة (Racks + Switches)
+   ============================================================ */
+let racksData = [], switchesData = [];
+function renderNetworkPlaceholder(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🗄️ البنية التحتية للشبكة: ${f?f.name:'—'}</h2></div>
+    <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+
+    <div class="section-title"><h2 style="font-size:14px">🗃️ الراكات (Racks)</h2>
+      ${isAdmin()? `<button class="btn sm primary" onclick="openRackForm('${factoryId}')">+ إضافة راك</button>`:''}
+    </div>
+    <div id="racksListHost"><div class="empty">جاري التحميل...</div></div>
+
+    <div class="section-title"><h2 style="font-size:14px">🔌 السويتشات (Switches)</h2>
+      ${isAdmin()? `<button class="btn sm primary" onclick="openSwitchForm('${factoryId}')">+ إضافة سويتش</button>`:''}
+    </div>
+    <div id="switchesListHost"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadNetworkData(factoryId){
+  try{
+    const [{data:racks, error:e1}, {data:sws, error:e2}] = await Promise.all([
+      supa.from('factory_racks').select('*').eq('factory_id',factoryId).order('rack_name'),
+      supa.from('factory_switches').select('*').eq('factory_id',factoryId).order('switch_name')
+    ]);
+    if(e1) throw e1; if(e2) throw e2;
+    racksData = racks||[]; switchesData = sws||[];
+  }catch(e){
+    console.warn(e);
+    ['racksListHost','switchesListHost'].forEach(id=>{ const h=document.getElementById(id); if(h) h.innerHTML=`<div class="empty">⚠️ يحتاج تشغيل schema_part5.sql في Supabase.</div>`; });
+    return;
+  }
+  renderRacksList(factoryId);
+  renderSwitchesList(factoryId);
+}
+function renderRacksList(factoryId){
+  const host = document.getElementById('racksListHost');
+  if(!host) return;
+  if(!racksData.length){ host.innerHTML='<div class="empty">لا توجد راكات مضافة بعد.</div>'; return; }
+  host.innerHTML = racksData.map(r=>`
+    <div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div class="site-name" style="font-size:14px">${r.rack_name}</div><div class="site-meta">${r.location||'—'}</div></div>
+        ${r.photo_url? `<img src="${r.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
+      </div>
+      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
+      ${isAdmin()? `<div class="btn-row">
+        <label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRackPhoto('${r.id}','${factoryId}',this)"></label>
+        ${r.photo_url? `<button class="btn sm danger" onclick="removeRackPhoto('${r.id}','${factoryId}')">🗑 الصورة</button>`:''}
+        <button class="btn sm" onclick="openRackForm('${factoryId}','${r.id}')">✏️</button>
+        <button class="btn sm danger" onclick="deleteRack('${r.id}','${factoryId}')">🗑 حذف</button>
+      </div>`:''}
+    </div>`).join('');
+}
+function openRackForm(factoryId, rackId){
+  const r = rackId ? racksData.find(x=>x.id===rackId) : null;
+  const isNew = !r;
+  const d = r || {rack_name:'', location:'', notes:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'إضافة راك':'تعديل راك'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم/رقم الراك</label><input class="input" id="rk_name" value="${d.rack_name}" placeholder="مثال: Rack 01"></div>
+    <div class="field"><label>المكان</label><input class="input" id="rk_location" value="${d.location||''}" placeholder="مثال: غرفة السيرفرات"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="rk_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveRackForm('${factoryId}','${isNew?'':rackId}')">💾 حفظ</button>
+  `);
+}
+async function saveRackForm(factoryId, rackId){
+  const name = document.getElementById('rk_name').value.trim();
+  if(!name){ toast('أدخل اسم الراك'); return; }
+  const payload = { factory_id:factoryId, rack_name:name, location:document.getElementById('rk_location').value.trim(), notes:document.getElementById('rk_notes').value.trim() };
+  try{
+    if(rackId){ const {error}=await supa.from('factory_racks').update(payload).eq('id',rackId); if(error) throw error; await logAudit('تعديل راك', name); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('factory_racks').insert(payload); if(error) throw error; await logAudit('إضافة راك', name); }
+    closeModal(); toast('✅ تم الحفظ'); loadNetworkData(factoryId);
+  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function uploadRackPhoto(rackId, factoryId, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  toast('جاري رفع الصورة...');
+  try{
+    const compressed = await compressImageFile(file);
+    const path = `racks/${rackId}-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const {error} = await supa.from('factory_racks').update({photo_url: pub.publicUrl}).eq('id', rackId);
+    if(error) throw error;
+    toast('✅ تم رفع الصورة'); loadNetworkData(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+}
+async function removeRackPhoto(rackId, factoryId){
+  try{ await supa.from('factory_racks').update({photo_url:null}).eq('id',rackId); toast('✅ تم حذف الصورة'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+function deleteRack(rackId, factoryId){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:12.5px;color:var(--muted)">حذف الراك؟ (لن يتم حذف السويتشات المرتبطة به، لكن سيُفصل ارتباطها)</p>
+    <button class="btn danger block" onclick="confirmDeleteRack('${rackId}','${factoryId}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteRack(rackId, factoryId){
+  try{ await supa.from('factory_racks').delete().eq('id',rackId); await logAudit('حذف راك', rackId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+function renderSwitchesList(factoryId){
+  const host = document.getElementById('switchesListHost');
+  if(!host) return;
+  if(!switchesData.length){ host.innerHTML='<div class="empty">لا توجد سويتشات مضافة بعد.</div>'; return; }
+  host.innerHTML = switchesData.map(sw=>{
+    const available = Math.max(0, (sw.total_ports||0) - (sw.used_ports||0));
+    const camerasCount = (sw.connected_cameras||[]).length;
+    const rack = racksData.find(r=>r.id===sw.rack_id);
+    return `<div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div class="site-name" style="font-size:14px">${sw.switch_name}</div><div class="site-meta">${sw.location||'—'} ${rack?'· '+rack.rack_name:''} ${sw.switch_type?'· '+sw.switch_type:''}</div></div>
+        ${sw.photo_url? `<img src="${sw.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${sw.photo_url}')">`:''}
+      </div>
+      <div class="mini-grid">
+        <div class="mini"><div class="n">${sw.total_ports||0}</div><div class="t">إجمالي المنافذ</div></div>
+        <div class="mini"><div class="n" style="color:var(--danger)">${sw.used_ports||0}</div><div class="t">مستخدمة</div></div>
+        <div class="mini"><div class="n" style="color:var(--success)">${available}</div><div class="t">متاحة</div></div>
+        <div class="mini"><div class="n" style="color:var(--accent)">${camerasCount}</div><div class="t">كاميرات متصلة</div></div>
+      </div>
+      ${sw.brand||sw.model? `<div style="font-size:11px;color:var(--muted)">${sw.brand||''} ${sw.model||''}</div>`:''}
+      ${camerasCount? `<div style="margin-top:6px">${(sw.connected_cameras||[]).map(c=>`<span class="tag-chip" style="display:inline-block;background:var(--bg-2);border:1px solid var(--border-soft);border-radius:8px;padding:3px 8px;font-size:10.5px;margin:2px">${c}</span>`).join('')}</div>`:''}
+      ${sw.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${sw.notes}</p>`:''}
+      ${isAdmin()? `<div class="btn-row">
+        <label class="btn sm" style="cursor:pointer">${sw.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadSwitchPhoto('${sw.id}','${factoryId}',this)"></label>
+        ${sw.photo_url? `<button class="btn sm danger" onclick="removeSwitchPhoto('${sw.id}','${factoryId}')">🗑 الصورة</button>`:''}
+        <button class="btn sm" onclick="openSwitchForm('${factoryId}','${sw.id}')">✏️</button>
+        <button class="btn sm danger" onclick="deleteSwitch('${sw.id}','${factoryId}')">🗑 حذف</button>
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+function openSwitchForm(factoryId, switchId){
+  const sw = switchId ? switchesData.find(x=>x.id===switchId) : null;
+  const isNew = !sw;
+  const d = sw || {switch_name:'', location:'', switch_type:'Managed', brand:'', model:'', total_ports:24, used_ports:0, connected_cameras:[], notes:'', rack_id:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'إضافة سويتش':'تعديل سويتش'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم/رقم السويتش</label><input class="input" id="sw_name" value="${d.switch_name}" placeholder="مثال: Switch 01"></div>
+    <div class="row2">
+      <div class="field"><label>المكان</label><input class="input" id="sw_location" value="${d.location||''}"></div>
+      <div class="field"><label>الراك (اختياري)</label><select class="input" id="sw_rack"><option value="">— بدون —</option>${racksData.map(r=>`<option value="${r.id}" ${d.rack_id===r.id?'selected':''}>${r.rack_name}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>نوع السويتش</label><select class="input" id="sw_type">${['Managed','Unmanaged','PoE','Non-PoE','أخرى'].map(t=>`<option ${d.switch_type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>الشركة المصنعة</label><input class="input" id="sw_brand" value="${d.brand||''}"></div>
+    </div>
+    <div class="field"><label>الموديل</label><input class="input" id="sw_model" value="${d.model||''}"></div>
+    <div class="row2">
+      <div class="field"><label>إجمالي المنافذ (Ports)</label><input class="input" type="number" min="0" id="sw_total" value="${d.total_ports||0}"></div>
+      <div class="field"><label>المنافذ المستخدمة</label><input class="input" type="number" min="0" id="sw_used" value="${d.used_ports||0}"></div>
+    </div>
+    <div class="field"><label>أسماء/أرقام الكاميرات المتصلة (سطر لكل كاميرا)</label><textarea class="input" id="sw_cameras" placeholder="مثال:&#10;كاميرا بوابة 1&#10;كاميرا الإنتاج 3">${(d.connected_cameras||[]).join('\n')}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="sw_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveSwitchForm('${factoryId}','${isNew?'':switchId}')">💾 حفظ</button>
+  `);
+}
+async function saveSwitchForm(factoryId, switchId){
+  const name = document.getElementById('sw_name').value.trim();
+  if(!name){ toast('أدخل اسم السويتش'); return; }
+  const totalPorts = Math.max(0, parseInt(document.getElementById('sw_total').value)||0);
+  const usedPorts = Math.min(totalPorts, Math.max(0, parseInt(document.getElementById('sw_used').value)||0));
+  const camerasList = document.getElementById('sw_cameras').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  const payload = {
+    factory_id: factoryId, rack_id: document.getElementById('sw_rack').value || null,
+    switch_name: name, location: document.getElementById('sw_location').value.trim(),
+    switch_type: document.getElementById('sw_type').value, brand: document.getElementById('sw_brand').value.trim(),
+    model: document.getElementById('sw_model').value.trim(), total_ports: totalPorts, used_ports: usedPorts,
+    connected_cameras: camerasList, notes: document.getElementById('sw_notes').value.trim()
+  };
+  try{
+    if(switchId){ const {error}=await supa.from('factory_switches').update(payload).eq('id',switchId); if(error) throw error; await logAudit('تعديل سويتش', name); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('factory_switches').insert(payload); if(error) throw error; await logAudit('إضافة سويتش', name); }
+    closeModal(); toast('✅ تم الحفظ'); loadNetworkData(factoryId);
+  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function uploadSwitchPhoto(switchId, factoryId, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  toast('جاري رفع الصورة...');
+  try{
+    const compressed = await compressImageFile(file);
+    const path = `switches/${switchId}-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const {error} = await supa.from('factory_switches').update({photo_url: pub.publicUrl}).eq('id', switchId);
+    if(error) throw error;
+    toast('✅ تم رفع الصورة'); loadNetworkData(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+}
+async function removeSwitchPhoto(switchId, factoryId){
+  try{ await supa.from('factory_switches').update({photo_url:null}).eq('id',switchId); toast('✅ تم حذف الصورة'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+function deleteSwitch(switchId, factoryId){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <button class="btn danger block" onclick="confirmDeleteSwitch('${switchId}','${factoryId}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteSwitch(switchId, factoryId){
+  try{ await supa.from('factory_switches').delete().eq('id',switchId); await logAudit('حذف سويتش', switchId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   الوحدة: UPS / مصادر الطاقة الاحتياطية
+   ============================================================ */
+let upsData = [];
+function renderUpsPlaceholder(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🔋 UPS: ${f?f.name:'—'}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openUpsForm('${factoryId}')">+ إضافة UPS</button>`:''}
+    </div>
+    <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+    <div id="upsSummaryHost"></div>
+    <div id="upsListHost" style="margin-top:8px"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadUpsData(factoryId){
+  try{
+    const {data, error} = await supa.from('factory_ups').select('*').eq('factory_id',factoryId).order('ups_name');
+    if(error) throw error;
+    upsData = data||[];
+  }catch(e){
+    console.warn(e);
+    const host = document.getElementById('upsListHost');
+    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part5.sql في Supabase أولًا.</div>`;
+    return;
+  }
+  const sumHost = document.getElementById('upsSummaryHost');
+  if(sumHost) sumHost.innerHTML = `<div class="stat-card" style="margin:10px 0"><div class="label">إجمالي أجهزة UPS</div><div class="value">${upsData.length}</div><div class="sub">${upsData.filter(u=>u.status==='يعمل').length} تعمل / ${upsData.filter(u=>u.status!=='يعمل').length} بها مشكلة</div></div>`;
+  const host = document.getElementById('upsListHost');
+  if(!host) return;
+  if(!upsData.length){ host.innerHTML='<div class="empty">لا توجد أجهزة UPS مضافة بعد.</div>'; return; }
+  host.innerHTML = upsData.map(u=>`
+    <div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div class="site-name" style="font-size:14px">${u.ups_name}</div><div class="site-meta">${u.location||'—'}</div></div>
+        <span class="pill ${u.status==='يعمل'?'ok':(u.status==='عطل'?'bad':'warn')}">${u.status}</span>
+      </div>
+      ${u.brand||u.model||u.capacity? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${u.brand||''} ${u.model||''} ${u.capacity?'· القدرة: '+u.capacity:''}</div>`:''}
+      ${u.last_maintenance_date? `<div style="font-size:10.5px;color:var(--muted-2)">آخر صيانة: ${fmtDateAr(u.last_maintenance_date)}</div>`:''}
+      ${u.photo_url? `<img src="${u.photo_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${u.photo_url}')">`:''}
+      ${u.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${u.notes}</p>`:''}
+      ${isAdmin()? `<div class="btn-row">
+        <label class="btn sm" style="cursor:pointer">${u.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadUpsPhoto('${u.id}','${factoryId}',this)"></label>
+        ${u.photo_url? `<button class="btn sm danger" onclick="removeUpsPhoto('${u.id}','${factoryId}')">🗑 الصورة</button>`:''}
+        <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="quickUpdateUpsStatus('${u.id}','${factoryId}',this.value)">
+          ${['يعمل','عطل','تحت الصيانة'].map(s=>`<option ${u.status===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <button class="btn sm" onclick="openUpsForm('${factoryId}','${u.id}')">✏️</button>
+        <button class="btn sm danger" onclick="deleteUps('${u.id}','${factoryId}')">🗑 حذف</button>
+      </div>`:''}
+    </div>`).join('');
+}
+function openUpsForm(factoryId, upsId){
+  const u = upsId ? upsData.find(x=>x.id===upsId) : null;
+  const isNew = !u;
+  const d = u || {ups_name:'', location:'', capacity:'', brand:'', model:'', status:'يعمل', last_maintenance_date:'', notes:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'إضافة UPS':'تعديل UPS'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم/رقم UPS</label><input class="input" id="up_name" value="${d.ups_name}" placeholder="مثال: UPS 01"></div>
+    <div class="field"><label>المكان</label><input class="input" id="up_location" value="${d.location||''}" placeholder="مثال: غرفة المراقبة المركزية"></div>
+    <div class="row2">
+      <div class="field"><label>القدرة</label><input class="input" id="up_capacity" value="${d.capacity||''}" placeholder="مثال: 3 KVA"></div>
+      <div class="field"><label>الحالة</label><select class="input" id="up_status">${['يعمل','عطل','تحت الصيانة'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الماركة</label><input class="input" id="up_brand" value="${d.brand||''}"></div>
+      <div class="field"><label>الموديل</label><input class="input" id="up_model" value="${d.model||''}"></div>
+    </div>
+    <div class="field"><label>تاريخ آخر صيانة</label><input class="input" type="date" id="up_maint" value="${d.last_maintenance_date||''}"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="up_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveUpsForm('${factoryId}','${isNew?'':upsId}')">💾 حفظ</button>
+  `);
+}
+async function saveUpsForm(factoryId, upsId){
+  const name = document.getElementById('up_name').value.trim();
+  if(!name){ toast('أدخل اسم UPS'); return; }
+  const payload = {
+    factory_id: factoryId, ups_name: name, location: document.getElementById('up_location').value.trim(),
+    capacity: document.getElementById('up_capacity').value.trim(), status: document.getElementById('up_status').value,
+    brand: document.getElementById('up_brand').value.trim(), model: document.getElementById('up_model').value.trim(),
+    last_maintenance_date: document.getElementById('up_maint').value || null, notes: document.getElementById('up_notes').value.trim()
+  };
+  try{
+    if(upsId){ const {error}=await supa.from('factory_ups').update(payload).eq('id',upsId); if(error) throw error; await logAudit('تعديل UPS', name); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('factory_ups').insert(payload); if(error) throw error; await logAudit('إضافة UPS', name); }
+    closeModal(); toast('✅ تم الحفظ'); loadUpsData(factoryId);
+  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function quickUpdateUpsStatus(upsId, factoryId, status){
+  try{ await supa.from('factory_ups').update({status}).eq('id',upsId); const u=upsData.find(x=>x.id===upsId); await logAudit('تغيير حالة UPS', u?u.ups_name:upsId,u?.status,status); toast('✅ تم التحديث'); loadUpsData(factoryId); }
+  catch(e){ toast('🚫 تعذّر التحديث'); }
+}
+async function uploadUpsPhoto(upsId, factoryId, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  toast('جاري رفع الصورة...');
+  try{
+    const compressed = await compressImageFile(file);
+    const path = `ups/${upsId}-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const {error} = await supa.from('factory_ups').update({photo_url: pub.publicUrl}).eq('id', upsId);
+    if(error) throw error;
+    toast('✅ تم رفع الصورة'); loadUpsData(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+}
+async function removeUpsPhoto(upsId, factoryId){
+  try{ await supa.from('factory_ups').update({photo_url:null}).eq('id',upsId); toast('✅ تم حذف الصورة'); loadUpsData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+function deleteUps(upsId, factoryId){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <button class="btn danger block" onclick="confirmDeleteUps('${upsId}','${factoryId}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteUps(upsId, factoryId){
+  try{ await supa.from('factory_ups').delete().eq('id',upsId); await logAudit('حذف UPS', upsId); closeModal(); toast('تم الحذف'); loadUpsData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   مركز التصدير الشامل (Export Center) — مستقل عن التصدير الفردي
+   يجمع كل بيانات التطبيق من كل الجداول ويصدّرها بأي صيغة مطلوبة
+   ============================================================ */
+/* ============================================================
+   تحويل روابط الصور إلى Base64 لتضمينها فعليًا داخل الملفات
+   (Excel/PDF/Word/PowerPoint) بدل مجرد كتابة الرابط
+   ============================================================ */
+const __imgDataCache = {};
+async function urlToDataUri(url){
+  if(!url) return null;
+  if(__imgDataCache[url]) return __imgDataCache[url];
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('fetch failed');
+    const blob = await res.blob();
+    const dataUri = await new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    __imgDataCache[url] = dataUri;
+    return dataUri;
+  }catch(e){ console.warn('تعذّر تحميل الصورة للتضمين:', url, e); return null; }
+}
+async function urlsToDataUris(urls){
+  const unique = [...new Set(urls.filter(Boolean))];
+  await Promise.all(unique.map(u=> urlToDataUri(u)));
+  return __imgDataCache;
+}
+
+async function gatherAllAppData(){
+  const data = { exportedAt:new Date().toISOString(), sites: factoriesData.map(computeFactory), totals: computeTotals(factoriesData.map(computeFactory)) };
+  const safe = async (table, extra) => { try{ let q = supa.from(table).select('*'); if(extra) q = extra(q); const {data:d,error} = await q; if(error) throw error; return d||[]; }catch(e){ return []; } };
+  [data.cameras, data.screens, data.faults, data.maintenanceLog, data.archive,
+   data.storeItems, data.storeTransactions, data.storeItemImages,
+   data.layouts, data.racks, data.switches, data.ups, data.auditLog,
+   data.cameraMods, data.lighting, data.preventiveTasks] = await Promise.all([
+    safe('cameras'), safe('screens'), safe('faults'), safe('maintenance_log'),
+    safe('reports_archive', q=>q.order('report_date',{ascending:false}).limit(200)),
+    safe('store_items'), safe('store_transactions'), safe('store_item_images'),
+    safe('factory_layouts'), safe('factory_racks'), safe('factory_switches'), safe('factory_ups'),
+    safe('audit_log', q=>q.order('ts',{ascending:false}).limit(300)),
+    safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance')
+  ]);
+  return data;
+}
+
+function exportCenterFilename(ext){ return `Complete_Application_Export_${new Date().toISOString().slice(0,10)}.${ext}`; }
+
+/* ---------- Excel شامل (بصور مضمّنة فعليًا، وليست روابط) ---------- */
+function addEmbeddedImage(wb, ws, dataUri, colIdx0, rowIdx0, wPx, hPx){
+  if(!dataUri) return false;
+  try{
+    const m = /^data:image\/(\w+);base64,/.exec(dataUri);
+    const ext = m ? (m[1]==='jpg'?'jpeg':m[1]) : 'jpeg';
+    const base64 = dataUri.split(',')[1];
+    const imgId = wb.addImage({ base64, extension: ext==='png'?'png':'jpeg' });
+    ws.addImage(imgId, { tl:{col:colIdx0, row:rowIdx0}, ext:{width:wPx, height:hPx} });
+    return true;
+  }catch(e){ console.warn('تعذّر تضمين صورة في Excel', e); return false; }
+}
+async function buildAllExcelWorkbook(d){
+  const ok = await ensureExcelLib(); if(!ok) throw new Error('تعذّر تحميل مكتبة Excel');
+  const wb = new ExcelJS.Workbook();
+  const border = { top:{style:'thin',color:{argb:'FFC9D3E3'}}, left:{style:'thin',color:{argb:'FFC9D3E3'}}, bottom:{style:'thin',color:{argb:'FFC9D3E3'}}, right:{style:'thin',color:{argb:'FFC9D3E3'}} };
+  const headStyle = c=>{ c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF12716A'}}; c.border=border; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; };
+  function sheetFromRows(name, headers, rows, colWidths){
+    const ws = wb.addWorksheet(name, {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = (colWidths||headers.map(()=>18)).map(w=>({width:w}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    rows.forEach((r,i)=>{ const row=ws.addRow(r); row.eachCell(c=>{ c.border=border; if(i%2===1) c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F7FB'}}; }); });
+    return ws;
+  }
+  // تحميل كل الصور المطلوبة كـ Base64 مسبقًا (صور أصناف، خرائط، راكات، سويتشات، UPS)
+  toast('جاري تحميل الصور لتضمينها في الملف...');
+  const allImgUrls = [
+    ...d.storeItemImages.map(im=>im.image_url),
+    ...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url),
+    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url)
+  ];
+  await urlsToDataUris(allImgUrls);
+
+  // ملخص عام
+  const t = d.totals;
+  sheetFromRows('ملخص عام', ['البند','القيمة'], [
+    ['إجمالي المصانع', d.sites.length], ['إجمالي الشاشات', t.screens], ['الشاشات تعمل', t.screensUp], ['الشاشات منقطعة', t.screensDown],
+    ['نسبة تشغيل الشاشات %', Math.round(t.scrUptime*100)/100], ['إجمالي الكاميرات', t.camerasTotal], ['الكاميرات تعمل', t.camerasUp],
+    ['الكاميرات منقطعة', t.camerasDown], ['نسبة تشغيل الكاميرات %', Math.round(t.camUptime*100)/100],
+    ['عدد أصناف المخزن', d.storeItems.length], ['عدد الراكات', d.racks.length], ['عدد السويتشات', d.switches.length],
+    ['عدد أجهزة UPS', d.ups.length], ['عدد الخرائط', d.layouts.length], ['عدد الأعطال المسجلة', d.faults.length],
+    ['عدد التقارير المؤرشفة', d.archive.length]
+  ], [28,16]);
+  // المصانع
+  sheetFromRows('المصانع', ['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة','نسبة التشغيل %'],
+    d.sites.map(s=>[s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown,Math.round(s.camUptime*100)/100]));
+  // الكاميرات الفردية
+  if(d.cameras.length) sheetFromRows('الكاميرات', ['المصنع','رقم الكاميرا','الاسم','الحالة','سبب العطل','المسؤول'],
+    d.cameras.map(c=>[d.sites.find(s=>s.id===c.factory_id)?.name||'',c.camera_number||'',c.camera_name,c.status,c.fault_reason||'',c.responsible||'']));
+  // الشاشات الفردية
+  if(d.screens.length) sheetFromRows('الشاشات', ['المصنع','رقم الشاشة','الاسم','الحالة','سبب العطل'],
+    d.screens.map(s=>[d.sites.find(x=>x.id===s.factory_id)?.name||'',s.screen_number||'',s.screen_name,s.status,s.fault_reason||'']));
+  // المخزن
+  if(d.storeItems.length) sheetFromRows('المخزن', ['الصنف','النوع','الرصيد الحالي','عدد الصور','ملاحظات'],
+    d.storeItems.map(it=>{
+      const bal = d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0);
+      const imgCount = d.storeItemImages.filter(im=>im.item_id===it.id).length;
+      return [it.item_name, it.item_type||'', bal, imgCount, it.notes||''];
+    }));
+  if(d.storeTransactions.length) sheetFromRows('حركة المخزن', ['التاريخ','الصنف','وارد','صادر','السبب','الجهة'],
+    d.storeTransactions.map(t=>{ const it=d.storeItems.find(x=>x.id===t.item_id); return [fmtDateAr(t.transaction_date), it?it.item_name:'', t.in_qty||0, t.out_qty||0, t.reason||'', t.destination||'']; }));
+  // صور الأصناف — مُضمَّنة فعليًا داخل الخلايا
+  if(d.storeItemImages.length){
+    const ws = wb.addWorksheet('صور الأصناف', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = [{width:26},{width:20}];
+    const hr = ws.getRow(1); ['الصنف','الصورة'].forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.storeItemImages.forEach((im,i)=>{
+      const r = i+2; const it = d.storeItems.find(x=>x.id===im.item_id);
+      ws.getCell(`A${r}`).value = it?it.item_name:''; ws.getCell(`A${r}`).border=border;
+      ws.getCell(`B${r}`).border=border; ws.getRow(r).height = 80;
+      addEmbeddedImage(wb, ws, __imgDataCache[im.image_url], 1, r-1, 100, 100);
+    });
+  }
+  // الخرائط — الصور مُضمَّنة، ملفات PDF تبقى برابط (لا يمكن تضمين PDF كصورة)
+  if(d.layouts.length){
+    const ws = wb.addWorksheet('الخرائط', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = [{width:20},{width:22},{width:22}];
+    const hr = ws.getRow(1); ['المصنع','اسم الخريطة','المعاينة / الملف'].forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.layouts.forEach((l,i)=>{
+      const r = i+2;
+      ws.getCell(`A${r}`).value = d.sites.find(s=>s.id===l.factory_id)?.name||''; ws.getCell(`A${r}`).border=border;
+      ws.getCell(`B${r}`).value = l.layout_name; ws.getCell(`B${r}`).border=border;
+      ws.getCell(`C${r}`).border=border; ws.getRow(r).height = 90;
+      if(l.file_type==='image') addEmbeddedImage(wb, ws, __imgDataCache[l.file_url], 2, r-1, 110, 110);
+      else ws.getCell(`C${r}`).value = 'ملف PDF: '+l.file_url;
+    });
+  }
+  // Racks — بصورة مُضمَّنة
+  if(d.racks.length){
+    const ws = wb.addWorksheet('Racks', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = [{width:20},{width:18},{width:22},{width:20}];
+    const hr = ws.getRow(1); ['المصنع','اسم الراك','المكان','الصورة'].forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.racks.forEach((r,i)=>{
+      const rr = i+2;
+      ws.getCell(`A${rr}`).value = d.sites.find(s=>s.id===r.factory_id)?.name||''; ws.getCell(`A${rr}`).border=border;
+      ws.getCell(`B${rr}`).value = r.rack_name; ws.getCell(`B${rr}`).border=border;
+      ws.getCell(`C${rr}`).value = r.location||''; ws.getCell(`C${rr}`).border=border;
+      ws.getCell(`D${rr}`).border=border; ws.getRow(rr).height=75;
+      addEmbeddedImage(wb, ws, __imgDataCache[r.photo_url], 3, rr-1, 90, 90);
+    });
+  }
+  // Switches — بصورة مُضمَّنة
+  if(d.switches.length){
+    const ws = wb.addWorksheet('Switches', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    const headers = ['المصنع','السويتش','النوع','الماركة','الموديل','إجمالي المنافذ','مستخدمة','متاحة','عدد الكاميرات','الصورة'];
+    ws.columns = headers.map(()=>({width:16}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=28;
+    d.switches.forEach((sw,i)=>{
+      const rr = i+2;
+      const vals = [d.sites.find(s=>s.id===sw.factory_id)?.name||'', sw.switch_name, sw.switch_type||'', sw.brand||'', sw.model||'', sw.total_ports||0, sw.used_ports||0, Math.max(0,(sw.total_ports||0)-(sw.used_ports||0)), (sw.connected_cameras||[]).length];
+      vals.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); c.value=v; c.border=border; });
+      ws.getRow(rr).height=75;
+      addEmbeddedImage(wb, ws, __imgDataCache[sw.photo_url], 9, rr-1, 90, 90);
+    });
+  }
+  // Cameras per Switch
+  const camRows = [];
+  d.switches.forEach(sw=> (sw.connected_cameras||[]).forEach(cam=> camRows.push([d.sites.find(s=>s.id===sw.factory_id)?.name||'', sw.switch_name, cam])));
+  if(camRows.length) sheetFromRows('Cameras per Switch', ['المصنع','السويتش','الكاميرا'], camRows);
+  // UPS — بصورة مُضمَّنة
+  if(d.ups.length){
+    const ws = wb.addWorksheet('UPS', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    const headers = ['المصنع','اسم UPS','المكان','القدرة','الحالة','آخر صيانة','الصورة'];
+    ws.columns = headers.map(()=>({width:16}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.ups.forEach((u,i)=>{
+      const rr = i+2;
+      const vals = [d.sites.find(s=>s.id===u.factory_id)?.name||'', u.ups_name, u.location||'', u.capacity||'', u.status, u.last_maintenance_date?fmtDateAr(u.last_maintenance_date):''];
+      vals.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); c.value=v; c.border=border; });
+      ws.getCell(rr,7).border=border; ws.getRow(rr).height=75;
+      addEmbeddedImage(wb, ws, __imgDataCache[u.photo_url], 6, rr-1, 90, 90);
+    });
+  }
+  // الأعطال
+  if(d.faults.length) sheetFromRows('الأعطال', ['المصنع','الجهاز','النوع','الخطورة','الحالة','تاريخ الإبلاغ'],
+    d.faults.map(f=>[d.sites.find(s=>s.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]));
+  // التقارير (الأرشيف)
+  if(d.archive.length) sheetFromRows('التقارير', ['التاريخ','الوردية','معد التقرير','حالة الغرفة'],
+    d.archive.map(a=>[fmtDateAr(a.report_date), a.shift||'', a.preparer||'', a.room_status||'']));
+  // سجل التدقيق
+  if(d.auditLog.length) sheetFromRows('سجل البيانات', ['التاريخ','المستخدم','العملية','التفاصيل'],
+    d.auditLog.slice(0,300).map(r=>[new Date(r.ts).toLocaleString('ar-EG'), r.actor_name, r.action, r.details||'']), [18,18,22,40]);
+  return wb;
+}
+async function exportAllExcel(){
+  toast('جاري تجميع كل بيانات التطبيق...');
+  try{
+    const d = await gatherAllAppData();
+    const wb = await buildAllExcelWorkbook(d);
+    const buf = await wb.xlsx.writeBuffer();
+    await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), exportCenterFilename('xlsx'));
+    await logAudit('تصدير شامل Excel', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+
+/* ---------- بناء HTML شامل (يُستخدم لـ PDF وWord) ---------- */
+async function buildAllReportHtml(d){
+  const t = d.totals;
+  const section = (title, bodyHtml) => `<h2 style="color:#12716A;border-bottom:2px solid #12716A;padding-bottom:5px;margin-top:22px;font-size:16px">${title}</h2>${bodyHtml}`;
+  const table = (headers, rows) => `<table style="width:100%;border-collapse:collapse;font-size:10.5px;margin-top:6px" border="1" cellpadding="5">
+    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}</tr>
+    ${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}
+  </table>`;
+  // تحميل الصور اللازمة كـ Base64 لتضمينها فعليًا (وليست روابط) في PDF/Word
+  const allImgUrls = [
+    ...d.storeItemImages.map(im=>im.image_url),
+    ...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url),
+    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url)
+  ];
+  await urlsToDataUris(allImgUrls);
+  const imgTag = (url, w) => { const du = __imgDataCache[url]; return du ? `<img src="${du}" style="width:${w||90}px;height:${w||90}px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px">` : ''; };
+
+  let html = `<div style="direction:rtl;font-family:Arial;color:#0B1220;padding:10px">
+    <div style="text-align:center;padding:40px 0;border-bottom:4px solid #12716A;margin-bottom:20px">
+      <h1 style="font-size:26px;margin-bottom:4px">التصدير الشامل لبيانات التطبيق</h1>
+      <p style="color:#555">غرفة المراقبة المركزية — شركة جهينة للصناعات الغذائية</p>
+      <p style="color:#888;font-size:12px">تاريخ التصدير: ${new Date().toLocaleString('ar-EG')}</p>
+    </div>`;
+  html += section('الملخص العام', `<p style="font-size:12.5px;line-height:1.9">
+    إجمالي المصانع: ${d.sites.length} — إجمالي الكاميرات: ${t.camerasTotal} (تعمل ${t.camerasUp}، منقطعة ${t.camerasDown}، نسبة تشغيل ${fmtPct2(t.camUptime)}) —
+    إجمالي الشاشات: ${t.screens} (تعمل ${t.screensUp}، منقطعة ${t.screensDown}) — أصناف المخزن: ${d.storeItems.length} —
+    الراكات: ${d.racks.length} — السويتشات: ${d.switches.length} — UPS: ${d.ups.length} — الأعطال المسجلة: ${d.faults.length}.</p>`);
+  html += section('بيانات المصانع', table(['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة','نسبة التشغيل'],
+    d.sites.map(s=>[s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown,fmtPct2(s.camUptime)])));
+
+  // الخرائط — صور فعلية مضمّنة (وليست روابط)
+  if(d.layouts.length) html += section('الخرائط والـ Layout', d.layouts.map(l=>`
+    <div style="display:inline-block;text-align:center;margin:6px;vertical-align:top">
+      ${l.file_type==='image' ? imgTag(l.file_url, 140) : `<div style="width:140px;height:100px;border:1px solid #ccc;display:flex;align-items:center;justify-content:center;color:#888">ملف PDF</div>`}
+      <div style="font-size:10px;color:#555;max-width:140px">${d.sites.find(s=>s.id===l.factory_id)?.name||''}<br>${l.layout_name}</div>
+    </div>`).join(''));
+
+  if(d.racks.length || d.switches.length) html += section('البنية التحتية للشبكة', `
+    ${d.racks.length? table(['المصنع','الراك','المكان','صورة'], d.racks.map(r=>[d.sites.find(s=>s.id===r.factory_id)?.name||'',r.rack_name,r.location||'',imgTag(r.photo_url,70)])) : ''}
+    ${d.switches.length? table(['المصنع','السويتش','النوع','المنافذ','مستخدمة','كاميرات','صورة'], d.switches.map(sw=>[d.sites.find(s=>s.id===sw.factory_id)?.name||'',sw.switch_name,sw.switch_type||'',sw.total_ports||0,sw.used_ports||0,(sw.connected_cameras||[]).length,imgTag(sw.photo_url,70)])) : ''}`);
+  if(d.ups.length) html += section('UPS ومصادر الطاقة', table(['المصنع','UPS','المكان','الحالة','صورة'], d.ups.map(u=>[d.sites.find(s=>s.id===u.factory_id)?.name||'',u.ups_name,u.location||'',u.status,imgTag(u.photo_url,70)])));
+  if(d.storeItems.length) html += section('المخزن', table(['الصنف','النوع','الرصيد','صور'], d.storeItems.map(it=>{
+    const bal=d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0);
+    const imgs = d.storeItemImages.filter(im=>im.item_id===it.id).slice(0,3).map(im=>imgTag(im.image_url,60)).join('');
+    return [it.item_name,it.item_type||'',bal,imgs];
+  })));
+  if(d.faults.length) html += section('الأعطال', table(['المصنع','الجهاز','الخطورة','الحالة'], d.faults.map(f=>[d.sites.find(s=>s.id===f.factory_id)?.name||'',f.device_name,f.severity,f.status])));
+  if(d.archive.length) html += section('أرشيف التقارير', table(['التاريخ','الوردية','معد التقرير','الحالة'], d.archive.slice(0,50).map(a=>[fmtDateAr(a.report_date),a.shift||'',a.preparer||'',a.room_status||''])));
+  html += `<p style="text-align:center;color:#888;margin-top:30px;font-size:11px;border-top:1px dashed #ccc;padding-top:10px">— تصدير شامل تلقائي من نظام غرفة المراقبة المركزية — إعداد وتشغيل: إبراهيم رمضان —</p></div>`;
+  return html;
+}
+
+/* ---------- PDF شامل ---------- */
+async function exportAllPdf(){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  toast('جاري تجميع كل بيانات التطبيق والصور...');
+  try{
+    const d = await gatherAllAppData();
+    const el = document.createElement('div'); el.innerHTML = await buildAllReportHtml(d);
+    document.body.appendChild(el);
+    const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['css','legacy']}}).from(el).outputPdf('blob');
+    el.remove();
+    await saveOrShareFile(blob, exportCenterFilename('pdf'));
+    await logAudit('تصدير شامل PDF', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+
+/* ---------- Word شامل ---------- */
+async function exportAllWord(){
+  toast('جاري تجميع كل بيانات التطبيق والصور...');
+  try{
+    const d = await gatherAllAppData();
+    const bodyHtml = (await buildAllReportHtml(d)).replace('direction:rtl;font-family:Arial;color:#0B1220;padding:10px', 'direction:rtl;font-family:Arial;text-align:right');
+    const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset="utf-8"><style>@page{size:21cm 29.7cm;margin:2cm;} body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:5px;font-size:10.5pt;} th{background:#0B1220;color:#fff;}</style></head>
+      <body>${bodyHtml}</body></html>`;
+    const blob = new Blob(['\ufeff', html], {type:'application/msword'});
+    await saveOrShareFile(blob, exportCenterFilename('doc'));
+    await logAudit('تصدير شامل Word', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+
+/* ---------- PowerPoint شامل ---------- */
+async function exportAllPptx(){
+  const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
+  toast('جاري تجميع كل بيانات التطبيق والصور...');
+  try{
+    const d = await gatherAllAppData();
+    const t = d.totals;
+    const allImgUrls = [...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url), ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url), ...d.storeItemImages.map(im=>im.image_url)];
+    await urlsToDataUris(allImgUrls);
+    const pptx = new PptxGenJS();
+    pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
+
+    const cover = pptx.addSlide({masterName:'MASTER'});
+    cover.addText('غرفة المراقبة المركزية', {x:0.5,y:2.0,w:9,h:1, fontSize:36, bold:true, color:'38D9C9', align:'center'});
+    cover.addText('التقرير الشامل لكل بيانات التطبيق', {x:0.5,y:2.9,w:9,h:0.6, fontSize:20, color:'E9EEFB', align:'center'});
+    cover.addText(new Date().toLocaleDateString('ar-EG'), {x:0.5,y:3.6,w:9,h:0.4, fontSize:13, color:'8CA0C4', align:'center'});
+    cover.addText('إعداد وتشغيل النظام: إبراهيم رمضان', {x:0.5,y:6.8,w:9,h:0.4, fontSize:11, color:'5E6E92', align:'center'});
+
+    const dash = pptx.addSlide({masterName:'MASTER'});
+    dash.addText('لوحة المعلومات العامة', {x:0.4,y:0.3,w:9,h:0.6,fontSize:24,bold:true,color:'38D9C9',align:'center'});
+    const cards = [['إجمالي الكاميرات',t.camerasTotal],['نسبة تشغيل الكاميرات',fmtPct2(t.camUptime)],['إجمالي الشاشات',t.screens],['نسبة تشغيل الشاشات',fmtPct2(t.scrUptime)]];
+    cards.forEach((c,i)=>{ const x=0.5+(i%2)*4.7, y=1.3+Math.floor(i/2)*1.6;
+      dash.addShape('roundRect', {x,y,w:4.3,h:1.3,fill:{color:'182446'},line:{color:'243055'}});
+      dash.addText(String(c[0]), {x,y:y+0.1,w:4.3,h:0.4,fontSize:13,color:'8CA0C4',align:'center'});
+      dash.addText(String(c[1]), {x,y:y+0.5,w:4.3,h:0.7,fontSize:26,bold:true,color:'4ADE80',align:'center'});
+    });
+
+    d.sites.forEach(s=>{
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText(s.name, {x:0.4,y:0.3,w:9,h:0.6,fontSize:22,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([
+        ['البند','القيمة'],
+        ['الشاشات', String(s.screens)], ['الشاشات المنقطعة', String(s.screensDown)],
+        ['إجمالي الكاميرات', String(s.camerasTotal)], ['الكاميرات تعمل', String(s.camerasUp)],
+        ['الكاميرات منقطعة', String(s.camerasDown)], ['نسبة التشغيل', fmtPct2(s.camUptime)],
+      ], {x:0.6,y:1.2,w:8.8,fontSize:14,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    });
+
+    // شريحة الخرائط — صور فعلية مضمّنة (وليست روابط)
+    const imageLayouts = d.layouts.filter(l=>l.file_type==='image' && __imgDataCache[l.file_url]);
+    if(imageLayouts.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('الخرائط والـ Layout', {x:0.4,y:0.25,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      imageLayouts.slice(0,4).forEach((l,i)=>{
+        const x=0.4+(i%2)*4.7, y=0.9+Math.floor(i/2)*3.0;
+        sl.addImage({ data: __imgDataCache[l.file_url], x, y, w:4.3, h:2.6, sizing:{type:'contain',w:4.3,h:2.6} });
+        sl.addText(`${d.sites.find(s=>s.id===l.factory_id)?.name||''} — ${l.layout_name}`, {x,y:y+2.62,w:4.3,h:0.3,fontSize:10,color:'8CA0C4',align:'center'});
+      });
+    }
+
+    if(d.switches.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('البنية التحتية للشبكة — Switches', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['السويتش','النوع','المنافذ','مستخدمة','كاميرات'], ...d.switches.slice(0,10).map(sw=>[sw.switch_name,sw.switch_type||'',String(sw.total_ports||0),String(sw.used_ports||0),String((sw.connected_cameras||[]).length)])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.ups.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('UPS ومصادر الطاقة', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['UPS','المكان','الحالة'], ...d.ups.slice(0,12).map(u=>[u.ups_name,u.location||'',u.status])],
+        {x:0.4,y:1.0,w:9.2,fontSize:12,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.storeItems.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('المخزن', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['الصنف','النوع','الرصيد'], ...d.storeItems.slice(0,12).map(it=>{ const bal=d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0); return [it.item_name,it.item_type||'',String(bal)]; })],
+        {x:0.4,y:1.0,w:9.2,fontSize:12,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    const closing = pptx.addSlide({masterName:'MASTER'});
+    closing.addText('تم إعداد هذا العرض تلقائيًا', {x:0.5,y:3.2,w:9,h:0.6,fontSize:20,color:'E9EEFB',align:'center'});
+    closing.addText('إعداد وتشغيل النظام: إبراهيم رمضان', {x:0.5,y:3.9,w:9,h:0.5,fontSize:14,color:'38D9C9',align:'center'});
+
+    const blob = await pptx.write('blob');
+    await saveOrShareFile(blob, exportCenterFilename('pptx'));
+    await logAudit('تصدير شامل PowerPoint', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+
+/* ---------- صورة Infographic شاملة ---------- */
+async function exportAllImage(){
+  toast('جاري تجميع كل بيانات التطبيق...');
+  try{
+    const d = await gatherAllAppData();
+    const t = d.totals;
+    const rowH=38; const W=1080; const H=780 + d.sites.length*rowH + 160;
+    const cv = document.createElement('canvas'); cv.width=W; cv.height=H;
+    const ctx = cv.getContext('2d');
+    const grad = ctx.createLinearGradient(0,0,0,H); grad.addColorStop(0,'#0B1220'); grad.addColorStop(1,'#0E1830');
+    ctx.fillStyle=grad; ctx.fillRect(0,0,W,H); ctx.textAlign='center';
+    ctx.fillStyle='#38D9C9'; ctx.font='700 26px Arial'; ctx.fillText('غرفة المراقبة المركزية — جهينة', W/2, 60);
+    ctx.fillStyle='#E9EEFB'; ctx.font='900 32px Arial'; ctx.fillText('نظرة عامة شاملة على كل بيانات التطبيق', W/2, 104);
+    ctx.fillStyle='#8CA0C4'; ctx.font='500 18px Arial'; ctx.fillText(new Date().toLocaleDateString('ar-EG'), W/2, 134);
+
+    const cards = [
+      ['المصانع', d.sites.length, '#38D9C9'], ['الكاميرات', t.camerasTotal, '#E9EEFB'], ['نسبة تشغيل الكاميرات', fmtPct2(t.camUptime), '#4ADE80'],
+      ['الشاشات', t.screens, '#E9EEFB'], ['أصناف المخزن', d.storeItems.length, '#F5A623'], ['أجهزة UPS', d.ups.length, '#4ADE80'],
+      ['الراكات', d.racks.length, '#38D9C9'], ['السويتشات', d.switches.length, '#38D9C9'], ['الأعطال المسجلة', d.faults.length, '#FF6B6B'],
+    ];
+    const cw=(W-4*30)/3, ch=95, top=165;
+    cards.forEach(([label,val,color],i)=>{
+      const col=i%3, row=Math.floor(i/3), x=30+col*(cw+30), y=top+row*(ch+14);
+      ctx.fillStyle='rgba(255,255,255,0.04)'; ctx.fillRect(x,y,cw,ch);
+      ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.strokeRect(x,y,cw,ch);
+      ctx.fillStyle='#8CA0C4'; ctx.font='500 15px Arial'; ctx.fillText(label,x+cw/2,y+28);
+      ctx.fillStyle=color; ctx.font='900 32px Arial'; ctx.fillText(String(val),x+cw/2,y+66);
+    });
+    let ty = top + 3*(ch+14) + 30;
+    ctx.fillStyle='#E9EEFB'; ctx.font='700 20px Arial'; ctx.fillText('ملخص المصانع', W/2, ty); ty+=30;
+    const cols=[['الموقع',300],['إجمالي',190],['تعمل',190],['منقطعة',190]];
+    ctx.font='700 15px Arial'; ctx.fillStyle='#38D9C9';
+    let cx=W-40; cols.forEach(([l,w])=>{ cx-=w; ctx.fillText(l,cx+w/2,ty+22); }); ty+=32;
+    d.sites.forEach((s,i)=>{
+      const ry=ty+i*rowH;
+      if(i%2===0){ ctx.fillStyle='rgba(255,255,255,0.02)'; ctx.fillRect(30,ry,W-60,rowH); }
+      let cx2=W-40; const vals=[s.name,s.camerasTotal,s.camerasUp,s.camerasDown];
+      ctx.font='600 15px Arial';
+      vals.forEach((v,j)=>{ const w=cols[j][1]; cx2-=w; ctx.fillStyle = j===3&&s.camerasDown>0?'#FF6B6B':(j===2?'#4ADE80':'#E9EEFB'); ctx.fillText(String(v),cx2+w/2,ry+24); });
+    });
+    ctx.fillStyle='#5E6E92'; ctx.font='500 13px Arial'; ctx.fillText('تصدير شامل تلقائي — بيانات فعلية 100%', W/2, H-40);
+    ctx.fillStyle='#38D9C9'; ctx.font='700 15px Arial'; ctx.fillText('إعداد وتشغيل النظام: إبراهيم رمضان', W/2, H-16);
+    cv.toBlob(async blob=>{ await saveOrShareFile(blob, exportCenterFilename('png')); await logAudit('تصدير شامل صورة', `${d.sites.length} مصنع`); }, 'image/png', 0.95);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+
+/* ---------- CSV شامل ---------- */
+async function exportAllCsv(){
+  toast('جاري تجميع كل بيانات التطبيق...');
+  try{
+    const d = await gatherAllAppData();
+    const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+    const lines = ['\ufeff'];
+    lines.push('== المصانع ==');
+    lines.push(['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة','نسبة التشغيل %'].map(esc).join(','));
+    d.sites.forEach(s=> lines.push([s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown,Math.round(s.camUptime*100)/100].map(esc).join(',')));
+    lines.push(''); lines.push('== المخزن =='); lines.push(['الصنف','النوع','الرصيد'].map(esc).join(','));
+    d.storeItems.forEach(it=>{ const bal=d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0); lines.push([it.item_name,it.item_type||'',bal].map(esc).join(',')); });
+    lines.push(''); lines.push('== Switches =='); lines.push(['المصنع','السويتش','النوع','المنافذ','مستخدمة','كاميرات'].map(esc).join(','));
+    d.switches.forEach(sw=> lines.push([d.sites.find(s=>s.id===sw.factory_id)?.name||'',sw.switch_name,sw.switch_type||'',sw.total_ports||0,sw.used_ports||0,(sw.connected_cameras||[]).length].map(esc).join(',')));
+    lines.push(''); lines.push('== UPS =='); lines.push(['المصنع','UPS','المكان','الحالة'].map(esc).join(','));
+    d.ups.forEach(u=> lines.push([d.sites.find(s=>s.id===u.factory_id)?.name||'',u.ups_name,u.location||'',u.status].map(esc).join(',')));
+    await saveOrShareFile(new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}), exportCenterFilename('csv'));
+    await logAudit('تصدير شامل CSV', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير'); }
+}
+
+/* ---------- JSON شامل ---------- */
+async function exportAllJson(){
+  toast('جاري تجميع كل بيانات التطبيق...');
+  try{
+    const d = await gatherAllAppData();
+    await saveOrShareFile(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}), exportCenterFilename('json'));
+    await logAudit('تصدير شامل JSON', `${d.sites.length} مصنع`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير'); }
+}
+
+/* ---------- تصدير الكل في ملف ZIP واحد ---------- */
+async function exportAllFormats(){
+  const zipOk = await ensureZipLib();
+  if(!zipOk){ toast('⚠️ تعذّر تحميل مكتبة الضغط ZIP — سيتم تصدير الصيغ منفصلة بدلًا من ذلك'); 
+    await exportAllExcel(); await exportAllPdf(); await exportAllJson(); return; }
+  toast('جاري تجهيز كل الصيغ... قد يستغرق دقيقة');
+  try{
+    const d = await gatherAllAppData();
+    const zip = new JSZip();
+    const folder = zip.folder(exportCenterFilename(''));
+
+    const excelWb = await buildAllExcelWorkbook(d);
+    folder.file('التقرير-الشامل.xlsx', await excelWb.xlsx.writeBuffer());
+
+    folder.file('التقرير-الشامل.json', JSON.stringify(d,null,2));
+
+    const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+    const csvLines = ['\ufeff== المصانع ==', ['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة'].map(esc).join(',')];
+    d.sites.forEach(s=> csvLines.push([s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown].map(esc).join(',')));
+    folder.file('التقرير-الشامل.csv', csvLines.join('\n'));
+
+    const reportHtmlBody = await buildAllReportHtml(d); // بالصور المضمّنة (Base64) — تُحسب مرة واحدة وتُستخدم لـ Word وPDF معًا
+    const wordHtml = `<html><head><meta charset="utf-8"></head><body>${reportHtmlBody}</body></html>`;
+    folder.file('التقرير-الشامل.doc', '\ufeff'+wordHtml);
+
+    if(await ensurePdfLib()){
+      const el = document.createElement('div'); el.innerHTML = reportHtmlBody;
+      document.body.appendChild(el);
+      const pdfBlob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+      el.remove();
+      folder.file('التقرير-الشامل.pdf', pdfBlob);
+    }
+    if(await ensurePptxLib()){
+      try{
+        const pptx = new PptxGenJS();
+        const t = d.totals;
+        const cover = pptx.addSlide(); cover.background={color:'0B1220'};
+        cover.addText('التقرير الشامل — غرفة المراقبة المركزية', {x:0.5,y:2.5,w:9,h:1,fontSize:28,bold:true,color:'38D9C9',align:'center'});
+        d.sites.forEach(s=>{ const sl=pptx.addSlide(); sl.background={color:'0B1220'};
+          sl.addText(s.name, {x:0.4,y:0.3,w:9,h:0.6,fontSize:22,bold:true,color:'38D9C9',align:'center'});
+          sl.addTable([['البند','القيمة'],['الكاميرات',String(s.camerasTotal)],['تعمل',String(s.camerasUp)],['منقطعة',String(s.camerasDown)]],
+            {x:0.6,y:1.2,w:8.8,fontSize:14,color:'E9EEFB',fill:{color:'182446'}});
+        });
+        folder.file('التقرير-الشامل.pptx', await pptx.write('arraybuffer'));
+      }catch(e){ console.warn('تعذّر إضافة PowerPoint للحزمة', e); }
+    }
+
+    const zipBlob = await zip.generateAsync({type:'blob'});
+    await saveOrShareFile(zipBlob, exportCenterFilename('zip'));
+    await logAudit('تصدير شامل - كل الصيغ (ZIP)', `${d.sites.length} مصنع`);
+    toast('✅ تم تجهيز حزمة التصدير الكاملة');
+  }catch(e){ console.error(e); toast('🚫 تعذّر تجهيز الحزمة: '+(e.message||'')); }
+}
+
+/* ============================================================
    بدء التشغيل
    ============================================================ */
 function startApp(){
@@ -3138,6 +4801,13 @@ function startApp(){
   });
 }
 initSupabase();
+
+// تسجيل Service Worker (يعمل فقط عند فتح التطبيق عبر رابط HTTPS حقيقي، ويُتجاهل بأمان غير ذلك)
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./service-worker.js').catch(()=>{ /* يُتجاهل بأمان (مثلًا عند الفتح كملف محلي) */ });
+  });
+}
 </script>
 </body>
 </html>
