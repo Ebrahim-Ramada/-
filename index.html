@@ -1508,7 +1508,10 @@ const PERM_LABELS = {
   view_audit_log:'عرض سجل التدقيق', export_audit_log:'تصدير سجل التدقيق',
   create_report:'إنشاء التقارير', view_report:'عرض شاشة التقرير', print_report:'طباعة التقرير', delete_report:'حذف من الأرشيف',
   view_store:'عرض المخزن', view_store_images:'عرض صور المخزن', upload_store_images:'رفع صور المخزن', edit_store_images:'استبدال صور المخزن', delete_store_images:'حذف صور المخزن',
-  view_roomneeds:'عرض احتياجات الغرفة', view_roomneeds_images:'عرض صور احتياجات الغرفة', upload_roomneeds_images:'رفع صور احتياجات الغرفة', edit_roomneeds_images:'استبدال صور احتياجات الغرفة', delete_roomneeds_images:'حذف صور احتياجات الغرفة'
+  view_roomneeds:'عرض احتياجات الغرفة', view_roomneeds_images:'عرض صور احتياجات الغرفة', upload_roomneeds_images:'رفع صور احتياجات الغرفة', edit_roomneeds_images:'استبدال صور احتياجات الغرفة', delete_roomneeds_images:'حذف صور احتياجات الغرفة',
+  view_servers:'عرض السيرفرات', add_server:'إضافة سيرفر', edit_server:'تعديل سيرفر', delete_server:'حذف سيرفر',
+  view_server_images:'عرض صور السيرفرات', upload_server_images:'رفع صور السيرفرات', delete_server_images:'حذف صور السيرفرات',
+  view_storage:'عرض التخزين (Storage)', edit_storage:'تعديل التخزين (Storage)'
 };
 function renderUsersList(){
   const host = document.getElementById('usersListHost');
@@ -2970,6 +2973,10 @@ async function executeGlobalSearch(q){
     (data||[]).forEach(it=> results.push({cat:'📦 مخزن', label:it.item_name, action:`goTo('store')`}));
   }catch(e){}
   try{
+    const {data} = await supa.from('factory_servers').select('*').or(`server_name.ilike.%${q}%,ip_address.ilike.%${q}%,hostname.ilike.%${q}%,serial_number.ilike.%${q}%,mac_address.ilike.%${q}%`).limit(15);
+    (data||[]).forEach(s=>{ const f=factoriesData.find(x=>x.id===s.factory_id); results.push({cat:'🖥️ سيرفرات', label:`${s.server_name} (${f?f.name:''})`, action:`openServerProfile('${s.id}')`}); });
+  }catch(e){}
+  try{
     const {data} = await supa.from('factory_switches').select('*').ilike('switch_name', `%${q}%`).limit(10);
     (data||[]).forEach(sw=>{ const f=factoriesData.find(x=>x.id===sw.factory_id); results.push({cat:'🔌 Switches', label:`${sw.switch_name} (${f?f.name:''})`, action:`goTo('network','${sw.factory_id}')`}); });
   }catch(e){}
@@ -3216,7 +3223,7 @@ function openFaultForm(id){
     <div class="modal-head"><h3>${isNew?'+ تسجيل عطل جديد':'تعديل بيانات العطل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>المصنع</label><select class="input" id="ft_factory">${factoriesData.map(s=>`<option value="${s.id}" ${d.factory_id===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div>
     <div class="row2">
-      <div class="field"><label>نوع الجهاز</label><select class="input" id="ft_devtype"><option value="camera" ${d.device_type==='camera'?'selected':''}>كاميرا</option><option value="screen" ${d.device_type==='screen'?'selected':''}>شاشة</option></select></div>
+      <div class="field"><label>نوع الجهاز</label><select class="input" id="ft_devtype"><option value="camera" ${d.device_type==='camera'?'selected':''}>كاميرا</option><option value="screen" ${d.device_type==='screen'?'selected':''}>شاشة</option><option value="server" ${d.device_type==='server'?'selected':''}>سيرفر</option></select></div>
       <div class="field"><label>درجة الخطورة</label><select class="input" id="ft_severity">${['عالية','متوسطة','منخفضة'].map(s=>`<option ${d.severity===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>اسم/رقم الجهاز</label><input class="input" id="ft_devname" value="${d.device_name}" placeholder="مثال: كاميرا بوابة الملح"></div>
@@ -4451,6 +4458,7 @@ function renderNetworkPlaceholder(factoryId){
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>🗄️ البنية التحتية للشبكة: ${f?f.name:'—'}</h2></div>
     <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+    <div id="netInfraSummary"></div>
 
     <div class="section-title"><h2 style="font-size:14px">🗃️ الراكات (Racks)</h2>
       ${isAdmin()? `<button class="btn sm primary" onclick="openRackForm('${factoryId}')">+ إضافة راك</button>`:''}
@@ -4461,8 +4469,18 @@ function renderNetworkPlaceholder(factoryId){
       ${isAdmin()? `<button class="btn sm primary" onclick="openSwitchForm('${factoryId}')">+ إضافة سويتش</button>`:''}
     </div>
     <div id="switchesListHost"><div class="empty">جاري التحميل...</div></div>
+
+    <div class="section-title"><h2 style="font-size:14px">🖥️ السيرفرات (Servers)</h2>
+      ${(isAdmin()||hasPerm('add_server'))? `<button class="btn sm primary" onclick="openServerForm('${factoryId}')">+ إضافة سيرفر</button>`:''}
+    </div>
+    <div id="serversListHost"><div class="empty">جاري التحميل...</div></div>
+
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn sm" onclick="openNetworkMap('${factoryId}')">🗺️ خريطة الشبكة</button>
+    </div>
   </div>`;
 }
+let serversData = [];
 async function loadNetworkData(factoryId){
   try{
     const [{data:racks, error:e1}, {data:sws, error:e2}] = await Promise.all([
@@ -4476,27 +4494,428 @@ async function loadNetworkData(factoryId){
     ['racksListHost','switchesListHost'].forEach(id=>{ const h=document.getElementById(id); if(h) h.innerHTML=`<div class="empty">⚠️ يحتاج تشغيل schema_part5.sql في Supabase.</div>`; });
     return;
   }
+  if(isAdmin()||hasPerm('view_servers')){
+    try{ const {data} = await supa.from('factory_servers').select('*').eq('factory_id',factoryId).order('server_name'); serversData = data||[]; }
+    catch(e){ serversData=[]; const h=document.getElementById('serversListHost'); if(h) h.innerHTML='<div class="empty">⚠️ يحتاج تشغيل schema_part11.sql في Supabase.</div>'; }
+  } else { serversData = []; const h=document.getElementById('serversListHost'); if(h) h.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض السيرفرات.</div>'; }
   renderRacksList(factoryId);
   renderSwitchesList(factoryId);
+  renderServersList(factoryId);
+  renderNetInfraSummary(factoryId);
+}
+function renderNetInfraSummary(factoryId){
+  const host = document.getElementById('netInfraSummary');
+  if(!host) return;
+  const f = computeFactory(factoriesData.find(x=>x.id===factoryId));
+  const serversUp = serversData.filter(s=>s.status==='يعمل').length;
+  const switchesCount = switchesData.length, racksCount = racksData.length;
+  host.innerHTML = `<div class="mini-grid" style="margin:10px 0">
+    <div class="mini"><div class="n">${racksCount}</div><div class="t">Racks</div></div>
+    <div class="mini"><div class="n">${switchesCount}</div><div class="t">Switches</div></div>
+    <div class="mini"><div class="n">${serversData.length}</div><div class="t">Servers</div></div>
+    <div class="mini"><div class="n" style="color:var(--success)">${serversUp}</div><div class="t">Servers تعمل</div></div>
+  </div>`;
+}
+const SERVER_STATUS_COLOR = {'يعمل':'ok','يحتاج متابعة':'warn','يحتاج صيانة':'warn','متوقف':'bad','خارج الخدمة':'bad'};
+function renderServersList(factoryId){
+  const host = document.getElementById('serversListHost');
+  if(!host) return;
+  if(!isAdmin() && !hasPerm('view_servers')){ host.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض السيرفرات.</div>'; return; }
+  if(!serversData.length){ host.innerHTML='<div class="empty">لا توجد سيرفرات مضافة بعد.</div>'; return; }
+  host.innerHTML = serversData.map(s=>{
+    const rack = racksData.find(r=>r.id===s.rack_id);
+    const sw = switchesData.find(x=>x.id===s.switch_id);
+    return `<div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div class="site-name" style="font-size:14px;cursor:pointer;text-decoration:underline dotted" onclick="openServerProfile('${s.id}')">${s.server_name}</div>
+        <div class="site-meta">${s.brand||''} ${s.model||''} ${rack?'· '+rack.rack_name:''} ${s.ip_address?'· '+s.ip_address:''}</div></div>
+        <span class="pill ${SERVER_STATUS_COLOR[s.status]}">${s.status}</span>
+      </div>
+      ${sw? `<div style="font-size:10.5px;color:var(--muted-2);margin-top:4px">🔌 ${sw.switch_name}${s.switch_port?' — Port '+s.switch_port:''}</div>`:''}
+      <div class="btn-row">
+        <button class="btn sm" onclick="openServerProfile('${s.id}')">📋 الملف الكامل</button>
+        ${(isAdmin()||hasPerm('edit_server'))? `<button class="btn sm" onclick="openServerForm('${factoryId}','${s.id}')">✏️ تعديل</button>`:''}
+        ${(isAdmin()||hasPerm('delete_server'))? `<button class="btn sm danger" onclick="deleteServer('${s.id}','${factoryId}')">🗑 حذف</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function openServerForm(factoryId, serverId){
+  const s = serverId ? serversData.find(x=>x.id===serverId) : null;
+  const isNew = !s;
+  const d = s || {server_name:'',server_code:'',location:'',rack_id:'',rack_u:'',server_function:'',status:'يعمل',
+    brand:'',model:'',serial_number:'',service_tag:'',purchase_date:'',install_date:'',warranty_until:'',
+    cpu:'',cpu_count:'',ram:'',storage_summary:'',power_supply:'',psu_count:'',specs_notes:'',
+    os_name:'',os_version:'',os_notes:'',
+    ip_address:'',mac_address:'',hostname:'',vlan:'',subnet:'',gateway:'',dns:'',link_speed:'',
+    switch_id:'',switch_port:'',switch_vlan:'',ups_id:'',
+    total_drive_slots:0,has_raid:false,raid_level:'',raid_controller:'',raid_drives_count:'',raid_hot_spare:0,raid_notes:'',notes:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'+ إضافة سيرفر':'تعديل: '+d.server_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px" id="srvTabBar">
+      ${['أساسية','مواصفات','نظام التشغيل','الشبكة','Rack و Power'].map((t,i)=>`<button class="btn sm ${i===0?'primary':''}" onclick="switchServerTab(${i})" id="srvTabBtn${i}">${t}</button>`).join('')}
+    </div>
+    <div id="srvTab0">
+      <div class="field"><label>اسم السيرفر *</label><input class="input" id="sv_name" value="${d.server_name}"></div>
+      <div class="row2">
+        <div class="field"><label>Server ID / الرقم</label><input class="input" id="sv_code" value="${d.server_code||''}"></div>
+        <div class="field"><label>الحالة</label><select class="input" id="sv_status">${['يعمل','يحتاج متابعة','يحتاج صيانة','متوقف','خارج الخدمة'].map(st=>`<option ${d.status===st?'selected':''}>${st}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>مكان التواجد</label><input class="input" id="sv_location" value="${d.location||''}"></div>
+      <div class="field"><label>الوظيفة</label><input class="input" id="sv_function" value="${d.server_function||''}" placeholder="مثال: خادم تسجيل الكاميرات"></div>
+      <div class="row2">
+        <div class="field"><label>الشركة المصنعة</label><input class="input" id="sv_brand" value="${d.brand||''}"></div>
+        <div class="field"><label>الموديل</label><input class="input" id="sv_model" value="${d.model||''}"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Serial Number</label><input class="input" id="sv_serial" value="${d.serial_number||''}"></div>
+        <div class="field"><label>Service Tag</label><input class="input" id="sv_svctag" value="${d.service_tag||''}"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>تاريخ التركيب</label><input class="input" type="date" id="sv_install" value="${d.install_date||''}"></div>
+        <div class="field"><label>الضمان حتى</label><input class="input" type="date" id="sv_warranty" value="${d.warranty_until||''}"></div>
+      </div>
+    </div>
+    <div id="srvTab1" style="display:none">
+      <div class="row2"><div class="field"><label>Processor / CPU</label><input class="input" id="sv_cpu" value="${d.cpu||''}"></div>
+      <div class="field"><label>عدد المعالجات</label><input class="input" type="number" id="sv_cpucount" value="${d.cpu_count||''}"></div></div>
+      <div class="field"><label>RAM</label><input class="input" id="sv_ram" value="${d.ram||''}" placeholder="مثال: 64GB DDR4"></div>
+      <div class="field"><label>ملخص Storage (نصي عام)</label><input class="input" id="sv_storagesum" value="${d.storage_summary||''}" placeholder="التفاصيل الدقيقة في تبويب Storage بملف السيرفر"></div>
+      <div class="row2"><div class="field"><label>Power Supply</label><input class="input" id="sv_psu" value="${d.power_supply||''}"></div>
+      <div class="field"><label>عدد مزودات الطاقة</label><input class="input" type="number" id="sv_psucount" value="${d.psu_count||''}"></div></div>
+      <div class="field"><label>ملاحظات فنية أخرى</label><textarea class="input" id="sv_specsnotes">${d.specs_notes||''}</textarea></div>
+    </div>
+    <div id="srvTab2" style="display:none">
+      <div class="field"><label>Operating System</label><input class="input" id="sv_osname" value="${d.os_name||''}"></div>
+      <div class="field"><label>Version</label><input class="input" id="sv_osversion" value="${d.os_version||''}"></div>
+      <div class="field"><label>ملاحظات</label><textarea class="input" id="sv_osnotes">${d.os_notes||''}</textarea></div>
+    </div>
+    <div id="srvTab3" style="display:none">
+      <div class="row2"><div class="field"><label>IP Address</label><input class="input" id="sv_ip" value="${d.ip_address||''}"></div>
+      <div class="field"><label>MAC Address</label><input class="input" id="sv_mac" value="${d.mac_address||''}"></div></div>
+      <div class="row2"><div class="field"><label>Hostname</label><input class="input" id="sv_hostname" value="${d.hostname||''}"></div>
+      <div class="field"><label>VLAN</label><input class="input" id="sv_vlan" value="${d.vlan||''}"></div></div>
+      <div class="row2"><div class="field"><label>Subnet</label><input class="input" id="sv_subnet" value="${d.subnet||''}"></div>
+      <div class="field"><label>Gateway</label><input class="input" id="sv_gateway" value="${d.gateway||''}"></div></div>
+      <div class="row2"><div class="field"><label>DNS</label><input class="input" id="sv_dns" value="${d.dns||''}"></div>
+      <div class="field"><label>سرعة الاتصال</label><input class="input" id="sv_linkspeed" value="${d.link_speed||''}" placeholder="مثال: 1Gbps"></div></div>
+    </div>
+    <div id="srvTab4" style="display:none">
+      <div class="field"><label>الراك</label><select class="input" id="sv_rack"><option value="">— بدون —</option>${racksData.map(r=>`<option value="${r.id}" ${d.rack_id===r.id?'selected':''}>${r.rack_name}</option>`).join('')}</select></div>
+      <div class="field"><label>رقم الـ U</label><input class="input" id="sv_racku" value="${d.rack_u||''}"></div>
+      <div class="field"><label>السويتش المتصل</label><select class="input" id="sv_switch"><option value="">— بدون —</option>${switchesData.map(sw=>`<option value="${sw.id}" ${d.switch_id===sw.id?'selected':''}>${sw.switch_name}</option>`).join('')}</select></div>
+      <div class="row2"><div class="field"><label>رقم الـ Port</label><input class="input" id="sv_switchport" value="${d.switch_port||''}"></div>
+      <div class="field"><label>VLAN على السويتش</label><input class="input" id="sv_switchvlan" value="${d.switch_vlan||''}"></div></div>
+      <div class="field"><label>UPS المتصل</label><select class="input" id="sv_ups"><option value="">— بدون —</option>${upsData.map(u=>`<option value="${u.id}" ${d.ups_id===u.id?'selected':''}>${u.ups_name}</option>`).join('')}</select></div>
+      <div class="field" style="margin-top:10px"><label><input type="checkbox" id="sv_hasraid" ${d.has_raid?'checked':''} style="accent-color:var(--accent)"> يوجد RAID</label></div>
+      <div class="row2"><div class="field"><label>RAID Level</label><input class="input" id="sv_raidlevel" value="${d.raid_level||''}"></div>
+      <div class="field"><label>RAID Controller</label><input class="input" id="sv_raidctrl" value="${d.raid_controller||''}"></div></div>
+      <div class="row2"><div class="field"><label>عدد الهاردات في RAID</label><input class="input" type="number" id="sv_raiddrives" value="${d.raid_drives_count||''}"></div>
+      <div class="field"><label>Hot Spare</label><input class="input" type="number" id="sv_hotspare" value="${d.raid_hot_spare||0}"></div></div>
+      <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="sv_notes">${d.notes||''}</textarea></div>
+    </div>
+    <button class="btn primary block" style="margin-top:10px" onclick="saveServerForm('${factoryId}','${isNew?'':serverId}')">💾 حفظ</button>
+  `);
+}
+function switchServerTab(idx){
+  for(let i=0;i<5;i++){ document.getElementById('srvTab'+i).style.display = i===idx?'block':'none'; document.getElementById('srvTabBtn'+i).classList.toggle('primary', i===idx); }
+}
+async function saveServerForm(factoryId, serverId){
+  const name = document.getElementById('sv_name').value.trim();
+  if(!name){ toast('أدخل اسم السيرفر'); switchServerTab(0); return; }
+  const num = v=> v===''||v==null ? null : Number(v);
+  const payload = {
+    factory_id: factoryId, server_name:name, server_code:document.getElementById('sv_code').value.trim(),
+    location:document.getElementById('sv_location').value.trim(), server_function:document.getElementById('sv_function').value.trim(),
+    status:document.getElementById('sv_status').value,
+    brand:document.getElementById('sv_brand').value.trim(), model:document.getElementById('sv_model').value.trim(),
+    serial_number:document.getElementById('sv_serial').value.trim(), service_tag:document.getElementById('sv_svctag').value.trim(),
+    install_date:document.getElementById('sv_install').value||null, warranty_until:document.getElementById('sv_warranty').value||null,
+    cpu:document.getElementById('sv_cpu').value.trim(), cpu_count:num(document.getElementById('sv_cpucount').value),
+    ram:document.getElementById('sv_ram').value.trim(), storage_summary:document.getElementById('sv_storagesum').value.trim(),
+    power_supply:document.getElementById('sv_psu').value.trim(), psu_count:num(document.getElementById('sv_psucount').value),
+    specs_notes:document.getElementById('sv_specsnotes').value.trim(),
+    os_name:document.getElementById('sv_osname').value.trim(), os_version:document.getElementById('sv_osversion').value.trim(), os_notes:document.getElementById('sv_osnotes').value.trim(),
+    ip_address:document.getElementById('sv_ip').value.trim(), mac_address:document.getElementById('sv_mac').value.trim(),
+    hostname:document.getElementById('sv_hostname').value.trim(), vlan:document.getElementById('sv_vlan').value.trim(),
+    subnet:document.getElementById('sv_subnet').value.trim(), gateway:document.getElementById('sv_gateway').value.trim(),
+    dns:document.getElementById('sv_dns').value.trim(), link_speed:document.getElementById('sv_linkspeed').value.trim(),
+    rack_id: document.getElementById('sv_rack').value||null, rack_u: document.getElementById('sv_racku').value.trim(),
+    switch_id: document.getElementById('sv_switch').value||null, switch_port: document.getElementById('sv_switchport').value.trim(),
+    switch_vlan: document.getElementById('sv_switchvlan').value.trim(), ups_id: document.getElementById('sv_ups').value||null,
+    has_raid: document.getElementById('sv_hasraid').checked, raid_level: document.getElementById('sv_raidlevel').value.trim(),
+    raid_controller: document.getElementById('sv_raidctrl').value.trim(), raid_drives_count: num(document.getElementById('sv_raiddrives').value),
+    raid_hot_spare: num(document.getElementById('sv_hotspare').value)||0, notes: document.getElementById('sv_notes').value.trim()
+  };
+  try{
+    if(serverId){ payload.updated_by=currentProfile.id; const {error}=await supa.from('factory_servers').update(payload).eq('id',serverId); if(error) throw error; await logAudit('تعديل سيرفر', name); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('factory_servers').insert(payload); if(error) throw error; await logAudit('إضافة سيرفر', name); }
+    closeModal(); toast('✅ تم الحفظ'); loadNetworkData(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+function deleteServer(serverId, factoryId){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">حذف السيرفر وكل بياناته (الهاردات، الصور) نهائيًا؟</p>
+    <button class="btn danger block" onclick="confirmDeleteServer('${serverId}','${factoryId}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteServer(serverId, factoryId){
+  try{ const s=serversData.find(x=>x.id===serverId); await supa.from('factory_servers').delete().eq('id',serverId); await logAudit('حذف سيرفر', s?s.server_name:serverId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   ملف تعريف السيرفر الكامل (Server Profile)
+   نظرة عامة / Storage / الصور / الصيانة / الأعطال — كله في مكان واحد
+   ============================================================ */
+let currentServerDrives = [];
+let currentServerImages = [];
+async function openServerProfile(serverId){
+  let s = serversData.find(x=>x.id===serverId);
+  if(!s){ try{ const {data} = await supa.from('factory_servers').select('*').eq('id',serverId).single(); s=data; }catch(e){} }
+  if(!s){ toast('تعذّر إيجاد السيرفر'); return; }
+  openModal(`<div class="modal-head"><h3>🖥️ ${s.server_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  try{ const {data} = await supa.from('server_drives').select('*').eq('server_id',serverId).order('slot_number'); currentServerDrives = data||[]; }catch(e){ currentServerDrives=[]; }
+  try{ const {data} = await supa.from('server_images').select('*').eq('server_id',serverId).order('sort_order'); currentServerImages = data||[]; }catch(e){ currentServerImages=[]; }
+  window.__currentServerProfile = s;
+  renderServerProfileModal(0);
+}
+function renderServerProfileModal(activeTab){
+  const s = window.__currentServerProfile;
+  const rack = racksData.find(r=>r.id===s.rack_id);
+  const sw = switchesData.find(x=>x.id===s.switch_id);
+  const ups = upsData.find(u=>u.id===s.ups_id);
+  const factory = factoriesData.find(f=>f.id===s.factory_id);
+  const relatedFaults = (faultsData||[]).filter(f=>f.device_type==='server' && f.device_name===s.server_name);
+  const relatedMaint = (preventiveTasks||[]).filter(t=>t.target_name===s.server_name);
+
+  const totalGb = currentServerDrives.reduce((a,d)=>a+(Number(d.capacity_gb)||0),0);
+  const usedGb = currentServerDrives.reduce((a,d)=>a+(Number(d.used_gb)||0),0);
+  const freeGb = currentServerDrives.reduce((a,d)=>a+(Number(d.free_gb)||0),0);
+  const availableSlots = Math.max(0, (s.total_drive_slots||0) - currentServerDrives.length);
+
+  const tabs = ['نظرة عامة','Storage',`الصور (${currentServerImages.length})`,`الصيانة (${relatedMaint.length})`,`الأعطال (${relatedFaults.length})`];
+  let body = '';
+  if(activeTab===0){
+    body = `<div class="site-card">
+      <div class="mini-grid">
+        <div class="mini"><div class="n" style="font-size:11px">${s.status}</div><div class="t">الحالة</div></div>
+        <div class="mini"><div class="n" style="font-size:11px">${factory?factory.name:'—'}</div><div class="t">المصنع</div></div>
+        <div class="mini"><div class="n" style="font-size:11px">${s.ip_address||'—'}</div><div class="t">IP</div></div>
+        <div class="mini"><div class="n" style="font-size:11px">${s.hostname||'—'}</div><div class="t">Hostname</div></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:8px"><b>الشركة/الموديل:</b> ${s.brand||'—'} ${s.model||''}</p>
+      ${s.serial_number? `<p style="font-size:12px;color:var(--muted)"><b>Serial:</b> ${s.serial_number}</p>`:''}
+      ${s.cpu? `<p style="font-size:12px;color:var(--muted)"><b>CPU:</b> ${s.cpu} ${s.cpu_count?'× '+s.cpu_count:''}</p>`:''}
+      ${s.ram? `<p style="font-size:12px;color:var(--muted)"><b>RAM:</b> ${s.ram}</p>`:''}
+      ${s.os_name? `<p style="font-size:12px;color:var(--muted)"><b>OS:</b> ${s.os_name} ${s.os_version||''}</p>`:''}
+      <p style="font-size:12px;color:var(--muted)"><b>الموقع:</b> ${rack?'🗃️ '+rack.rack_name+(s.rack_u?' (U'+s.rack_u+')':''):'—'}</p>
+      <p style="font-size:12px;color:var(--muted)"><b>الشبكة:</b> ${sw?'🔌 '+sw.switch_name+(s.switch_port?' — Port '+s.switch_port:''):'—'}</p>
+      <p style="font-size:12px;color:var(--muted)"><b>UPS:</b> ${ups?'🔋 '+ups.ups_name:'—'}</p>
+      ${s.has_raid? `<p style="font-size:12px;color:var(--muted)"><b>RAID:</b> ${s.raid_level||''} (${s.raid_drives_count||0} هارد، Hot Spare: ${s.raid_hot_spare||0})</p>`:''}
+      ${s.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${s.notes}</p>`:''}
+    </div>`;
+  } else if(activeTab===1){
+    body = `
+      <div class="stat-grid" style="margin-bottom:10px">
+        <div class="stat-card"><div class="label">إجمالي Slots</div><div class="value" style="font-size:18px">${s.total_drive_slots||0}</div></div>
+        <div class="stat-card success"><div class="label">مركّبة</div><div class="value" style="font-size:18px">${currentServerDrives.length}</div></div>
+        <div class="stat-card accent"><div class="label">متاحة</div><div class="value" style="font-size:18px">${availableSlots}</div></div>
+        <div class="stat-card"><div class="label">إجمالي التخزين</div><div class="value" style="font-size:16px">${fmtStorage(totalGb)}</div></div>
+      </div>
+      ${totalGb>0 ? `<div class="site-card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>مستخدم: ${fmtStorage(usedGb)}</span><span>متاح: ${fmtStorage(freeGb||(totalGb-usedGb))}</span></div>
+        <div style="width:100%;height:10px;border-radius:5px;background:var(--bg-2);overflow:hidden;margin-top:4px"><div style="width:${totalGb?Math.min(100,usedGb/totalGb*100):0}%;height:100%;background:var(--accent)"></div></div>
+      </div>` : ''}
+      ${(isAdmin()||hasPerm('edit_storage'))? `<button class="btn primary sm block" style="margin-bottom:10px" onclick="openDriveForm('${s.id}')">+ إضافة هارد</button>`:''}
+      <div class="table-wrap"><table style="font-size:10.5px">
+        <thead><tr><th>Slot</th><th>النوع</th><th>الموديل</th><th>السعة</th><th>الحالة</th>${(isAdmin()||hasPerm('edit_storage'))?'<th></th>':''}</tr></thead>
+        <tbody>${currentServerDrives.map(dr=>`<tr>
+          <td>${dr.slot_number||'—'}</td><td>${dr.drive_type||'—'}</td><td>${dr.brand||''} ${dr.model||''}</td>
+          <td>${fmtStorage(dr.capacity_gb)}</td><td><span class="pill ${dr.status==='يعمل'?'ok':(dr.status==='تالف'?'bad':'warn')}" style="font-size:9px">${dr.status}</span></td>
+          ${(isAdmin()||hasPerm('edit_storage'))?`<td><button class="btn sm" style="padding:2px 6px;font-size:9px" onclick="openDriveForm('${s.id}','${dr.id}')">✏️</button> <button class="btn sm danger" style="padding:2px 6px;font-size:9px" onclick="deleteDrive('${dr.id}','${s.id}')">🗑</button></td>`:''}
+        </tr>`).join('') || `<tr><td colspan="6">لا توجد هاردات مسجّلة</td></tr>`}</tbody>
+      </table></div>`;
+  } else if(activeTab===2){
+    const canUpload = isAdmin()||hasPerm('upload_server_images');
+    const canDelete = isAdmin()||hasPerm('delete_server_images');
+    body = `
+      ${canUpload? `<label class="btn primary sm block" style="cursor:pointer;margin-bottom:10px;text-align:center">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadServerImages('${s.id}', this)"></label>`:''}
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${currentServerImages.length===0? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
+          currentServerImages.map((im,i)=>`<div style="position:relative">
+            <img src="${im.image_url}" style="width:100%;height:85px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(currentServerImages.map(x=>x.image_url))},${i})'>
+            ${im.image_label? `<div style="position:absolute;bottom:2px;right:2px;left:2px;background:rgba(0,0,0,.6);color:#fff;font-size:8px;border-radius:4px;padding:1px 4px;text-align:center">${im.image_label}</div>`:''}
+            ${canDelete? `<button onclick="deleteServerImage('${im.id}','${s.id}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:22px;height:22px;border-radius:50%;font-size:11px;cursor:pointer">🗑</button>`:''}
+          </div>`).join('')}
+      </div>`;
+  } else if(activeTab===3){
+    body = relatedMaint.length ? relatedMaint.map(m=>`<div class="site-card" style="padding:8px 12px">
+      <b>${m.maintenance_type}</b><div style="font-size:10.5px;color:var(--muted-2)">${fmtDateAr(m.scheduled_date)} ${m.notes?'— '+m.notes:''}</div>
+    </div>`).join('') : `<div class="empty">لا يوجد سجل صيانة لهذا السيرفر بعد.</div>`;
+  } else if(activeTab===4){
+    body = relatedFaults.length ? relatedFaults.map(f=>`<div class="site-card" style="padding:8px 12px">
+      <div style="display:flex;justify-content:space-between"><span class="pill ${FAULT_SEVERITY_COLOR[f.severity]}">${f.severity}</span><span class="pill ${f.status==='مغلق'||f.status==='تم الإصلاح'?'ok':'bad'}">${f.status}</span></div>
+      <div style="font-size:11.5px;margin-top:4px">${f.fault_type||''} ${f.description?'— '+f.description:''}</div>
+      <div style="font-size:10px;color:var(--muted-2)">${new Date(f.reported_at).toLocaleDateString('ar-EG')}</div>
+    </div>`).join('') : `<div class="empty">لا توجد أعطال مسجّلة لهذا السيرفر.</div>`;
+  }
+
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>🖥️ ${s.server_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">
+      ${tabs.map((t,i)=>`<button class="btn sm ${i===activeTab?'primary':''}" onclick="renderServerProfileModal(${i})">${t}</button>`).join('')}
+    </div>
+    <div>${body}</div>
+    ${activeTab===4 && (isAdmin())? `<button class="btn block" style="margin-top:10px" onclick="closeModal(); openFaultForm(); setTimeout(()=>{ document.getElementById('ft_devtype').value='server'; document.getElementById('ft_devname').value='${s.server_name}'; },100)">+ تسجيل عطل لهذا السيرفر</button>`:''}
+  `;
+}
+function fmtStorage(gb){
+  gb = Number(gb)||0;
+  if(gb>=1024) return (gb/1024).toFixed(2)+' TB';
+  return gb.toFixed(0)+' GB';
+}
+function openDriveForm(serverId, driveId){
+  const dr = driveId ? currentServerDrives.find(x=>x.id===driveId) : null;
+  const isNew = !dr;
+  const d = dr || {slot_number:'',drive_type:'',brand:'',model:'',serial_number:'',capacity_gb:'',used_gb:'',free_gb:'',status:'يعمل',notes:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'+ إضافة هارد':'تعديل هارد'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="row2">
+      <div class="field"><label>رقم الـ Slot</label><input class="input" id="dr_slot" value="${d.slot_number||''}"></div>
+      <div class="field"><label>النوع</label><input class="input" id="dr_type" value="${d.drive_type||''}" placeholder="HDD/SSD/SAS/SATA/NVMe" list="driveTypeList">
+        <datalist id="driveTypeList"><option>HDD</option><option>SSD</option><option>SAS</option><option>SATA</option><option>NVMe</option></datalist>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الشركة المصنعة</label><input class="input" id="dr_brand" value="${d.brand||''}"></div>
+      <div class="field"><label>الموديل</label><input class="input" id="dr_model" value="${d.model||''}"></div>
+    </div>
+    <div class="field"><label>Serial Number</label><input class="input" id="dr_serial" value="${d.serial_number||''}"></div>
+    <div class="row2">
+      <div class="field"><label>السعة (GB)</label><input class="input" type="number" id="dr_capacity" value="${d.capacity_gb||''}" placeholder="مثال: 4000 لـ 4TB"></div>
+      <div class="field"><label>الحالة</label><select class="input" id="dr_status">${['يعمل','تحذير','تالف','غير مركّب'].map(st=>`<option ${d.status===st?'selected':''}>${st}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>المساحة المستخدمة (GB)</label><input class="input" type="number" id="dr_used" value="${d.used_gb||''}"></div>
+      <div class="field"><label>المساحة المتاحة (GB)</label><input class="input" type="number" id="dr_free" value="${d.free_gb||''}"></div>
+    </div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="dr_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveDriveForm('${serverId}','${isNew?'':driveId}')">💾 حفظ</button>
+  `);
+}
+async function saveDriveForm(serverId, driveId){
+  const num = v=> v===''||v==null ? null : Number(v);
+  const payload = {
+    server_id: serverId, slot_number: document.getElementById('dr_slot').value.trim(), drive_type: document.getElementById('dr_type').value.trim(),
+    brand: document.getElementById('dr_brand').value.trim(), model: document.getElementById('dr_model').value.trim(),
+    serial_number: document.getElementById('dr_serial').value.trim(), capacity_gb: num(document.getElementById('dr_capacity').value)||0,
+    used_gb: num(document.getElementById('dr_used').value), free_gb: num(document.getElementById('dr_free').value),
+    status: document.getElementById('dr_status').value, notes: document.getElementById('dr_notes').value.trim()
+  };
+  try{
+    if(driveId){ const {error}=await supa.from('server_drives').update(payload).eq('id',driveId); if(error) throw error; }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('server_drives').insert(payload); if(error) throw error; }
+    await logAudit(driveId?'تعديل هارد':'إضافة هارد', `Slot ${payload.slot_number}`);
+    toast('✅ تم الحفظ');
+    const {data} = await supa.from('server_drives').select('*').eq('server_id',serverId).order('slot_number');
+    currentServerDrives = data||[];
+    renderServerProfileModal(1);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function deleteDrive(driveId, serverId){
+  try{
+    await supa.from('server_drives').delete().eq('id',driveId);
+    currentServerDrives = currentServerDrives.filter(x=>x.id!==driveId);
+    toast('تم الحذف'); renderServerProfileModal(1);
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+async function uploadServerImages(serverId, inputEl){
+  if(!isAdmin() && !hasPerm('upload_server_images')){ toast('🚫 لا تملك صلاحية رفع الصور'); return; }
+  const files = Array.from(inputEl.files||[]);
+  if(!files.length) return;
+  toast(`جاري رفع ${files.length} صورة...`);
+  let ok=0;
+  for(const file of files){
+    try{
+      const compressed = await compressImageFile(file);
+      const path = `servers/${serverId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
+      const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(upErr) throw upErr;
+      const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      const {error} = await supa.from('server_images').insert({server_id:serverId, image_url:pub.publicUrl, created_by:currentProfile.id});
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(e); }
+  }
+  const {data} = await supa.from('server_images').select('*').eq('server_id',serverId).order('sort_order');
+  currentServerImages = data||[];
+  toast(`✅ تم رفع ${ok} صورة`); renderServerProfileModal(2);
+}
+async function deleteServerImage(imageId, serverId){
+  if(!isAdmin() && !hasPerm('delete_server_images')){ toast('🚫 لا تملك صلاحية الحذف'); return; }
+  try{
+    await supa.from('server_images').delete().eq('id',imageId);
+    currentServerImages = currentServerImages.filter(x=>x.id!==imageId);
+    toast('✅ تم الحذف'); renderServerProfileModal(2);
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   خريطة الشبكة (Network Map) — رسم تلقائي من البيانات المسجّلة
+   ============================================================ */
+function openNetworkMap(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  const fSwitches = switchesData.filter(sw=>sw.factory_id===factoryId);
+  const rowH = 46;
+  const svgH = 140 + fSwitches.length*rowH*1.6 + 40;
+  let svg = `<svg viewBox="0 0 340 ${svgH}" style="width:100%;background:var(--bg-2);border-radius:12px">
+    <text x="170" y="24" text-anchor="middle" fill="var(--accent)" font-size="13" font-weight="bold">Internet / Core</text>
+    <rect x="120" y="34" width="100" height="26" rx="6" fill="var(--panel-2)" stroke="var(--accent)"/>
+    <text x="170" y="51" text-anchor="middle" fill="var(--text)" font-size="10">${f?f.name:''}</text>
+    <line x1="170" y1="60" x2="170" y2="80" stroke="var(--border)" stroke-width="2"/>`;
+  let y = 90;
+  fSwitches.forEach(sw=>{
+    const srvCount = serversData.filter(s=>s.switch_id===sw.id).length;
+    const camCount = (sw.connected_cameras||[]).length;
+    svg += `<line x1="170" y1="${y-10}" x2="170" y2="${y}" stroke="var(--border)" stroke-width="2"/>
+      <rect x="90" y="${y}" width="160" height="30" rx="6" fill="var(--panel)" stroke="var(--border)"/>
+      <text x="170" y="${y+19}" text-anchor="middle" fill="var(--text)" font-size="10">🔌 ${sw.switch_name}</text>
+      <line x1="170" y1="${y+30}" x2="80" y2="${y+55}" stroke="var(--border-soft)" stroke-width="1.5"/>
+      <line x1="170" y1="${y+30}" x2="260" y2="${y+55}" stroke="var(--border-soft)" stroke-width="1.5"/>
+      <rect x="20" y="${y+55}" width="120" height="24" rx="5" fill="var(--bg)" stroke="var(--accent)"/>
+      <text x="80" y="${y+71}" text-anchor="middle" fill="var(--accent)" font-size="9">🖥️ ${srvCount} سيرفر</text>
+      <rect x="200" y="${y+55}" width="120" height="24" rx="5" fill="var(--bg)" stroke="var(--success)"/>
+      <text x="260" y="${y+71}" text-anchor="middle" fill="var(--success)" font-size="9">🎥 ${camCount} كاميرا</text>`;
+    y += 95;
+  });
+  svg += `</svg>`;
+  openModal(`
+    <div class="modal-head"><h3>🗺️ خريطة الشبكة — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${fSwitches.length? svg : '<div class="empty">أضف سويتشات أولًا لتظهر خريطة الشبكة.</div>'}
+    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 خريطة تلقائية مبنية من بيانات Switches الفعلية المسجّلة.</p>
+  `);
 }
 function renderRacksList(factoryId){
   const host = document.getElementById('racksListHost');
   if(!host) return;
   if(!racksData.length){ host.innerHTML='<div class="empty">لا توجد راكات مضافة بعد.</div>'; return; }
-  host.innerHTML = racksData.map(r=>`
-    <div class="site-card">
+  host.innerHTML = racksData.map(r=>{
+    const rackServers = serversData.filter(s=>s.rack_id===r.id);
+    return `<div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div><div class="site-name" style="font-size:14px">${r.rack_name}</div><div class="site-meta">${r.location||'—'}</div></div>
         ${r.photo_url? `<img src="${r.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
       </div>
       ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
+      ${rackServers.length ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ الأجهزة: ${rackServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}${s.rack_u?' (U'+s.rack_u+')':''}</span>`).join(' ')}</div>` : ''}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRackPhoto('${r.id}','${factoryId}',this)"></label>
         ${r.photo_url? `<button class="btn sm danger" onclick="removeRackPhoto('${r.id}','${factoryId}')">🗑 الصورة</button>`:''}
         <button class="btn sm" onclick="openRackForm('${factoryId}','${r.id}')">✏️</button>
         <button class="btn sm danger" onclick="deleteRack('${r.id}','${factoryId}')">🗑 حذف</button>
       </div>`:''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function openRackForm(factoryId, rackId){
   const r = rackId ? racksData.find(x=>x.id===rackId) : null;
@@ -4569,6 +4988,7 @@ function renderSwitchesList(factoryId){
       ${sw.brand||sw.model? `<div style="font-size:11px;color:var(--muted)">${sw.brand||''} ${sw.model||''}</div>`:''}
       ${camerasCount? `<div style="margin-top:6px">${(sw.connected_cameras||[]).map(c=>`<span class="tag-chip" style="display:inline-block;background:var(--bg-2);border:1px solid var(--border-soft);border-radius:8px;padding:3px 8px;font-size:10.5px;margin:2px">${c}</span>`).join('')}</div>`:''}
       ${sw.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${sw.notes}</p>`:''}
+      ${(()=>{ const swServers = serversData.filter(s=>s.switch_id===sw.id); return swServers.length? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ سيرفرات متصلة: ${swServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}${s.switch_port?' (Port '+s.switch_port+')':''}</span>`).join(' ')}</div>` : ''; })()}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${sw.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadSwitchPhoto('${sw.id}','${factoryId}',this)"></label>
         ${sw.photo_url? `<button class="btn sm danger" onclick="removeSwitchPhoto('${sw.id}','${factoryId}')">🗑 الصورة</button>`:''}
@@ -4675,6 +5095,7 @@ async function loadUpsData(factoryId){
     if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part5.sql في Supabase أولًا.</div>`;
     return;
   }
+  try{ if(isAdmin()||hasPerm('view_servers')){ const {data} = await supa.from('factory_servers').select('*').eq('factory_id',factoryId); serversData = data||[]; } }catch(e){}
   const sumHost = document.getElementById('upsSummaryHost');
   if(sumHost) sumHost.innerHTML = `<div class="stat-card" style="margin:10px 0"><div class="label">إجمالي أجهزة UPS</div><div class="value">${upsData.length}</div><div class="sub">${upsData.filter(u=>u.status==='يعمل').length} تعمل / ${upsData.filter(u=>u.status!=='يعمل').length} بها مشكلة</div></div>`;
   const host = document.getElementById('upsListHost');
@@ -4689,6 +5110,7 @@ async function loadUpsData(factoryId){
       ${u.brand||u.model||u.capacity? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${u.brand||''} ${u.model||''} ${u.capacity?'· القدرة: '+u.capacity:''}</div>`:''}
       ${u.last_maintenance_date? `<div style="font-size:10.5px;color:var(--muted-2)">آخر صيانة: ${fmtDateAr(u.last_maintenance_date)}</div>`:''}
       ${u.photo_url? `<img src="${u.photo_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${u.photo_url}')">`:''}
+      ${(()=>{ const upsServers = serversData.filter(s=>s.ups_id===u.id); return upsServers.length? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ يعتمد عليه: ${upsServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}</span>`).join(' ')}</div>` : ''; })()}
       ${u.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${u.notes}</p>`:''}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${u.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadUpsPhoto('${u.id}','${factoryId}',this)"></label>
@@ -4967,7 +5389,8 @@ async function gatherAllAppData(){
   [data.cameras, data.screens, data.faults, data.maintenanceLog, data.archive,
    data.storeItems, data.storeTransactions, data.storeItemImages,
    data.layouts, data.racks, data.switches, data.ups, data.auditLog,
-   data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds, data.oncall] = await Promise.all([
+   data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds, data.oncall,
+   data.servers, data.serverDrives, data.serverImages] = await Promise.all([
     safe('cameras'), safe('screens'), safe('faults'), safe('maintenance_log'),
     safe('reports_archive', q=>q.order('report_date',{ascending:false}).limit(200)),
     safe('store_items'), safe('store_transactions'), safe('store_item_images'),
@@ -4975,7 +5398,8 @@ async function gatherAllAppData(){
     safe('audit_log', q=>q.order('ts',{ascending:false}).limit(300)),
     safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance'),
     safe('fault_images'), safe('maintenance_images'), safe('room_needs'),
-    safe('oncall_schedule', q=>q.order('duty_date',{ascending:false}).limit(90))
+    safe('oncall_schedule', q=>q.order('duty_date',{ascending:false}).limit(90)),
+    safe('factory_servers'), safe('server_drives'), safe('server_images')
   ]);
   return data;
 }
@@ -5014,7 +5438,8 @@ async function buildAllExcelWorkbook(d){
     ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url),
     ...(d.faultImages||[]).map(im=>im.image_url), ...(d.maintenanceImagesAll||[]).map(im=>im.image_url),
     ...d.cameras.map(c=>c.photo_url), ...(d.cameraMods||[]).flatMap(c=>[c.photo_before_url,c.photo_after_url]),
-    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url)
+    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url),
+    ...(d.serverImages||[]).map(im=>im.image_url)
   ];
   await urlsToDataUris(allImgUrls);
 
@@ -5158,6 +5583,26 @@ async function buildAllExcelWorkbook(d){
   // التقارير (الأرشيف)
   if(d.archive.length) sheetFromRows('التقارير', ['التاريخ','الوردية','معد التقرير','حالة الغرفة'],
     d.archive.map(a=>[fmtDateAr(a.report_date), a.shift||'', a.preparer||'', a.room_status||'']));
+  // Servers — بصورة أولى مضمّنة فعليًا لكل سيرفر
+  if(d.servers && d.servers.length){
+    const ws = wb.addWorksheet('Servers', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    const headers = ['المصنع','اسم السيرفر','الحالة','الشركة','الموديل','IP','Hostname','OS','صورة'];
+    ws.columns = headers.map(()=>({width:16}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.servers.forEach((s,i)=>{
+      const rr = i+2;
+      const vals = [d.sites.find(x=>x.id===s.factory_id)?.name||'', s.server_name, s.status, s.brand||'', s.model||'', s.ip_address||'', s.hostname||'', s.os_name||''];
+      vals.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); c.value=v; c.border=border; });
+      ws.getCell(rr,9).border=border; ws.getRow(rr).height=75;
+      const img = (d.serverImages||[]).find(im=>im.server_id===s.id);
+      if(img) addEmbeddedImage(wb, ws, __imgDataCache[img.image_url], 8, rr-1, 90, 90);
+    });
+  }
+  // Hard Drives — تفصيل كل هارد لكل سيرفر
+  if(d.serverDrives && d.serverDrives.length){
+    sheetFromRows('Hard Drives', ['السيرفر','Slot','النوع','الموديل','السعة GB','الحالة'],
+      d.serverDrives.map(dr=>{ const srv=(d.servers||[]).find(s=>s.id===dr.server_id); return [srv?srv.server_name:'', dr.slot_number||'', dr.drive_type||'', dr.model||'', dr.capacity_gb||0, dr.status]; }));
+  }
   // جدول المناوبة
   if(d.oncall && d.oncall.length) sheetFromRows('جدول المناوبة', ['التاريخ','المناوب','ملاحظات'],
     d.oncall.map(o=>[fmtDateAr(o.duty_date), o.display_name, o.notes||'']));
@@ -5192,7 +5637,8 @@ async function buildAllReportHtml(d){
     ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url),
     ...(d.faultImages||[]).map(im=>im.image_url), ...(d.maintenanceImagesAll||[]).map(im=>im.image_url),
     ...d.cameras.map(c=>c.photo_url), ...(d.cameraMods||[]).flatMap(c=>[c.photo_before_url,c.photo_after_url]),
-    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url)
+    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url),
+    ...(d.serverImages||[]).map(im=>im.image_url)
   ];
   await urlsToDataUris(allImgUrls);
   const imgTag = (url, w) => { const du = __imgDataCache[url]; return du ? `<img src="${du}" style="width:${w||90}px;height:${w||90}px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px">` : ''; };
@@ -5241,6 +5687,13 @@ async function buildAllReportHtml(d){
       <div style="display:flex;gap:4px">${imgTag(c.photo_before_url,80)}${imgTag(c.photo_after_url,80)}</div>
       <div style="font-size:10px;color:#555">${c.camera_name} — ${c.status}</div>
     </div>`).join(''));
+  if(d.servers && d.servers.length) html += section('Servers', table(['المصنع','الاسم','الحالة','IP','OS','صورة'], d.servers.map(s=>{
+    const img = (d.serverImages||[]).find(im=>im.server_id===s.id);
+    return [d.sites.find(x=>x.id===s.factory_id)?.name||'', s.server_name, s.status, s.ip_address||'', s.os_name||'', img?imgTag(img.image_url,60):''];
+  })));
+  if(d.serverDrives && d.serverDrives.length) html += section('Hard Drives', table(['السيرفر','Slot','النوع','السعة GB','الحالة'], d.serverDrives.map(dr=>{
+    const srv=(d.servers||[]).find(s=>s.id===dr.server_id); return [srv?srv.server_name:'', dr.slot_number||'', dr.drive_type||'', dr.capacity_gb||0, dr.status];
+  })));
   if(d.archive.length) html += section('أرشيف التقارير', table(['التاريخ','الوردية','معد التقرير','الحالة'], d.archive.slice(0,50).map(a=>[fmtDateAr(a.report_date),a.shift||'',a.preparer||'',a.room_status||''])));
   html += `<p style="text-align:center;color:#888;margin-top:30px;font-size:11px;border-top:1px dashed #ccc;padding-top:10px">— تصدير شامل تلقائي من نظام غرفة المراقبة المركزية — إعداد وتشغيل: إبراهيم رمضان —</p></div>`;
   return html;
