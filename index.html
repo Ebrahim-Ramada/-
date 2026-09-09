@@ -186,6 +186,7 @@ tbody td:first-child{text-align:right;font-weight:700;}
       <div style="display:flex;align-items:center;gap:8px;flex:none">
         <button class="topbtn" id="themeToggleBtn" onclick="toggleLightMode()" title="تبديل الوضع الفاتح/الداكن">🌙</button>
         <button class="topbtn" onclick="openNotifications()" title="الإشعارات" style="position:relative">🔔<span id="notifDot" style="display:none;position:absolute;top:3px;left:3px;width:8px;height:8px;border-radius:50%;background:var(--danger)"></span></button>
+        <button class="topbtn" onclick="openGlobalSearch()" title="بحث شامل">🔍</button>
         <button class="topbtn" onclick="manualSync()" title="مزامنة الآن">🔄</button>
         <button class="topbtn" id="quickLockBtn" onclick="relockApp()" title="قفل التطبيق الآن" style="display:none">🔒</button>
         <button class="topbtn" onclick="doSignOut()" title="تسجيل الخروج">🚪</button>
@@ -820,7 +821,7 @@ async function loadFactories(){
   }
   if(['dashboard','factories'].includes(currentView)) renderCurrentView();
 }
-let appSettings = { alert_threshold:10, alert_pct_threshold:90 };
+let appSettings = { alert_threshold:10, alert_pct_threshold:90, fault_sla_hours:24 };
 async function loadSettings(){
   try{
     const { data, error } = await supa.from('settings').select('*').eq('id',1).single();
@@ -856,9 +857,13 @@ async function loadAllData(){
   await loadFactories();
   await loadMaintenanceLog();
   await loadDashboardSummaries();
+  try{ const {data} = await supa.from('faults').select('*').order('reported_at',{ascending:false}).limit(300); faultsData = data||[]; }catch(e){ faultsData = faultsData||[]; }
+  try{ const {data} = await supa.from('preventive_maintenance').select('*').order('scheduled_date'); preventiveTasks = data||[]; }catch(e){ preventiveTasks = preventiveTasks||[]; }
+  try{ const {data} = await supa.from('room_needs').select('*'); roomNeedsData = data||[]; }catch(e){ roomNeedsData = roomNeedsData||[]; }
   if(hasPerm('view_archive')){
     try{ const {data} = await supa.from('reports_archive').select('*').order('report_date',{ascending:false}).limit(60); archiveData = data||[]; }catch(e){}
   }
+  renderAlertsBar(); // إعادة فحص التنبيهات (بما فيها SLA) بعد اكتمال تحميل كل البيانات
 }
 function getAlerts(){
   const alerts = [];
@@ -867,6 +872,21 @@ function getAlerts(){
     else if(s.camUptime < appSettings.alert_pct_threshold && s.camerasTotal>0) alerts.push({level:'warn', text:`⚠️ نسبة تشغيل الكاميرات في ${s.name} أقل من ${appSettings.alert_pct_threshold}% (${fmtPct2(s.camUptime)}).`});
     if(s.screensDown>0) alerts.push({level:'warn', text:`⚠️ توجد ${s.screensDown} شاشة منقطعة في ${s.name}.`});
   });
+  // تصعيد الأعطال المتأخرة عن حد SLA
+  const slaMs = (appSettings.fault_sla_hours||24) * 3600000;
+  (faultsData||[]).forEach(f=>{
+    if(f.status!=='مغلق' && f.status!=='تم الإصلاح'){
+      const ageMs = Date.now() - new Date(f.reported_at).getTime();
+      if(ageMs > slaMs) alerts.push({level:'bad', text:`🔴 عطل متأخر عن حد الاستجابة (${appSettings.fault_sla_hours} ساعة): ${f.device_name}.`});
+    }
+  });
+  // صيانة وقائية متأخرة
+  const today = new Date().toISOString().slice(0,10);
+  const overdueMaint = (preventiveTasks||[]).filter(t=>t.scheduled_date<today);
+  if(overdueMaint.length) alerts.push({level:'warn', text:`🛠️ يوجد ${overdueMaint.length} مهمة صيانة وقائية متأخرة عن موعدها.`});
+  // احتياجات غرفة عاجلة لم تُنفَّذ
+  const urgentNeeds = (roomNeedsData||[]).filter(r=>r.priority==='عاجلة' && r.status!=='تم التنفيذ');
+  if(urgentNeeds.length) alerts.push({level:'bad', text:`📋 يوجد ${urgentNeeds.length} احتياج غرفة عاجل لم يُنفَّذ بعد.`});
   return alerts;
 }
 const DISMISSED_ALERTS_KEY = 'rc_dismissed_alerts_v1';
@@ -1046,7 +1066,7 @@ window.addEventListener('popstate', ()=>{
 });
 function renderCurrentView(){
   const host = document.getElementById('viewsHost');
-  if(currentView==='dashboard') host.innerHTML = renderDashboard();
+  if(currentView==='dashboard') { host.innerHTML = renderDashboard(); loadOnCallCard(); }
   else if(currentView==='factories') host.innerHTML = renderFactoriesView();
   else if(currentView==='report') { host.innerHTML = renderReportView(); setTimeout(initSignaturePad, 50); }
   else if(currentView==='archive') { host.innerHTML = renderArchivePlaceholder(); loadArchive(); }
@@ -1060,6 +1080,8 @@ function renderCurrentView(){
   else if(currentView==='layouts') { host.innerHTML = renderLayoutsPlaceholder(currentViewCtx); loadLayouts(currentViewCtx); }
   else if(currentView==='network') { host.innerHTML = renderNetworkPlaceholder(currentViewCtx); loadNetworkData(currentViewCtx); }
   else if(currentView==='ups') { host.innerHTML = renderUpsPlaceholder(currentViewCtx); loadUpsData(currentViewCtx); }
+  else if(currentView==='timeline') { host.innerHTML = renderTimelinePlaceholder(); loadTimeline(); }
+  else if(currentView==='reportscenter') { host.innerHTML = renderReportsCenterView(); }
   else if(currentView==='faults') { host.innerHTML = renderFaultsPlaceholder(); loadFaults(); }
   else if(currentView==='store') { host.innerHTML = renderStorePlaceholder(); loadStoreData(); }
   else if(currentView==='cameramods') { host.innerHTML = renderCameraModsPlaceholder(); loadCameraMods(); }
@@ -1267,6 +1289,8 @@ function renderDashboard(){
       </div>
       <span style="font-size:11px;color:var(--muted-2)">${t.count} مواقع</span>
     </div>
+
+    <div id="oncallCard"></div>
 
     <!-- الأهم أولًا: حالة الكاميرات والشاشات -->
     <div class="hero-grid" style="margin-top:12px">
@@ -2283,6 +2307,8 @@ function renderSettingsView(){
       <button class="btn" onclick="goTo('cameramods')">🎥 كاميرات للتعديل</button>
       <button class="btn" onclick="goTo('lighting')">💡 الإضاءة</button>
       <button class="btn" onclick="goTo('roomneeds')">📋 احتياجات الغرفة</button>
+      <button class="btn" onclick="goTo('timeline')">🕐 Timeline الأحداث</button>
+      <button class="btn" onclick="goTo('reportscenter')">🗂️ مركز التقارير</button>
       ${isAdmin() ? `<button class="btn" onclick="goTo('users')">👥 إدارة المستخدمين</button>` : ''}
     </div>
     <button class="btn block" style="margin-top:10px" onclick="generateCertificate()">🏆 إصدار شهادة تقدير الأداء</button>
@@ -2706,7 +2732,7 @@ async function loadCameras(factoryId){
     <div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1">
-          <div class="site-name" style="font-size:14px">${c.camera_name}</div>
+          <div class="site-name" style="font-size:14px;cursor:pointer;text-decoration:underline dotted" onclick="openCameraProfile('${c.id}')">${c.camera_name}</div>
           ${c.fault_reason? `<div class="site-meta">السبب: ${c.fault_reason}</div>`:''}
         </div>
         ${c.photo_url? `<img src="${c.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">`:''}
@@ -2827,6 +2853,151 @@ async function removeCameraPhotoDirect(camId){
     await logAudit('حذف صورة كاميرا', c?c.camera_name:camId);
     toast('✅ تم حذف الصورة'); loadCameras(c?c.factory_id:currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+}
+
+/* ============================================================
+   ملف تعريف كامل للكاميرا (Camera Profile) — يجمع كل البيانات
+   المرتبطة باسم الكاميرا من كل أقسام التطبيق في مكان واحد
+   ============================================================ */
+async function openCameraProfile(camId){
+  const cam = camerasData.find(x=>x.id===camId);
+  if(!cam){ toast('تعذّر إيجاد الكاميرا'); return; }
+  openModal(`<div class="modal-head"><h3>📷 ملف الكاميرا</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري تجميع البيانات...</div>`);
+  const factory = factoriesData.find(f=>f.id===cam.factory_id);
+  let relatedFaults = [], relatedMaint = [], relatedSwitch = null;
+  try{ const {data} = await supa.from('faults').select('*').eq('device_name', cam.camera_name).order('reported_at',{ascending:false}); relatedFaults = data||[]; }catch(e){}
+  try{ relatedMaint = (maintenanceLogData||[]).filter(m=>m.camera_name===cam.camera_name); }catch(e){}
+  try{
+    const {data} = await supa.from('factory_switches').select('*').eq('factory_id', cam.factory_id);
+    relatedSwitch = (data||[]).find(sw=> (sw.connected_cameras||[]).includes(cam.camera_name));
+  }catch(e){}
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>📷 ${cam.camera_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="site-card">
+      ${cam.photo_url? `<img src="${cam.photo_url}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:8px;cursor:zoom-in" onclick="openImageLightbox('${cam.photo_url}')">` : ''}
+      <div class="mini-grid">
+        <div class="mini"><div class="n" style="font-size:12px">${cam.camera_number||'—'}</div><div class="t">الرقم</div></div>
+        <div class="mini"><div class="n" style="font-size:12px">${cam.status}</div><div class="t">الحالة</div></div>
+        <div class="mini"><div class="n" style="font-size:11px">${factory?factory.name:'—'}</div><div class="t">المصنع</div></div>
+        <div class="mini"><div class="n" style="font-size:11px">${relatedSwitch?relatedSwitch.switch_name:'—'}</div><div class="t">Switch</div></div>
+      </div>
+      ${cam.fault_reason? `<p style="font-size:12px;color:var(--muted);margin-top:8px"><b>سبب العطل الحالي:</b> ${cam.fault_reason}</p>`:''}
+      ${cam.responsible? `<p style="font-size:12px;color:var(--muted)"><b>المسؤول:</b> ${cam.responsible}</p>`:''}
+      ${cam.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${cam.notes}</p>`:''}
+    </div>
+
+    <div class="section-title" style="margin-top:12px"><h2 style="font-size:13px">📋 الأعطال السابقة (${relatedFaults.length})</h2></div>
+    ${relatedFaults.length ? relatedFaults.slice(0,10).map(f=>`
+      <div class="site-card" style="padding:8px 12px">
+        <div style="display:flex;justify-content:space-between;font-size:12px">
+          <span>${f.fault_type||'—'} <span class="pill ${FAULT_SEVERITY_COLOR[f.severity]}">${f.severity}</span></span>
+          <span class="pill ${f.status==='مغلق'||f.status==='تم الإصلاح'?'ok':'bad'}">${f.status}</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted-2);margin-top:3px">${new Date(f.reported_at).toLocaleDateString('ar-EG')}</div>
+      </div>`).join('') : `<div class="empty">لا توجد أعطال مسجّلة لهذه الكاميرا.</div>`}
+
+    <div class="section-title"><h2 style="font-size:13px">🛠️ سجل الصيانة/الإصلاح (${relatedMaint.length})</h2></div>
+    ${relatedMaint.length ? relatedMaint.slice(0,10).map(m=>`
+      <div class="site-card" style="padding:8px 12px;font-size:12px">
+        أُصلحت خلال ${fmtHours(Number(m.duration_hours))} — ${new Date(m.fixed_at).toLocaleDateString('ar-EG')}
+      </div>`).join('') : `<div class="empty">لا يوجد سجل صيانة سابق.</div>`}
+
+    ${relatedSwitch ? `<div class="section-title"><h2 style="font-size:13px">🔌 بيانات الشبكة</h2></div>
+    <div class="site-card" style="font-size:12px">متصلة بـ <b>${relatedSwitch.switch_name}</b> (${relatedSwitch.switch_type||''}) — ${relatedSwitch.used_ports||0}/${relatedSwitch.total_ports||0} منفذ مستخدم</div>` : ''}
+
+    <button class="btn primary block" style="margin-top:10px" onclick="downloadCameraQR('${cam.id}')">📱 QR الكاميرا</button>
+  `;
+}
+async function downloadCameraQR(camId){
+  const cam = camerasData.find(x=>x.id===camId);
+  if(!cam) return;
+  const ok = await ensureQrLib();
+  if(!ok){ toast('⚠️ تعذّر تحميل مكتبة QR'); return; }
+  const factory = factoriesData.find(f=>f.id===cam.factory_id);
+  const text = `كاميرا: ${cam.camera_name}\nرقم: ${cam.camera_number||'—'}\nالمصنع: ${factory?factory.name:''}\nالحالة: ${cam.status}`;
+  openModal(`
+    <div class="modal-head"><h3>📱 QR — ${cam.camera_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div style="display:flex;justify-content:center;padding:14px;background:#fff;border-radius:14px" id="camQrHost"></div>
+    <button class="btn primary block" style="margin-top:10px" onclick="downloadCamQrImage()">⬇️ حفظ الصورة</button>
+  `);
+  setTimeout(()=>{ const host=document.getElementById('camQrHost'); if(host){ host.innerHTML=''; try{ new QRCode(host,{text,width:220,height:220}); }catch(e){} } }, 50);
+}
+function downloadCamQrImage(){
+  const canvas = document.querySelector('#camQrHost canvas');
+  if(!canvas){ toast('لم يتم إنشاء الصورة بعد'); return; }
+  canvas.toBlob(blob=> saveOrShareFile(blob, `QR-كاميرا-${Date.now()}.png`));
+}
+
+/* ============================================================
+   البحث الشامل (Global Search) — يدوّر في كل أقسام التطبيق مرة واحدة
+   ============================================================ */
+function openGlobalSearch(){
+  openModal(`
+    <div class="modal-head"><h3>🔍 بحث شامل</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><input class="input" id="globalSearchInput" placeholder="اكتب اسم كاميرا، مصنع، صنف، سويتش..." oninput="runGlobalSearch(this.value)" autofocus></div>
+    <div id="globalSearchResults"><p style="font-size:11px;color:var(--muted-2);text-align:center;margin-top:10px">اكتب حرفين على الأقل للبحث في: المصانع، الكاميرات، الشاشات، الأعطال، المخزن، Racks، Switches، UPS، الصيانة، احتياجات الغرفة.</p></div>
+  `);
+  setTimeout(()=>document.getElementById('globalSearchInput')?.focus(), 100);
+}
+let globalSearchDebounce = null;
+function runGlobalSearch(q){
+  clearTimeout(globalSearchDebounce);
+  if(q.trim().length<2){ document.getElementById('globalSearchResults').innerHTML = '<p style="font-size:11px;color:var(--muted-2);text-align:center;margin-top:10px">اكتب حرفين على الأقل...</p>'; return; }
+  globalSearchDebounce = setTimeout(()=> executeGlobalSearch(q.trim()), 300);
+}
+async function executeGlobalSearch(q){
+  const host = document.getElementById('globalSearchResults');
+  if(!host) return;
+  host.innerHTML = '<div class="empty">جاري البحث...</div>';
+  const results = [];
+  const factoryMatches = factoriesData.filter(f=>f.name.includes(q));
+  factoryMatches.forEach(f=> results.push({cat:'🏭 مصانع', label:f.name, action:`goTo('factories')`}));
+
+  try{
+    const {data} = await supa.from('cameras').select('*').ilike('camera_name', `%${q}%`).limit(15);
+    (data||[]).forEach(c=>{ const f=factoriesData.find(x=>x.id===c.factory_id); results.push({cat:'🎥 كاميرات', label:`${c.camera_name} (${f?f.name:''})`, action:`goTo('cameras','${c.factory_id}')`}); });
+  }catch(e){}
+  try{
+    const {data} = await supa.from('screens').select('*').ilike('screen_name', `%${q}%`).limit(15);
+    (data||[]).forEach(s=>{ const f=factoriesData.find(x=>x.id===s.factory_id); results.push({cat:'🖥️ شاشات', label:`${s.screen_name} (${f?f.name:''})`, action:`goTo('screens','${s.factory_id}')`}); });
+  }catch(e){}
+  try{
+    const {data} = await supa.from('faults').select('*').ilike('device_name', `%${q}%`).limit(15);
+    (data||[]).forEach(f=> results.push({cat:'📋 أعطال', label:`${f.device_name} — ${f.status}`, action:`goTo('faults')`}));
+  }catch(e){}
+  try{
+    const {data} = await supa.from('store_items').select('*').ilike('item_name', `%${q}%`).limit(15);
+    (data||[]).forEach(it=> results.push({cat:'📦 مخزن', label:it.item_name, action:`goTo('store')`}));
+  }catch(e){}
+  try{
+    const {data} = await supa.from('factory_switches').select('*').ilike('switch_name', `%${q}%`).limit(10);
+    (data||[]).forEach(sw=>{ const f=factoriesData.find(x=>x.id===sw.factory_id); results.push({cat:'🔌 Switches', label:`${sw.switch_name} (${f?f.name:''})`, action:`goTo('network','${sw.factory_id}')`}); });
+  }catch(e){}
+  try{
+    const {data} = await supa.from('factory_racks').select('*').ilike('rack_name', `%${q}%`).limit(10);
+    (data||[]).forEach(r=>{ const f=factoriesData.find(x=>x.id===r.factory_id); results.push({cat:'🗄️ Racks', label:`${r.rack_name} (${f?f.name:''})`, action:`goTo('network','${r.factory_id}')`}); });
+  }catch(e){}
+  try{
+    const {data} = await supa.from('factory_ups').select('*').ilike('ups_name', `%${q}%`).limit(10);
+    (data||[]).forEach(u=>{ const f=factoriesData.find(x=>x.id===u.factory_id); results.push({cat:'🔋 UPS', label:`${u.ups_name} (${f?f.name:''})`, action:`goTo('ups','${u.factory_id}')`}); });
+  }catch(e){}
+  try{
+    const {data} = await supa.from('preventive_maintenance').select('*').ilike('maintenance_type', `%${q}%`).limit(10);
+    (data||[]).forEach(m=> results.push({cat:'🛠️ صيانة وقائية', label:`${m.target_name} — ${m.maintenance_type}`, action:`goTo('maintenance')`}));
+  }catch(e){}
+  try{
+    const {data} = await supa.from('room_needs').select('*').ilike('title', `%${q}%`).limit(10);
+    (data||[]).forEach(r=> results.push({cat:'📋 احتياجات الغرفة', label:r.title, action:`goTo('roomneeds')`}));
+  }catch(e){}
+
+  if(!results.length){ host.innerHTML = '<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
+  const grouped = {};
+  results.forEach(r=>{ if(!grouped[r.cat]) grouped[r.cat]=[]; grouped[r.cat].push(r); });
+  host.innerHTML = Object.entries(grouped).map(([cat, items])=>`
+    <div style="margin-top:10px">
+      <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px">${cat} (${items.length})</div>
+      ${items.map(it=>`<div class="site-card" style="padding:8px 12px;cursor:pointer;margin-bottom:6px" onclick='closeModal(); ${it.action}'>${it.label}</div>`).join('')}
+    </div>`).join('');
 }
 
 /* ============================================================
@@ -4598,6 +4769,167 @@ async function confirmDeleteUps(upsId, factoryId){
 }
 
 /* ============================================================
+   Timeline موحّد للأحداث — يجمع من audit_log + الأعطال + الصيانة + الأرشيف
+   ============================================================ */
+function renderTimelinePlaceholder(){
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🕐 Timeline الأحداث</h2></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">آخر الأحداث المهمة مرتبة زمنيًا من كل أقسام التطبيق</p>
+    <div id="timelineHost"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadTimeline(){
+  const host = document.getElementById('timelineHost');
+  const events = [];
+  try{
+    const {data} = await supa.from('audit_log').select('*').order('ts',{ascending:false}).limit(60);
+    (data||[]).forEach(r=> events.push({ts:r.ts, icon:'📝', text:`${r.actor_name}: ${r.action}${r.details?' — '+r.details:''}`}));
+  }catch(e){}
+  (faultsData||[]).forEach(f=>{
+    events.push({ts:f.reported_at, icon:'🔴', text:`تسجيل عطل: ${f.device_name} (${f.severity})`});
+    if(f.response_started_at) events.push({ts:f.response_started_at, icon:'🟡', text:`بدء متابعة عطل: ${f.device_name}`});
+    if(f.resolved_at) events.push({ts:f.resolved_at, icon:'🟢', text:`إغلاق عطل: ${f.device_name}`});
+  });
+  (preventiveTasks||[]).forEach(t=> events.push({ts:t.created_at||t.scheduled_date, icon:'🛠️', text:`جدولة صيانة: ${t.target_name} — ${t.maintenance_type}`}));
+  (archiveData||[]).forEach(a=> events.push({ts:a.approved_at||a.report_date, icon:'📄', text:`إنشاء تقرير — ${fmtDateAr(a.report_date)}`}));
+  events.sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+  if(!host) return;
+  if(!events.length){ host.innerHTML = '<div class="empty">لا توجد أحداث مسجّلة بعد.</div>'; return; }
+  host.innerHTML = `<div style="border-right:2px solid var(--border);margin-right:8px;padding-right:16px">
+    ${events.slice(0,80).map(e=>`
+      <div style="position:relative;margin-bottom:14px">
+        <div style="position:absolute;right:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:var(--panel);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:9px">${e.icon}</div>
+        <div style="font-size:10px;color:var(--muted-2)">${new Date(e.ts).toLocaleString('ar-EG')}</div>
+        <div style="font-size:12.5px;margin-top:2px">${e.text}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+/* ============================================================
+   مركز التقارير — يومي/أسبوعي/شهري/سنوي + تقارير مخصّصة لكل قسم
+   ============================================================ */
+function renderReportsCenterView(){
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🗂️ مركز التقارير</h2></div>
+    <div class="section-title"><h2 style="font-size:13px">حسب الفترة الزمنية</h2></div>
+    <div class="quickgrid">
+      <button class="qbtn" onclick="goTo('report')"><span class="qicon">📅</span> تقرير يومي</button>
+      <button class="qbtn" onclick="generatePeriodReport('weekly')"><span class="qicon">📆</span> تقرير أسبوعي</button>
+      <button class="qbtn" onclick="generatePeriodReport('monthly')"><span class="qicon">🗓️</span> تقرير شهري</button>
+      <button class="qbtn" onclick="generatePeriodReport('yearly')"><span class="qicon">📊</span> تقرير سنوي</button>
+    </div>
+    <div class="section-title"><h2 style="font-size:13px">حسب القسم</h2></div>
+    <div class="quickgrid">
+      <button class="qbtn" onclick="openFactoryReportPicker()"><span class="qicon">🏭</span> تقرير مصنع محدد</button>
+      <button class="qbtn" onclick="goTo('faults')"><span class="qicon">📋</span> تقرير الأعطال</button>
+      <button class="qbtn" onclick="goTo('maintenance')"><span class="qicon">🛠️</span> تقرير الصيانة</button>
+      <button class="qbtn" onclick="goTo('store')"><span class="qicon">📦</span> تقرير المخزن</button>
+      <button class="qbtn" onclick="goTo('roomneeds')"><span class="qicon">📋</span> تقرير الاحتياجات</button>
+      <button class="qbtn" onclick="goTo('cameramods')"><span class="qicon">🎥</span> تقرير الكاميرات</button>
+    </div>
+    <div class="section-title"><h2 style="font-size:13px">تصدير شامل لكل التطبيق</h2></div>
+    <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
+  </div>`;
+}
+function openFactoryReportPicker(){
+  openModal(`
+    <div class="modal-head"><h3>🏭 اختر المصنع</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><select class="input" id="frp_factory">${factoriesData.map(f=>`<option value="${f.id}">${f.name}</option>`).join('')}</select></div>
+    <button class="btn primary block" onclick="generateFactoryReport(document.getElementById('frp_factory').value)">📄 إنشاء التقرير (PDF)</button>
+  `);
+}
+async function generateFactoryReport(factoryId){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  const f = factoriesData.find(x=>x.id===factoryId);
+  const s = computeFactory(f);
+  toast('جاري إنشاء التقرير...');
+  let camList=[], faultsList=[];
+  try{ const {data} = await supa.from('cameras').select('*').eq('factory_id',factoryId); camList = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('faults').select('*').eq('factory_id',factoryId).order('reported_at',{ascending:false}); faultsList = data||[]; }catch(e){}
+  const el = document.createElement('div');
+  el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
+  el.innerHTML = `<h1 style="text-align:center">تقرير مصنع: ${f.name}</h1>
+    <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>
+    <h3>الملخص</h3>
+    <p>إجمالي الكاميرات: ${s.camerasTotal} — تعمل: ${s.camerasUp} — منقطعة: ${s.camerasDown} — نسبة التشغيل: ${fmtPct2(s.camUptime)}</p>
+    <p>إجمالي الشاشات: ${s.screens} — منقطعة: ${s.screensDown}</p>
+    <h3>الكاميرات</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>الاسم</th><th>الحالة</th><th>سبب العطل</th></tr>
+      ${camList.map(c=>`<tr><td>${c.camera_name}</td><td>${c.status}</td><td>${c.fault_reason||''}</td></tr>`).join('')}
+    </table>
+    <h3>الأعطال المسجّلة</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>الجهاز</th><th>الخطورة</th><th>الحالة</th><th>التاريخ</th></tr>
+      ${faultsList.map(fl=>`<tr><td>${fl.device_name}</td><td>${fl.severity}</td><td>${fl.status}</td><td>${new Date(fl.reported_at).toLocaleDateString('ar-EG')}</td></tr>`).join('')}
+    </table>`;
+  document.body.appendChild(el);
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  el.remove(); closeModal();
+  await saveOrShareFile(blob, `تقرير-${f.name}-${new Date().toISOString().slice(0,10)}.pdf`);
+  await logAudit('إنشاء تقرير مصنع', f.name);
+}
+async function generatePeriodReport(period){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  toast('جاري تجميع بيانات التقرير...');
+  const now = new Date();
+  let fromDate, label;
+  if(period==='weekly'){ fromDate = new Date(now-7*86400000); label='الأسبوعي'; }
+  else if(period==='monthly'){ fromDate = new Date(now.getFullYear(), now.getMonth(), 1); label='الشهري'; }
+  else { fromDate = new Date(now.getFullYear(), 0, 1); label='السنوي'; }
+  const fromIso = fromDate.toISOString();
+
+  const periodFaults = (faultsData||[]).filter(f=> f.reported_at >= fromIso);
+  const resolvedFaults = periodFaults.filter(f=>f.resolved_at);
+  const periodMaint = (preventiveTasks||[]).filter(t=> t.scheduled_date >= fromIso.slice(0,10));
+  let auditCount = 0;
+  try{ const {count} = await supa.from('audit_log').select('id',{count:'exact',head:true}).gte('ts', fromIso); auditCount = count||0; }catch(e){}
+
+  const sites = factoriesData.map(computeFactory);
+  const t = computeTotals(sites);
+  const bySeverity = {'عالية':0,'متوسطة':0,'منخفضة':0};
+  periodFaults.forEach(f=> bySeverity[f.severity] = (bySeverity[f.severity]||0)+1);
+  const deviceCounts = {};
+  periodFaults.forEach(f=> deviceCounts[f.device_name] = (deviceCounts[f.device_name]||0)+1);
+  const topDevices = Object.entries(deviceCounts).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  const el = document.createElement('div');
+  el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
+  el.innerHTML = `
+    <div style="text-align:center;padding:30px 0;border-bottom:4px solid #12716A;margin-bottom:20px">
+      <h1>التقرير ${label} — غرفة المراقبة المركزية</h1>
+      <p style="color:#666">من ${fromDate.toLocaleDateString('ar-EG')} إلى ${now.toLocaleDateString('ar-EG')}</p>
+    </div>
+    <h3>نظرة عامة على الحالة الحالية</h3>
+    <p>نسبة تشغيل الكاميرات: ${fmtPct2(t.camUptime)} — نسبة تشغيل الشاشات: ${fmtPct2(t.scrUptime)}</p>
+    <h3>الأعطال خلال الفترة</h3>
+    <p>إجمالي الأعطال المسجّلة: ${periodFaults.length} — تم حلها: ${resolvedFaults.length} — معدل الحل: ${periodFaults.length?Math.round(resolvedFaults.length/periodFaults.length*100):0}%</p>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>درجة الخطورة</th><th>العدد</th></tr>
+      ${Object.entries(bySeverity).map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+    </table>
+    <h3>أكثر الأجهزة تكرارًا للعطل</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>الجهاز</th><th>عدد الأعطال</th></tr>
+      ${topDevices.map(([d,c])=>`<tr><td>${d}</td><td>${c}</td></tr>`).join('') || '<tr><td colspan="2">لا يوجد</td></tr>'}
+    </table>
+    <h3>الصيانة الوقائية</h3>
+    <p>عدد مهام الصيانة المجدولة خلال الفترة: ${periodMaint.length}</p>
+    <h3>ملخص المصانع</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
+      <tr style="background:#0B1220;color:#fff"><th>المصنع</th><th>الكاميرات</th><th>نسبة التشغيل</th></tr>
+      ${sites.map(s=>`<tr><td>${s.name}</td><td>${s.camerasTotal}</td><td>${fmtPct2(s.camUptime)}</td></tr>`).join('')}
+    </table>
+    <p style="margin-top:16px;font-size:11px;color:#888">عدد العمليات المسجّلة في سجل التدقيق خلال الفترة: ${auditCount}</p>
+    <p style="text-align:center;color:#888;margin-top:30px;font-size:11px;border-top:1px dashed #ccc;padding-top:10px">إعداد وتشغيل النظام: إبراهيم رمضان</p>`;
+  document.body.appendChild(el);
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  el.remove();
+  await saveOrShareFile(blob, `تقرير-${label}-${new Date().toISOString().slice(0,10)}.pdf`);
+  await logAudit(`إنشاء تقرير ${label}`, `من ${fromDate.toLocaleDateString('ar-EG')}`);
+}
+
+/* ============================================================
    مركز التصدير الشامل (Export Center) — مستقل عن التصدير الفردي
    يجمع كل بيانات التطبيق من كل الجداول ويصدّرها بأي صيغة مطلوبة
    ============================================================ */
@@ -4635,14 +4967,15 @@ async function gatherAllAppData(){
   [data.cameras, data.screens, data.faults, data.maintenanceLog, data.archive,
    data.storeItems, data.storeTransactions, data.storeItemImages,
    data.layouts, data.racks, data.switches, data.ups, data.auditLog,
-   data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds] = await Promise.all([
+   data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds, data.oncall] = await Promise.all([
     safe('cameras'), safe('screens'), safe('faults'), safe('maintenance_log'),
     safe('reports_archive', q=>q.order('report_date',{ascending:false}).limit(200)),
     safe('store_items'), safe('store_transactions'), safe('store_item_images'),
     safe('factory_layouts'), safe('factory_racks'), safe('factory_switches'), safe('factory_ups'),
     safe('audit_log', q=>q.order('ts',{ascending:false}).limit(300)),
     safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance'),
-    safe('fault_images'), safe('maintenance_images'), safe('room_needs')
+    safe('fault_images'), safe('maintenance_images'), safe('room_needs'),
+    safe('oncall_schedule', q=>q.order('duty_date',{ascending:false}).limit(90))
   ]);
   return data;
 }
@@ -4687,12 +5020,19 @@ async function buildAllExcelWorkbook(d){
 
   // ملخص عام
   const t = d.totals;
+  const slaMs = (appSettings.fault_sla_hours||24)*3600000;
+  const openFaults = d.faults.filter(f=>f.status!=='مغلق' && f.status!=='تم الإصلاح');
+  const overdueFaults = openFaults.filter(f=> (Date.now()-new Date(f.reported_at).getTime())>slaMs);
+  const todayStr = new Date().toISOString().slice(0,10);
+  const overdueMaint = (d.preventiveTasks||[]).filter(t=>t.scheduled_date<todayStr);
   sheetFromRows('ملخص عام', ['البند','القيمة'], [
     ['إجمالي المصانع', d.sites.length], ['إجمالي الشاشات', t.screens], ['الشاشات تعمل', t.screensUp], ['الشاشات منقطعة', t.screensDown],
     ['نسبة تشغيل الشاشات %', Math.round(t.scrUptime*100)/100], ['إجمالي الكاميرات', t.camerasTotal], ['الكاميرات تعمل', t.camerasUp],
     ['الكاميرات منقطعة', t.camerasDown], ['نسبة تشغيل الكاميرات %', Math.round(t.camUptime*100)/100],
     ['عدد أصناف المخزن', d.storeItems.length], ['عدد الراكات', d.racks.length], ['عدد السويتشات', d.switches.length],
     ['عدد أجهزة UPS', d.ups.length], ['عدد الخرائط', d.layouts.length], ['عدد الأعطال المسجلة', d.faults.length],
+    ['أعطال مفتوحة حاليًا', openFaults.length], [`أعطال متأخرة عن SLA (${appSettings.fault_sla_hours} ساعة)`, overdueFaults.length],
+    ['مهام صيانة متأخرة', overdueMaint.length],
     ['عدد التقارير المؤرشفة', d.archive.length]
   ], [28,16]);
   // المصانع
@@ -4818,6 +5158,9 @@ async function buildAllExcelWorkbook(d){
   // التقارير (الأرشيف)
   if(d.archive.length) sheetFromRows('التقارير', ['التاريخ','الوردية','معد التقرير','حالة الغرفة'],
     d.archive.map(a=>[fmtDateAr(a.report_date), a.shift||'', a.preparer||'', a.room_status||'']));
+  // جدول المناوبة
+  if(d.oncall && d.oncall.length) sheetFromRows('جدول المناوبة', ['التاريخ','المناوب','ملاحظات'],
+    d.oncall.map(o=>[fmtDateAr(o.duty_date), o.display_name, o.notes||'']));
   // سجل التدقيق
   if(d.auditLog.length) sheetFromRows('سجل البيانات', ['التاريخ','المستخدم','العملية','التفاصيل'],
     d.auditLog.slice(0,300).map(r=>[new Date(r.ts).toLocaleString('ar-EG'), r.actor_name, r.action, r.details||'']), [18,18,22,40]);
@@ -5182,6 +5525,64 @@ async function forceAppUpdate(){
     }
   }catch(e){ console.warn('تعذّر مسح الكاش بالكامل (غير خطير)', e); }
   setTimeout(()=>{ location.href = location.origin + location.pathname + '?refresh=' + Date.now(); }, 300);
+}
+
+/* ============================================================
+   جدول المناوبة (On-Call) — يظهر في الداشبورد من هو المسؤول اليوم
+   ============================================================ */
+async function loadOnCallCard(){
+  const host = document.getElementById('oncallCard');
+  if(!host) return;
+  const today = new Date().toISOString().slice(0,10);
+  try{
+    const {data, error} = await supa.from('oncall_schedule').select('*').eq('duty_date', today).limit(1).single();
+    if(error) throw error;
+    host.innerHTML = `<div class="site-card" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(150deg,#16233F,#0F1A30);margin-top:12px">
+      <div><div style="font-size:10.5px;color:var(--muted)">👤 المناوب اليوم</div><div style="font-weight:800;font-family:'Tajawal';font-size:15px;color:var(--accent)">${data.display_name}</div>${data.notes?`<div style="font-size:10.5px;color:var(--muted-2)">${data.notes}</div>`:''}</div>
+      ${isAdmin()?`<button class="btn sm" onclick="openOnCallManager()">📅 إدارة</button>`:''}
+    </div>`;
+  }catch(e){
+    host.innerHTML = isAdmin() ? `<div class="site-card" style="margin-top:12px;text-align:center;cursor:pointer" onclick="openOnCallManager()">
+      <div style="font-size:12px;color:var(--muted)">لا يوجد مناوب محدَّد اليوم — اضغط لتحديد الجدول</div>
+    </div>` : '';
+  }
+}
+async function openOnCallManager(){
+  if(!isAdmin()) return;
+  openModal(`<div class="modal-head"><h3>📅 إدارة جدول المناوبة</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  let list = [];
+  try{ const {data} = await supa.from('oncall_schedule').select('*').gte('duty_date', new Date().toISOString().slice(0,10)).order('duty_date').limit(30); list = data||[]; }catch(e){}
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>📅 إدارة جدول المناوبة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>التاريخ</label><input class="input" type="date" id="oc_date" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="field"><label>اسم المناوب</label><input class="input" id="oc_name" placeholder="اسم الموظف المسؤول"></div>
+    <div class="field"><label>ملاحظات</label><input class="input" id="oc_notes" placeholder="اختياري"></div>
+    <button class="btn primary block" onclick="saveOnCall()">💾 حفظ</button>
+    <div class="section-title"><h2 style="font-size:12px">الجدول القادم</h2></div>
+    ${list.length ? list.map(o=>`<div class="site-card" style="padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
+      <div><b>${fmtDateAr(o.duty_date)}</b> — ${o.display_name}</div>
+      <button class="btn sm danger" onclick="deleteOnCall('${o.id}')">🗑</button>
+    </div>`).join('') : '<div class="empty">لا يوجد جدول مستقبلي بعد.</div>'}
+  `;
+}
+async function saveOnCall(){
+  const payload = {
+    duty_date: document.getElementById('oc_date').value,
+    display_name: document.getElementById('oc_name').value.trim(),
+    notes: document.getElementById('oc_notes').value.trim(),
+    created_by: currentProfile.id
+  };
+  if(!payload.duty_date || !payload.display_name){ toast('أدخل التاريخ والاسم'); return; }
+  try{
+    const {error} = await supa.from('oncall_schedule').insert(payload);
+    if(error) throw error;
+    await logAudit('تحديد مناوبة', `${payload.display_name} — ${fmtDateAr(payload.duty_date)}`);
+    toast('✅ تم الحفظ'); openOnCallManager(); loadOnCallCard();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'تحقق من تشغيل schema_part10.sql')); }
+}
+async function deleteOnCall(id){
+  try{ await supa.from('oncall_schedule').delete().eq('id',id); toast('تم الحذف'); openOnCallManager(); loadOnCallCard(); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 
 </script>
