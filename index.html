@@ -2765,6 +2765,28 @@ async function loadCameras(factoryId){
     </div>`).join('');
 }
 function openCameraForm(factoryId, camId){
+  const isNew = !camId;
+  const f = factoriesData.find(x=>x.id===factoryId);
+  if(isNew && f && !f.use_individual_cameras && (f.cameras_total||0)>0){
+    openModal(`
+      <div class="modal-head"><h3>⚠️ تنبيه مهم قبل المتابعة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <p style="font-size:13px;line-height:1.9;color:var(--text)">
+        هذا المصنع يستخدم حاليًا <b>الأرقام الإجمالية اليدوية</b> (${f.cameras_total} كاميرا).<br><br>
+        لو بدأت تضيف كاميرات فردية، هيتحوّل المصنع تلقائيًا لوضع <b>"التتبع الفردي"</b>، وهيبقى إجمالي الكاميرات = عدد السجلات الفردية اللي تضيفها بس (مش الرقم اليدوي القديم).<br><br>
+        <b style="color:var(--amber)">تأكد إنك عايز تضيف كل الـ${f.cameras_total} كاميرا فرديًا فعلًا قبل ما تكمل، وإلا هيظهر الإجمالي أقل من الحقيقي.</b>
+      </p>
+      <button class="btn primary block" onclick="confirmSwitchToIndividualCameras('${factoryId}')">فهمت، كمّل بإضافة الكاميرا</button>
+      <button class="btn block" style="margin-top:8px" onclick="closeModal()">إلغاء</button>
+    `);
+    return;
+  }
+  renderCameraFormModal(factoryId, camId);
+}
+async function confirmSwitchToIndividualCameras(factoryId){
+  try{ await supa.from('factories').update({use_individual_cameras:true}).eq('id',factoryId); }catch(e){ console.warn(e); }
+  renderCameraFormModal(factoryId, null);
+}
+function renderCameraFormModal(factoryId, camId){
   const c = camId ? camerasData.find(x=>x.id===camId) : null;
   const isNew = !c;
   const d = c || {camera_number:'', camera_name:'', status:'تعمل', fault_reason:'', notes:'', responsible:''};
@@ -3068,6 +3090,28 @@ async function loadScreens(factoryId){
     </div>`).join('');
 }
 function openScreenForm(factoryId, screenId){
+  const isNew = !screenId;
+  const f = factoriesData.find(x=>x.id===factoryId);
+  if(isNew && f && !f.use_individual_screens && (f.screens||0)>0){
+    openModal(`
+      <div class="modal-head"><h3>⚠️ تنبيه مهم قبل المتابعة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <p style="font-size:13px;line-height:1.9;color:var(--text)">
+        هذا المصنع يستخدم حاليًا <b>الأرقام الإجمالية اليدوية</b> (${f.screens} شاشة).<br><br>
+        لو بدأت تضيف شاشات فردية، هيتحوّل المصنع تلقائيًا لوضع <b>"التتبع الفردي"</b>، وهيبقى إجمالي الشاشات = عدد السجلات الفردية بس.<br><br>
+        <b style="color:var(--amber)">تأكد إنك عايز تضيف كل الـ${f.screens} شاشة فرديًا فعلًا قبل ما تكمل.</b>
+      </p>
+      <button class="btn primary block" onclick="confirmSwitchToIndividualScreens('${factoryId}')">فهمت، كمّل بإضافة الشاشة</button>
+      <button class="btn block" style="margin-top:8px" onclick="closeModal()">إلغاء</button>
+    `);
+    return;
+  }
+  renderScreenFormModal(factoryId, screenId);
+}
+async function confirmSwitchToIndividualScreens(factoryId){
+  try{ await supa.from('factories').update({use_individual_screens:true}).eq('id',factoryId); }catch(e){ console.warn(e); }
+  renderScreenFormModal(factoryId, null);
+}
+function renderScreenFormModal(factoryId, screenId){
   const s = screenId ? screensRecordsData.find(x=>x.id===screenId) : null;
   const isNew = !s;
   const d = s || {screen_number:'', screen_name:'', status:'تعمل', fault_reason:'', notes:''};
