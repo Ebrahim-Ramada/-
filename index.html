@@ -2730,7 +2730,18 @@ async function loadCameras(factoryId){
   }catch(e){ console.error(e); camerasData=[]; }
   const host = document.getElementById('camerasListHost');
   if(!host) return;
-  if(!camerasData.length){ host.innerHTML = '<div class="empty">لا توجد كاميرات مسجّلة بعد لهذا الموقع.</div>'; return; }
+  if(!camerasData.length){
+    const f = factoriesData.find(x=>x.id===factoryId);
+    const manualTotal = f ? (f.cameras_total||0) : 0;
+    host.innerHTML = manualTotal>0
+      ? `<div class="empty" style="text-align:right;line-height:1.9">
+          💡 هذا المصنع يستخدم حاليًا <b>الأرقام الإجمالية اليدوية</b> (${manualTotal} كاميرا مسجّلة من "تعديل المصنع")، ولا توجد بعد سجلات فردية لكل كاميرا هنا.
+          <br>ده وضع طبيعي وسليم — الأرقام الإجمالية شغّالة عادي في التقارير والداشبورد.
+          ${isAdmin()? '<br><br>لو حبيت تتابع كل كاميرا لوحدها (صورة/حالة/سبب عطل مستقل)، ابدأ بإضافتها من الزرار فوق.':''}
+        </div>`
+      : '<div class="empty">لا توجد كاميرات مسجّلة بعد لهذا الموقع.</div>';
+    return;
+  }
   host.innerHTML = camerasData.map(c=>`
     <div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
@@ -3029,7 +3040,18 @@ async function loadScreens(factoryId){
   }catch(e){ console.error(e); screensRecordsData=[]; }
   const host = document.getElementById('screensListHost');
   if(!host) return;
-  if(!screensRecordsData.length){ host.innerHTML='<div class="empty">لا توجد شاشات مسجّلة بعد.</div>'; return; }
+  if(!screensRecordsData.length){
+    const f = factoriesData.find(x=>x.id===factoryId);
+    const manualTotal = f ? (f.screens||0) : 0;
+    host.innerHTML = manualTotal>0
+      ? `<div class="empty" style="text-align:right;line-height:1.9">
+          💡 هذا المصنع يستخدم حاليًا <b>الأرقام الإجمالية اليدوية</b> (${manualTotal} شاشة مسجّلة من "تعديل المصنع")، ولا توجد بعد سجلات فردية لكل شاشة هنا.
+          <br>ده وضع طبيعي وسليم — الأرقام الإجمالية شغّالة عادي في التقارير والداشبورد.
+          ${isAdmin()? '<br><br>لو حبيت تتابع كل شاشة لوحدها، ابدأ بإضافتها من الزرار فوق.':''}
+        </div>`
+      : '<div class="empty">لا توجد شاشات مسجّلة بعد.</div>';
+    return;
+  }
   host.innerHTML = screensRecordsData.map(s=>`
     <div class="site-card">
       <div class="site-name" style="font-size:14px">${s.screen_name}</div>
