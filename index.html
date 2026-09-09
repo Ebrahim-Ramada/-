@@ -640,15 +640,23 @@ async function doSignOut(){
 /* ============================================================
    دورة حياة الجلسة: مراقبة تسجيل الدخول/الخروج تلقائيًا
    (تُفعَّل من startApp() بعد التأكد من تحميل مكتبة Supabase بنجاح)
+   ملاحظة مهمة: Supabase يطلق هذا الحدث كثيرًا (مثل تجديد الرمز
+   التلقائي كل ساعة، أو عند رجوعك للتطبيق بعد تصفّح شيء آخر).
+   يجب عدم إعادة تحميل/الخروج من التطبيق إلا عند دخول أو خروج حقيقي.
    ============================================================ */
 function registerAuthListener(){
   supa.auth.onAuthStateChange(async (event, session)=>{
     currentSession = session;
-    if(session){
-      await loadProfileAndEnterApp();
-    } else {
+    if(event === 'SIGNED_OUT' || !session){
       renderAuthScreen();
+      return;
     }
+    if(event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED'){
+      // الجلسة اتجددت فقط — لا داعي لإعادة تحميل كل شيء أو المخاطرة بتسجيل خروج بسبب خطأ شبكة عابر
+      return;
+    }
+    // SIGNED_IN أو INITIAL_SESSION فقط
+    await loadProfileAndEnterApp();
   });
 }
 
@@ -700,6 +708,12 @@ async function loadProfileAndEnterApp(){
     startPresenceHeartbeat();
   }catch(e){
     console.error('فشل تحميل الملف الشخصي', e);
+    // لو كان عندنا بالفعل بروفايل محمّل من قبل (يعني المستخدم داخل التطبيق أصلًا)،
+    // فده على الأغلب خطأ شبكة عابر — لا نسجّل خروجه أبدًا، فقط نبلغه ونستمر
+    if(currentProfile){
+      toast('⚠️ تعذّر تحديث بياناتك (مشكلة شبكة مؤقتة) — تابع استخدام التطبيق بأمان');
+      return;
+    }
     if(e.code==='PGRST116' || (e.message||'').includes('multiple (or no) rows')){
       toast('⚠️ حسابك مسجّل لكن بدون صف صلاحيات في قاعدة البيانات. شغّل ملف fix_missing_profiles.sql في SQL Editor ثم أعد تسجيل الدخول.');
     } else {
@@ -855,7 +869,15 @@ function getAlerts(){
   });
   return alerts;
 }
-let dismissedAlerts = new Set();
+const DISMISSED_ALERTS_KEY = 'rc_dismissed_alerts_v1';
+function loadDismissedAlerts(){
+  try{ return new Set(JSON.parse(localStorage.getItem(DISMISSED_ALERTS_KEY) || '[]')); }
+  catch(e){ return new Set(); }
+}
+function saveDismissedAlerts(){
+  try{ localStorage.setItem(DISMISSED_ALERTS_KEY, JSON.stringify([...dismissedAlerts])); }catch(e){}
+}
+let dismissedAlerts = loadDismissedAlerts();
 let lastBadAlertSig = '';
 function playAlertBeep(){
   if(localStorage.getItem('rc_sound_alerts')==='0') return;
@@ -873,9 +895,9 @@ function playAlertBeep(){
     });
   }catch(e){}
 }
-function dismissAlert(idx){
-  const alerts = getAlerts();
-  if(alerts[idx]) dismissedAlerts.add(alerts[idx].text);
+function dismissAlert(alertText){
+  dismissedAlerts.add(alertText);
+  saveDismissedAlerts();
   renderAlertsBar();
 }
 function renderAlertsBar(){
@@ -887,9 +909,9 @@ function renderAlertsBar(){
   lastBadAlertSig = badSig;
   const alerts = allAlerts.filter(a=>!dismissedAlerts.has(a.text));
   if(!alerts.length){ box.innerHTML=''; }
-  else box.innerHTML = alerts.slice(0,4).map((a,idx)=>`
+  else box.innerHTML = alerts.slice(0,4).map((a)=>`
     <div class="offline-banner alert-item" style="display:flex;margin-top:8px;${a.level==='bad'?'border-color:rgba(255,107,107,.4);color:#FFD4D4;background:linear-gradient(90deg, rgba(255,107,107,.12), rgba(255,107,107,.03))':''}">
-      <span>${a.text}</span><button class="dismiss" onclick="dismissAlert(${idx})" title="إخفاء">✕</button>
+      <span>${a.text}</span><button class="dismiss" onclick='dismissAlert(${JSON.stringify(a.text)})' title="إخفاء">✕</button>
     </div>`).join('');
   updateNotifDot();
 }
@@ -926,6 +948,7 @@ async function openNotifications(){
   const list = await buildNotificationsList();
   openModal(`
     <div class="modal-head"><h3>🔔 الإشعارات</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${getAlerts().length ? `<button class="btn sm block" style="margin-bottom:10px" onclick="clearAllAlerts()">🗑️ مسح كل التنبيهات الحالية</button>` : ''}
     ${list.length===0? `<div class="empty">لا توجد إشعارات حاليًا.</div>` :
       list.slice(0,25).map(n=>`
       <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px;display:flex;gap:8px">
@@ -939,6 +962,13 @@ async function openNotifications(){
   `);
   setLastSeenNow();
   updateNotifDot();
+}
+function clearAllAlerts(){
+  getAlerts().forEach(a=> dismissedAlerts.add(a.text));
+  saveDismissedAlerts();
+  renderAlertsBar();
+  closeModal();
+  toast('✅ تم مسح كل التنبيهات');
 }
 
 // تحويل صف قاعدة البيانات لنفس شكل الحسابات المستخدم في الواجهة
@@ -1452,7 +1482,9 @@ const PERM_LABELS = {
   view_stats:'الإحصائيات', view_comparisons:'المقارنات', view_faults:'الأعطال', view_repairs:'الإصلاحات',
   view_archive:'الأرشيف', export_pdf:'تحميل PDF', export_excel:'تحميل Excel', export_word:'تحميل Word', export_image:'التقرير المصور',
   view_audit_log:'عرض سجل التدقيق', export_audit_log:'تصدير سجل التدقيق',
-  create_report:'إنشاء التقارير', view_report:'عرض شاشة التقرير', print_report:'طباعة التقرير', delete_report:'حذف من الأرشيف'
+  create_report:'إنشاء التقارير', view_report:'عرض شاشة التقرير', print_report:'طباعة التقرير', delete_report:'حذف من الأرشيف',
+  view_store:'عرض المخزن', view_store_images:'عرض صور المخزن', upload_store_images:'رفع صور المخزن', edit_store_images:'استبدال صور المخزن', delete_store_images:'حذف صور المخزن',
+  view_roomneeds:'عرض احتياجات الغرفة', view_roomneeds_images:'عرض صور احتياجات الغرفة', upload_roomneeds_images:'رفع صور احتياجات الغرفة', edit_roomneeds_images:'استبدال صور احتياجات الغرفة', delete_roomneeds_images:'حذف صور احتياجات الغرفة'
 };
 function renderUsersList(){
   const host = document.getElementById('usersListHost');
@@ -2437,8 +2469,12 @@ async function loadPreventiveTasks(){
     if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل بيانات الصيانة: ${e.message||'تحقق من تفعيل جدول preventive_maintenance'}</div>`;
     return;
   }
+  try{ const {data} = await supa.from('maintenance_images').select('*').order('sort_order'); maintenanceImagesData = data||[]; }
+  catch(e){ maintenanceImagesData = []; }
   renderMaintenanceList();
 }
+let maintenanceImagesData = [];
+function getMaintenanceImages(taskId){ return maintenanceImagesData.filter(im=>im.task_id===taskId); }
 function renderMaintenanceList(){
   const host = document.getElementById('maintListHost');
   if(!host) return;
@@ -2449,19 +2485,73 @@ function renderMaintenanceList(){
   );
   if(!list.length){ host.innerHTML = '<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
   const today = new Date().toISOString().slice(0,10);
-  host.innerHTML = list.map(t=>`
-    <div class="site-card">
+  host.innerHTML = list.map(t=>{
+    const images = getMaintenanceImages(t.id);
+    return `<div class="site-card">
       <div style="display:flex;justify-content:space-between">
         <div class="site-name" style="font-size:14px">${t.target_name}</div>
         <span class="pill ${t.scheduled_date<today?'bad':'ok'}">${t.scheduled_date<today?'متأخرة':'مجدولة'}</span>
       </div>
       <div class="site-meta">${t.maintenance_type} — ${fmtDateAr(t.scheduled_date)} — تتكرر: ${t.recurrence||'مرة واحدة'}</div>
       ${t.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${t.notes}</p>`:''}
-      ${isAdmin()? `<div class="btn-row">
-        <button class="btn sm" onclick="openMaintenanceForm('${t.id}')">✏️ تعديل</button>
-        <button class="btn sm danger" onclick="deleteMaintenanceTask('${t.id}')">🗑 حذف</button>
-      </div>`:''}
-    </div>`).join('');
+      ${images.length ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
+        ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
+      </div>` : ''}
+      <div class="btn-row">
+        <button class="btn sm" onclick="openMaintenanceGallery('${t.id}')">🖼️ الصور (${images.length})</button>
+        ${isAdmin()? `<button class="btn sm" onclick="openMaintenanceForm('${t.id}')">✏️ تعديل</button>
+        <button class="btn sm danger" onclick="deleteMaintenanceTask('${t.id}')">🗑 حذف</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function openMaintenanceGallery(taskId){
+  const t = preventiveTasks.find(x=>x.id===taskId);
+  const images = getMaintenanceImages(taskId);
+  openModal(`
+    <div class="modal-head"><h3>🖼️ صور الصيانة: ${t.target_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${isAdmin() ? `<div style="border:2px dashed var(--border);border-radius:12px;padding:16px;text-align:center;margin-bottom:12px">
+      <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور (قبل/بعد)<input type="file" accept="image/*" multiple style="display:none" onchange="uploadMaintenanceImages('${taskId}', this)"></label>
+    </div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      ${images.length===0 ? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
+        images.map((im,i)=>`
+        <div style="position:relative">
+          <img src="${im.image_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>
+          ${isAdmin()? `<button onclick="deleteMaintenanceImage('${im.id}','${taskId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;cursor:pointer">🗑</button>`:''}
+        </div>`).join('')}
+    </div>
+  `);
+}
+async function uploadMaintenanceImages(taskId, inputEl){
+  if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
+  const files = Array.from(inputEl.files||[]);
+  if(!files.length) return;
+  toast(`جاري رفع ${files.length} صورة...`);
+  let ok=0;
+  for(const file of files){
+    try{
+      const compressed = await compressImageFile(file);
+      const path = `maintenance/${taskId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
+      const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(upErr) throw upErr;
+      const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      const {error} = await supa.from('maintenance_images').insert({task_id:taskId, image_url:pub.publicUrl, created_by:currentProfile.id});
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(e); }
+  }
+  const {data} = await supa.from('maintenance_images').select('*').order('sort_order');
+  maintenanceImagesData = data||[];
+  toast(`✅ تم رفع ${ok} صورة`); openMaintenanceGallery(taskId); renderMaintenanceList();
+}
+async function deleteMaintenanceImage(imageId, taskId){
+  if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
+  try{
+    await supa.from('maintenance_images').delete().eq('id', imageId);
+    maintenanceImagesData = maintenanceImagesData.filter(x=>x.id!==imageId);
+    toast('✅ تم الحذف'); openMaintenanceGallery(taskId); renderMaintenanceList();
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function openMaintenanceForm(id){
   const t = id ? preventiveTasks.find(x=>x.id===id) : null;
@@ -2857,8 +2947,12 @@ async function loadFaults(){
     if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل بيانات الأعطال: ${e.message||'تحقق من تفعيل جدول faults'}</div>`;
     return;
   }
+  try{ const {data} = await supa.from('fault_images').select('*').order('sort_order'); faultImagesData = data||[]; }
+  catch(e){ faultImagesData = []; }
   renderFaultsList();
 }
+let faultImagesData = [];
+function getFaultImages(faultId){ return faultImagesData.filter(im=>im.fault_id===faultId); }
 function renderFaultsList(){
   const host = document.getElementById('faultsListHost');
   if(!host) return;
@@ -2872,6 +2966,7 @@ function renderFaultsList(){
     const responseMin = f.response_started_at ? Math.round((new Date(f.response_started_at)-new Date(f.reported_at))/60000) : null;
     const repairHrs = f.resolved_at ? ((new Date(f.resolved_at)-new Date(f.reported_at))/3600000).toFixed(1) : null;
     const factoryName = factoriesData.find(s=>s.id===f.factory_id)?.name || '';
+    const images = getFaultImages(f.id);
     return `<div class="site-card">
       <div style="display:flex;justify-content:space-between">
         <div class="site-name" style="font-size:14px">${f.device_name} <span class="pill ${FAULT_SEVERITY_COLOR[f.severity]}" style="margin-right:6px">${f.severity}</span></div>
@@ -2880,15 +2975,67 @@ function renderFaultsList(){
       <div class="site-meta">${factoryName} ${f.fault_type?'· '+f.fault_type:''} ${f.description?'— '+f.description:''}</div>
       <div style="font-size:11px;color:var(--muted-2);margin-top:6px">أُبلغ عنه: ${new Date(f.reported_at).toLocaleString('ar-EG')}
         ${responseMin!=null?` · زمن الاستجابة: ${responseMin} دقيقة`:''}${repairHrs!=null?` · زمن الإصلاح: ${repairHrs} ساعة`:''}</div>
-      ${isAdmin() ? `<div class="btn-row" style="margin-top:8px">
-        <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateFaultStatus('${f.id}', this.value)">
+      ${images.length ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
+        ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
+      </div>` : ''}
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn sm" onclick="openFaultGallery('${f.id}')">🖼️ الصور (${images.length})</button>
+        ${isAdmin() ? `<select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateFaultStatus('${f.id}', this.value)">
           ${['مفتوح','جاري الإصلاح','تم الإصلاح','مغلق','متوقف بانتظار قطع غيار'].map(s=>`<option ${f.status===s?'selected':''}>${s}</option>`).join('')}
         </select>
         <button class="btn sm" onclick="openFaultForm('${f.id}')">✏️ تعديل</button>
-        <button class="btn sm danger" onclick="deleteFault('${f.id}')">🗑 حذف</button>
-      </div>` : ''}
+        <button class="btn sm danger" onclick="deleteFault('${f.id}')">🗑 حذف</button>` : ''}
+      </div>
     </div>`;
   }).join('');
+}
+function openFaultGallery(faultId){
+  const f = faultsData.find(x=>x.id===faultId);
+  const images = getFaultImages(faultId);
+  openModal(`
+    <div class="modal-head"><h3>🖼️ صور العطل: ${f.device_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${isAdmin() ? `<div id="faultGalleryDropzone" style="border:2px dashed var(--border);border-radius:12px;padding:16px;text-align:center;margin-bottom:12px">
+      <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadFaultImages('${faultId}', this)"></label>
+    </div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      ${images.length===0 ? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
+        images.map((im,i)=>`
+        <div style="position:relative">
+          <img src="${im.image_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>
+          ${isAdmin()? `<button onclick="deleteFaultImage('${im.id}','${faultId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;cursor:pointer">🗑</button>`:''}
+        </div>`).join('')}
+    </div>
+  `);
+}
+async function uploadFaultImages(faultId, inputEl){
+  if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
+  const files = Array.from(inputEl.files||[]);
+  if(!files.length) return;
+  toast(`جاري رفع ${files.length} صورة...`);
+  let ok=0;
+  for(const file of files){
+    try{
+      const compressed = await compressImageFile(file);
+      const path = `faults/${faultId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
+      const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(upErr) throw upErr;
+      const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      const {error} = await supa.from('fault_images').insert({fault_id:faultId, image_url:pub.publicUrl, created_by:currentProfile.id});
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(e); }
+  }
+  const {data} = await supa.from('fault_images').select('*').order('sort_order');
+  faultImagesData = data||[];
+  toast(`✅ تم رفع ${ok} صورة`); openFaultGallery(faultId); renderFaultsList();
+}
+async function deleteFaultImage(imageId, faultId){
+  if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
+  try{
+    await supa.from('fault_images').delete().eq('id', imageId);
+    faultImagesData = faultImagesData.filter(x=>x.id!==imageId);
+    toast('✅ تم الحذف'); openFaultGallery(faultId); renderFaultsList();
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function openFaultForm(id){
   const f = id ? faultsData.find(x=>x.id===id) : null;
@@ -2969,6 +3116,7 @@ function computeItemBalance(itemId){
   return storeTransactionsData.filter(t=>t.item_id===itemId).reduce((bal,t)=> bal + (t.in_qty||0) - (t.out_qty||0), 0);
 }
 function renderStorePlaceholder(){
+  if(!isAdmin() && !hasPerm('view_store')) return `<div class="view active"><div class="empty">🚫 لا تملك صلاحية عرض المخزن. تواصل مع الأدمن لتفعيلها.</div></div>`;
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>📦 مشتملات ومخزن الغرفة</h2>
       ${isAdmin()? `<button class="btn primary sm" onclick="openStoreItemForm()">+ إضافة صنف</button>`:''}
@@ -3036,7 +3184,7 @@ function renderStoreList(){
         <span class="pill ${balance>0?'ok':'bad'}" style="font-size:13px;font-weight:800">الرصيد: ${balance}</span>
       </div>
       ${item.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${item.notes}</p>`:''}
-      ${images.length ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
+      ${(images.length && (isAdmin()||hasPerm('view_store_images'))) ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
         ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
         ${images.length>5? `<div style="width:52px;height:52px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);flex:none">+${images.length-5}</div>`:''}
       </div>` : ''}
@@ -3045,7 +3193,7 @@ function renderStoreList(){
         <tbody>${txns.map(t=>`<tr><td>${fmtDateAr(t.transaction_date)}</td><td class="num-ok" style="color:var(--success)">${t.in_qty||0}</td><td style="color:var(--danger)">${t.out_qty||0}</td><td>${t.reason||'—'}</td><td>${t.destination||'—'}</td>${isAdmin()?`<td><button class="btn sm danger" style="padding:2px 6px;font-size:10px" onclick="deleteStoreTransaction('${t.id}','${item.id}')">🗑</button></td>`:''}</tr>`).join('') || `<tr><td colspan="${isAdmin()?6:5}">لا توجد حركات</td></tr>`}</tbody>
       </table></div>
       <div class="btn-row">
-        <button class="btn sm" onclick="openItemGalleryModal('${item.id}')">🖼️ الصور (${images.length})</button>
+        ${(isAdmin()||hasPerm('view_store_images')) ? `<button class="btn sm" onclick="openItemGalleryModal('${item.id}')">🖼️ الصور (${images.length})</button>` : ''}
         ${isAdmin()? `<button class="btn sm primary" onclick="openStoreTransactionForm('${item.id}')">↔️ تسجيل حركة</button>
         <button class="btn sm" onclick="openStoreItemForm('${item.id}')">✏️ تعديل الصنف</button>
         <button class="btn sm danger" onclick="deleteStoreItem('${item.id}')">🗑 حذف الصنف</button>` : ''}
@@ -3089,32 +3237,38 @@ async function confirmDeleteStoreItem(id){
    معرض صور الصنف: إضافة متعددة / عرض / تكبير وتنقل / حذف
    ============================================================ */
 function openItemGalleryModal(itemId){
+  if(!isAdmin() && !hasPerm('view_store_images')){ toast('🚫 لا تملك صلاحية عرض الصور'); return; }
+  const canUpload = isAdmin() || hasPerm('upload_store_images');
+  const canDelete = isAdmin() || hasPerm('delete_store_images');
   const item = storeItemsData.find(x=>x.id===itemId);
   const images = getItemImages(itemId);
   openModal(`
     <div class="modal-head"><h3>🖼️ صور: ${item.item_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div id="itemGalleryDropzone" style="border:2px dashed var(--border);border-radius:12px;padding:18px;text-align:center;margin-bottom:12px">
+    ${canUpload ? `<div id="itemGalleryDropzone" style="border:2px dashed var(--border);border-radius:12px;padding:18px;text-align:center;margin-bottom:12px">
       <p style="font-size:12px;color:var(--muted);margin:0 0 8px">اسحب الصور هنا أو اضغط للاختيار (يمكن اختيار أكثر من صورة)</p>
       <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadItemImages('${itemId}', this)"></label>
-    </div>
+    </div>` : ''}
     <div id="itemGalleryGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
       ${images.length===0 ? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
         images.map((im,i)=>`
         <div style="position:relative">
           <img src="${im.image_url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>
-          ${isAdmin()? `<button onclick="deleteItemImage('${im.id}','${itemId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;cursor:pointer">🗑</button>`:''}
+          ${canDelete? `<button onclick="deleteItemImage('${im.id}','${itemId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;cursor:pointer">🗑</button>`:''}
         </div>`).join('')}
     </div>
   `);
-  const dz = document.getElementById('itemGalleryDropzone');
-  dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.style.borderColor='var(--accent)'; });
-  dz.addEventListener('dragleave', ()=>{ dz.style.borderColor='var(--border)'; });
-  dz.addEventListener('drop', e=>{
-    e.preventDefault(); dz.style.borderColor='var(--border)';
-    if(e.dataTransfer.files.length) uploadItemImages(itemId, {files:e.dataTransfer.files});
-  });
+  if(canUpload){
+    const dz = document.getElementById('itemGalleryDropzone');
+    dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.style.borderColor='var(--accent)'; });
+    dz.addEventListener('dragleave', ()=>{ dz.style.borderColor='var(--border)'; });
+    dz.addEventListener('drop', e=>{
+      e.preventDefault(); dz.style.borderColor='var(--border)';
+      if(e.dataTransfer.files.length) uploadItemImages(itemId, {files:e.dataTransfer.files});
+    });
+  }
 }
 async function uploadItemImages(itemId, inputEl){
+  if(!isAdmin() && !hasPerm('upload_store_images')){ toast('🚫 لا تملك صلاحية رفع الصور'); return; }
   const files = Array.from(inputEl.files||[]);
   if(!files.length) return;
   toast(`جاري رفع ${files.length} صورة...`);
@@ -3140,6 +3294,7 @@ async function uploadItemImages(itemId, inputEl){
   renderStoreList();
 }
 async function deleteItemImage(imageId, itemId){
+  if(!isAdmin() && !hasPerm('delete_store_images')){ toast('🚫 لا تملك صلاحية حذف الصور'); return; }
   try{
     const {error} = await supa.from('store_item_images').delete().eq('id', imageId);
     if(error) throw error;
@@ -3636,6 +3791,7 @@ async function exportLightingPdf(){
 let roomNeedsData = [];
 let roomNeedsFilter = { text:'', status:'', priority:'' };
 function renderRoomNeedsPlaceholder(){
+  if(!isAdmin() && !hasPerm('view_roomneeds')) return `<div class="view active"><div class="empty">🚫 لا تملك صلاحية عرض احتياجات الغرفة. تواصل مع الأدمن لتفعيلها.</div></div>`;
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>📋 احتياجات الغرفة</h2>
       ${isAdmin()? `<button class="btn primary sm" onclick="openRoomNeedForm()">+ إضافة احتياج</button>`:''}
@@ -3696,17 +3852,17 @@ function renderRoomNeedsList(){
       </div>
       ${r.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${r.description}</p>`:''}
       <div style="font-size:10.5px;color:var(--muted-2);margin-top:4px">أُضيف: ${fmtDateAr(r.created_at.slice(0,10))}${r.fulfilled_date?` · نُفِّذ: ${fmtDateAr(r.fulfilled_date)}`:''}</div>
-      ${r.photo_url? `<img src="${r.photo_url}" style="width:100%;max-height:150px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
+      ${(r.photo_url && (isAdmin()||hasPerm('view_roomneeds_images')))? `<img src="${r.photo_url}" style="width:100%;max-height:150px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
       ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
-      ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
-        <label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRoomNeedPhoto('${r.id}',this)"></label>
-        ${r.photo_url ? `<button class="btn sm danger" onclick="removeRoomNeedPhoto('${r.id}')">🗑 حذف الصورة</button>` : ''}
-        <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateRoomNeedStatus('${r.id}', this.value)">
+      <div class="btn-row" style="margin-top:8px">
+        ${(isAdmin()||hasPerm('upload_roomneeds_images')) ? `<label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRoomNeedPhoto('${r.id}',this)"></label>` : ''}
+        ${(r.photo_url && (isAdmin()||hasPerm('delete_roomneeds_images'))) ? `<button class="btn sm danger" onclick="removeRoomNeedPhoto('${r.id}')">🗑 حذف الصورة</button>` : ''}
+        ${isAdmin()? `<select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateRoomNeedStatus('${r.id}', this.value)">
           ${['لم يتم التنفيذ','قيد التنفيذ','تم التنفيذ'].map(s=>`<option ${r.status===s?'selected':''}>${s}</option>`).join('')}
         </select>
         <button class="btn sm" onclick="openRoomNeedForm('${r.id}')">✏️</button>
-        <button class="btn sm danger" onclick="deleteRoomNeed('${r.id}')">🗑 حذف السجل</button>
-      </div>`:''}
+        <button class="btn sm danger" onclick="deleteRoomNeed('${r.id}')">🗑 حذف السجل</button>` : ''}
+      </div>
     </div>`).join('');
 }
 function openRoomNeedForm(id){
@@ -3751,6 +3907,7 @@ async function updateRoomNeedStatus(id, status){
   }catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 async function uploadRoomNeedPhoto(id, inputEl){
+  if(!isAdmin() && !hasPerm('upload_roomneeds_images')){ toast('🚫 لا تملك صلاحية رفع الصور'); return; }
   const file = inputEl.files[0]; if(!file) return;
   toast('جاري رفع الصورة...');
   try{
@@ -3765,6 +3922,7 @@ async function uploadRoomNeedPhoto(id, inputEl){
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
 async function removeRoomNeedPhoto(id){
+  if(!isAdmin() && !hasPerm('delete_roomneeds_images')){ toast('🚫 لا تملك صلاحية حذف الصور'); return; }
   try{ await supa.from('room_needs').update({photo_url:null}).eq('id',id); toast('✅ تم حذف الصورة'); loadRoomNeeds(); }
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
@@ -4477,13 +4635,14 @@ async function gatherAllAppData(){
   [data.cameras, data.screens, data.faults, data.maintenanceLog, data.archive,
    data.storeItems, data.storeTransactions, data.storeItemImages,
    data.layouts, data.racks, data.switches, data.ups, data.auditLog,
-   data.cameraMods, data.lighting, data.preventiveTasks] = await Promise.all([
+   data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds] = await Promise.all([
     safe('cameras'), safe('screens'), safe('faults'), safe('maintenance_log'),
     safe('reports_archive', q=>q.order('report_date',{ascending:false}).limit(200)),
     safe('store_items'), safe('store_transactions'), safe('store_item_images'),
     safe('factory_layouts'), safe('factory_racks'), safe('factory_switches'), safe('factory_ups'),
     safe('audit_log', q=>q.order('ts',{ascending:false}).limit(300)),
-    safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance')
+    safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance'),
+    safe('fault_images'), safe('maintenance_images'), safe('room_needs')
   ]);
   return data;
 }
@@ -4514,12 +4673,15 @@ async function buildAllExcelWorkbook(d){
     rows.forEach((r,i)=>{ const row=ws.addRow(r); row.eachCell(c=>{ c.border=border; if(i%2===1) c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F7FB'}}; }); });
     return ws;
   }
-  // تحميل كل الصور المطلوبة كـ Base64 مسبقًا (صور أصناف، خرائط، راكات، سويتشات، UPS)
+  // تحميل كل الصور المطلوبة كـ Base64 مسبقًا (كل مصادر الصور في التطبيق)
   toast('جاري تحميل الصور لتضمينها في الملف...');
   const allImgUrls = [
     ...d.storeItemImages.map(im=>im.image_url),
     ...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url),
-    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url)
+    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url),
+    ...(d.faultImages||[]).map(im=>im.image_url), ...(d.maintenanceImagesAll||[]).map(im=>im.image_url),
+    ...d.cameras.map(c=>c.photo_url), ...(d.cameraMods||[]).flatMap(c=>[c.photo_before_url,c.photo_after_url]),
+    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url)
   ];
   await urlsToDataUris(allImgUrls);
 
@@ -4623,9 +4785,36 @@ async function buildAllExcelWorkbook(d){
       addEmbeddedImage(wb, ws, __imgDataCache[u.photo_url], 6, rr-1, 90, 90);
     });
   }
-  // الأعطال
-  if(d.faults.length) sheetFromRows('الأعطال', ['المصنع','الجهاز','النوع','الخطورة','الحالة','تاريخ الإبلاغ'],
-    d.faults.map(f=>[d.sites.find(s=>s.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]));
+  // الأعطال — بصورة أولى مضمّنة فعليًا لكل عطل
+  if(d.faults.length){
+    const ws = wb.addWorksheet('الأعطال', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    const headers = ['المصنع','الجهاز','النوع','الخطورة','الحالة','تاريخ الإبلاغ','صورة'];
+    ws.columns = headers.map(()=>({width:16}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.faults.forEach((f,i)=>{
+      const rr = i+2;
+      const vals = [d.sites.find(s=>s.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')];
+      vals.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); c.value=v; c.border=border; });
+      ws.getCell(rr,7).border=border; ws.getRow(rr).height=75;
+      const img = (d.faultImages||[]).find(im=>im.fault_id===f.id);
+      if(img) addEmbeddedImage(wb, ws, __imgDataCache[img.image_url], 6, rr-1, 90, 90);
+    });
+  }
+  // الصيانة الوقائية — بصورة أولى مضمّنة فعليًا لكل مهمة
+  if(d.preventiveTasks.length){
+    const ws = wb.addWorksheet('الصيانة الوقائية', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    const headers = ['الموقع','نوع الصيانة','الموعد','التكرار','صورة'];
+    ws.columns = headers.map(()=>({width:18}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=26;
+    d.preventiveTasks.forEach((t,i)=>{
+      const rr = i+2;
+      const vals = [t.target_name, t.maintenance_type, fmtDateAr(t.scheduled_date), t.recurrence||'مرة واحدة'];
+      vals.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); c.value=v; c.border=border; });
+      ws.getCell(rr,5).border=border; ws.getRow(rr).height=75;
+      const img = (d.maintenanceImagesAll||[]).find(im=>im.task_id===t.id);
+      if(img) addEmbeddedImage(wb, ws, __imgDataCache[img.image_url], 4, rr-1, 90, 90);
+    });
+  }
   // التقارير (الأرشيف)
   if(d.archive.length) sheetFromRows('التقارير', ['التاريخ','الوردية','معد التقرير','حالة الغرفة'],
     d.archive.map(a=>[fmtDateAr(a.report_date), a.shift||'', a.preparer||'', a.room_status||'']));
@@ -4657,7 +4846,10 @@ async function buildAllReportHtml(d){
   const allImgUrls = [
     ...d.storeItemImages.map(im=>im.image_url),
     ...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url),
-    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url)
+    ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url),
+    ...(d.faultImages||[]).map(im=>im.image_url), ...(d.maintenanceImagesAll||[]).map(im=>im.image_url),
+    ...d.cameras.map(c=>c.photo_url), ...(d.cameraMods||[]).flatMap(c=>[c.photo_before_url,c.photo_after_url]),
+    ...(d.lighting||[]).map(l=>l.photo_url), ...(d.roomNeeds||[]).map(r=>r.photo_url)
   ];
   await urlsToDataUris(allImgUrls);
   const imgTag = (url, w) => { const du = __imgDataCache[url]; return du ? `<img src="${du}" style="width:${w||90}px;height:${w||90}px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px">` : ''; };
@@ -4691,7 +4883,21 @@ async function buildAllReportHtml(d){
     const imgs = d.storeItemImages.filter(im=>im.item_id===it.id).slice(0,3).map(im=>imgTag(im.image_url,60)).join('');
     return [it.item_name,it.item_type||'',bal,imgs];
   })));
-  if(d.faults.length) html += section('الأعطال', table(['المصنع','الجهاز','الخطورة','الحالة'], d.faults.map(f=>[d.sites.find(s=>s.id===f.factory_id)?.name||'',f.device_name,f.severity,f.status])));
+  if(d.faults.length) html += section('الأعطال', table(['المصنع','الجهاز','الخطورة','الحالة','صورة'], d.faults.map(f=>{
+    const img = (d.faultImages||[]).find(im=>im.fault_id===f.id);
+    return [d.sites.find(s=>s.id===f.factory_id)?.name||'',f.device_name,f.severity,f.status, img?imgTag(img.image_url,60):''];
+  })));
+  if(d.preventiveTasks.length) html += section('الصيانة الوقائية', table(['الموقع','نوع الصيانة','الموعد','صورة'], d.preventiveTasks.map(pt=>{
+    const img = (d.maintenanceImagesAll||[]).find(im=>im.task_id===pt.id);
+    return [pt.target_name, pt.maintenance_type, fmtDateAr(pt.scheduled_date), img?imgTag(img.image_url,60):''];
+  })));
+  if(d.lighting && d.lighting.length) html += section('احتياجات الإضاءة', table(['المصنع','المكان','الحالة','صورة'], d.lighting.map(l=>[l.factory_name,l.place_name,l.status,imgTag(l.photo_url,60)])));
+  if(d.roomNeeds && d.roomNeeds.length) html += section('احتياجات الغرفة', table(['العنوان','الحالة','صورة'], d.roomNeeds.map(r=>[r.title,r.status,imgTag(r.photo_url,60)])));
+  if(d.cameraMods && d.cameraMods.length) html += section('الكاميرات المطلوب تعديلها (قبل/بعد)', d.cameraMods.map(c=>`
+    <div style="display:inline-block;text-align:center;margin:6px;vertical-align:top">
+      <div style="display:flex;gap:4px">${imgTag(c.photo_before_url,80)}${imgTag(c.photo_after_url,80)}</div>
+      <div style="font-size:10px;color:#555">${c.camera_name} — ${c.status}</div>
+    </div>`).join(''));
   if(d.archive.length) html += section('أرشيف التقارير', table(['التاريخ','الوردية','معد التقرير','الحالة'], d.archive.slice(0,50).map(a=>[fmtDateAr(a.report_date),a.shift||'',a.preparer||'',a.room_status||''])));
   html += `<p style="text-align:center;color:#888;margin-top:30px;font-size:11px;border-top:1px dashed #ccc;padding-top:10px">— تصدير شامل تلقائي من نظام غرفة المراقبة المركزية — إعداد وتشغيل: إبراهيم رمضان —</p></div>`;
   return html;
@@ -4734,7 +4940,7 @@ async function exportAllPptx(){
   try{
     const d = await gatherAllAppData();
     const t = d.totals;
-    const allImgUrls = [...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url), ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url), ...d.storeItemImages.map(im=>im.image_url)];
+    const allImgUrls = [...d.layouts.filter(l=>l.file_type==='image').map(l=>l.file_url), ...d.racks.map(r=>r.photo_url), ...d.switches.map(sw=>sw.photo_url), ...d.ups.map(u=>u.photo_url), ...d.storeItemImages.map(im=>im.image_url), ...(d.faultImages||[]).map(im=>im.image_url), ...(d.maintenanceImagesAll||[]).map(im=>im.image_url)];
     await urlsToDataUris(allImgUrls);
     const pptx = new PptxGenJS();
     pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
