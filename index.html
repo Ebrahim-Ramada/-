@@ -2343,6 +2343,12 @@ function renderSettingsView(){
       <button class="btn primary block" onclick="forceAppUpdate()">⚡ فرض التحديث الآن</button>
     </div>
 
+    ${isAdmin()? `<div class="site-card" style="margin-top:14px;border-color:var(--amber)">
+      <div class="site-name" style="font-size:14px;margin-bottom:6px">📥 ترحيل بيانات الكاميرات المنقطعة القديمة</div>
+      <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">لو عندك كاميرات مسجّلة في النظام القديم (قبل التوحيد مع الأعطال)، راجعها هنا وحدد لكل واحدة "اشتغلت" أو "لسه واقفة" بضغطة واحدة — بدون إعادة كتابة أي بيانات.</p>
+      <button class="btn primary block" onclick="openDownCamsMigrationTool()">فتح أداة الترحيل</button>
+    </div>`:''}
+
     <div class="site-card" style="margin-top:14px">
       <div class="site-name" style="font-size:14px;margin-bottom:8px">🔒 القفل السريع على هذا الجهاز</div>
       <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">طبقة إضافية اختيارية غير مرتبطة بحساب Supabase — تفيد لو سبت الهاتف وابعدت شوية.</p>
@@ -2679,80 +2685,64 @@ async function openUnifiedDownCamerasModal(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
   if(!f) return;
   openModal(`<div class="modal-head"><h3>📷 الكاميرات المنقطعة — ${f.name}</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  await reloadUnifiedDownCams(factoryId);
+  renderUnifiedDownCamerasModal(factoryId);
+}
+async function reloadUnifiedDownCams(factoryId){
   try{
-    const {data, error} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).eq('status','منقطعة').order('down_date',{ascending:false});
+    const {data, error} = await supa.from('faults').select('*').eq('factory_id', factoryId).eq('device_type','camera').in('status', DOWNCAM_OPEN_STATUSES).order('reported_at',{ascending:false});
     if(error) throw error;
     downCamsData = data||[];
-  }catch(e){ downCamsData = []; }
-  renderUnifiedDownCamerasModal(factoryId);
+    const ids = downCamsData.map(c=>c.id);
+    if(ids.length){ const {data:imgs} = await supa.from('fault_images').select('*').in('fault_id', ids); downCamsImagesData = imgs||[]; }
+    else downCamsImagesData = [];
+  }catch(e){ downCamsData = []; downCamsImagesData = []; }
 }
 function renderUnifiedDownCamerasModal(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
-  const list = downCamsData.filter(c=>c.status==='منقطعة');
+  const list = downCamsData;
   document.getElementById('modalHost').innerHTML = `
     <div class="modal-head"><h3>📷 الكاميرات المنقطعة — ${f.name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <p style="font-size:11px;color:var(--muted-2);margin-top:-6px;margin-bottom:10px">${f.cameras_down||0} كاميرا منقطعة (إجمالي المصنع) من أصل ${f.cameras_total||0} — نسبة التشغيل ${fmtPct2(computeFactory(f).camUptime)}</p>
     ${isAdmin()? `<button class="btn primary sm block" style="margin-bottom:10px" onclick="openDownCamFormInline('${factoryId}')">+ تسجيل كاميرا منقطعة</button>`:''}
-    ${list.length===0? `<div class="empty">لا توجد كاميرات مسجّلة تفصيليًا بعد. ${isAdmin()?'اضغط "+ تسجيل كاميرا منقطعة" فوق لتسجيل كل كاميرا باسمها وصورتها.':''}</div>` :
-      list.map(c=>`
-      <div style="background:var(--bg-2);border:1px solid var(--border-soft);border-radius:12px;padding:10px;margin-bottom:8px">
+    ${list.length===0? `<div class="empty">لا توجد كاميرات مسجّلة تفصيليًا بعد. ${isAdmin()?'اضغط "+ تسجيل كاميرا منقطعة" فوق لتسجيل كل كاميرا باسمها وصورتها (بيانات هذا السجل نفسها تظهر في "الأعطال").':''}</div>` :
+      list.map(c=>{
+        const photo = getDownCamPhoto(c.id);
+        return `<div style="background:var(--bg-2);border:1px solid var(--border-soft);border-radius:12px;padding:10px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:10px">
-          ${c.photo_url? `<img src="${c.photo_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
+          ${photo? `<img src="${photo}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${photo}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:700">${c.camera_name}</div>
-            <div style="font-size:10px;color:var(--muted-2)">انقطعت: ${new Date(c.down_date).toLocaleDateString('ar-EG')}</div>
+            <div style="font-size:13px;font-weight:700">${c.device_name}</div>
+            ${c.description? `<div style="font-size:10.5px;color:var(--muted)">${c.description}</div>`:''}
+            <div style="font-size:10px;color:var(--muted-2)">انقطعت: ${new Date(c.reported_at).toLocaleDateString('ar-EG')} — <span class="pill ${FAULT_SEVERITY_COLOR[c.severity]}" style="font-size:9px">${c.severity}</span></div>
           </div>
         </div>
         ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
           <button class="btn sm" style="background:var(--success);color:#fff" onclick="markCameraRestoredInline('${c.id}','${factoryId}')">✅ تم تشغيلها</button>
           <button class="btn sm" onclick="openEditDownCamName('${c.id}')">✏️ تعديل الاسم</button>
-          <label class="btn sm" style="cursor:pointer">${c.photo_url?'استبدال':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadDownCamPhotoInline('${c.id}','${factoryId}',this)"></label>
-          ${c.photo_url? `<button class="btn sm danger" onclick="removeDownCamPhotoInline('${c.id}','${factoryId}')">🗑</button>`:''}
+          <label class="btn sm" style="cursor:pointer">${photo?'استبدال':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadDownCamPhotoInline('${c.id}','${factoryId}',this)"></label>
+          ${photo? `<button class="btn sm danger" onclick="removeDownCamPhotoInline('${c.id}','${factoryId}')">🗑</button>`:''}
         </div>`:''}
-      </div>`).join('')}
+      </div>`;}).join('')}
     ${f.root_causes? `<div style="margin-top:6px;font-size:12px;color:var(--muted);background:var(--bg-2);border-radius:8px;padding:8px 10px"><b style="color:var(--amber)">المشكلات الجذرية:</b> ${f.root_causes}</div>`:''}
     <button class="btn block" style="margin-top:10px" onclick="closeModal(); goTo('downcams','${factoryId}')">📂 فتح الأرشيف الكامل (الكاميرات التي تم تشغيلها)</button>
     ${isAdmin()? `<button class="btn block" style="margin-top:8px" onclick="closeModal(); openFactoryForm('${factoryId}')">✏️ تعديل بيانات الموقع (الأرقام الإجمالية)</button>`:''}
   `;
 }
-function openDownCamFormInline(factoryId){
-  openModal(`
-    <div class="modal-head"><h3>+ تسجيل كاميرا منقطعة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>اسم الكاميرا *</label><input class="input" id="dc_name"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="dc_notes"></textarea></div>
-    <button class="btn primary block" onclick="saveDownCamFormInline('${factoryId}')">💾 حفظ</button>
-  `);
-}
-async function saveDownCamFormInline(factoryId){
-  const name = document.getElementById('dc_name').value.trim();
-  if(!name){ toast('أدخل اسم الكاميرا'); return; }
-  try{
-    const {error} = await supa.from('factory_down_cameras').insert({ factory_id: factoryId, camera_name: name, notes: document.getElementById('dc_notes').value.trim(), status:'منقطعة', created_by: currentProfile.id });
-    if(error) throw error;
-    const f = factoriesData.find(x=>x.id===factoryId);
-    await logAudit('تسجيل كاميرا منقطعة', `${f?f.name:''} — ${name}`);
-    toast('✅ تم التسجيل');
-    const {data} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).eq('status','منقطعة').order('down_date',{ascending:false});
-    downCamsData = data||[];
-    renderUnifiedDownCamerasModal(factoryId);
-  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
-}
+function openDownCamFormInline(factoryId){ openDownCamForm(factoryId); }
 async function markCameraRestoredInline(id, factoryId){
   await markCameraRestored(id);
-  try{
-    const {data} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).eq('status','منقطعة').order('down_date',{ascending:false});
-    downCamsData = data||[];
-  }catch(e){ downCamsData = downCamsData.filter(x=>x.id!==id); }
+  await reloadUnifiedDownCams(factoryId);
   renderUnifiedDownCamerasModal(factoryId);
 }
 async function uploadDownCamPhotoInline(id, factoryId, inputEl){
   await uploadDownCamPhoto(id, inputEl);
-  try{ const {data} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).eq('status','منقطعة').order('down_date',{ascending:false}); downCamsData = data||[]; }catch(e){}
+  await reloadUnifiedDownCams(factoryId);
   renderUnifiedDownCamerasModal(factoryId);
 }
 async function removeDownCamPhotoInline(id, factoryId){
   await removeDownCamPhoto(id);
-  try{ const {data} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).eq('status','منقطعة').order('down_date',{ascending:false}); downCamsData = data||[]; }catch(e){}
+  await reloadUnifiedDownCams(factoryId);
   renderUnifiedDownCamerasModal(factoryId);
 }
 
@@ -2762,9 +2752,67 @@ function renderCamerasPlaceholder(factoryId){
     <div class="section-title" style="margin-top:0"><h2>🎥 كاميرات: ${f?f.name:'—'}</h2>
       ${isAdmin()? `<button class="btn primary sm" onclick="openCameraForm('${factoryId}')">+ إضافة كاميرا</button>`:''}
     </div>
-    <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+    <div class="btn-row">
+      <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+      ${isAdmin()? `<button class="btn sm" onclick="openCameraTypesManager('${factoryId}')">📷 الشركات والدقات</button>`:''}
+    </div>
+    <div id="cameraStatsHost" style="margin-top:10px"></div>
     <div id="camerasListHost" style="margin-top:12px"><div class="empty">جاري التحميل...</div></div>
   </div>`;
+}
+function renderCameraStats(factoryId){
+  const host = document.getElementById('cameraStatsHost');
+  if(!host || !camerasData.length) { if(host) host.innerHTML=''; return; }
+  const byBrand = {}, byRes = {}, byType = {};
+  camerasData.forEach(c=>{
+    if(c.brand) byBrand[c.brand] = (byBrand[c.brand]||0)+1;
+    if(c.resolution) byRes[c.resolution] = (byRes[c.resolution]||0)+1;
+    if(c.camera_type) byType[c.camera_type] = (byType[c.camera_type]||0)+1;
+  });
+  const chip = (label, n) => `<span class="pill" style="margin:2px">${label}: ${n}</span>`;
+  const hasAny = Object.keys(byBrand).length || Object.keys(byRes).length || Object.keys(byType).length;
+  if(!hasAny){ host.innerHTML=''; return; }
+  host.innerHTML = `<div class="site-card" style="padding:10px 12px">
+    <div style="font-size:11px;color:var(--muted-2);margin-bottom:6px">📊 إحصائيات الكاميرات (${camerasData.length} إجمالي)</div>
+    ${Object.keys(byBrand).length? `<div>${Object.entries(byBrand).map(([k,v])=>chip(k,v)).join('')}</div>`:''}
+    ${Object.keys(byRes).length? `<div style="margin-top:4px">${Object.entries(byRes).map(([k,v])=>chip(k,v)).join('')}</div>`:''}
+    ${Object.keys(byType).length? `<div style="margin-top:4px">${Object.entries(byType).map(([k,v])=>chip(k,v)).join('')}</div>`:''}
+  </div>`;
+}
+/* ---------- إدارة الشركات المصنعة والدقات لكل مصنع ---------- */
+async function openCameraTypesManager(factoryId, returnToCamId){
+  openModal(`<div class="modal-head"><h3>📷 أنواع الكاميرات بالمصنع</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  let brands = [], resolutions = [];
+  try{ const {data} = await supa.from('camera_brands').select('*').eq('factory_id',factoryId).order('name'); brands = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('camera_resolutions').select('*').eq('factory_id',factoryId).order('name'); resolutions = data||[]; }catch(e){}
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>📷 أنواع الكاميرات بالمصنع</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <h4 style="font-size:12.5px;color:var(--accent);margin-top:0">🏭 الشركات المصنعة</h4>
+    <div class="field" style="display:flex;gap:6px"><input class="input" id="newBrandName" placeholder="مثال: Hikvision"><button class="btn sm primary" onclick="addCameraBrand('${factoryId}')">+ إضافة</button></div>
+    <div style="margin-bottom:14px">${brands.length? brands.map(b=>`<span class="pill" style="margin:2px;display:inline-flex;align-items:center;gap:4px">${b.name} <span style="cursor:pointer;color:var(--danger)" onclick="deleteCameraBrand('${b.id}','${factoryId}')">✕</span></span>`).join('') : '<span style="font-size:11px;color:var(--muted-2)">لا توجد شركات مضافة بعد.</span>'}</div>
+    <h4 style="font-size:12.5px;color:var(--accent)">🔍 الدقات</h4>
+    <div class="field" style="display:flex;gap:6px"><input class="input" id="newResName" placeholder="مثال: 4MP"><button class="btn sm primary" onclick="addCameraResolution('${factoryId}')">+ إضافة</button></div>
+    <div>${resolutions.length? resolutions.map(r=>`<span class="pill" style="margin:2px;display:inline-flex;align-items:center;gap:4px">${r.name} <span style="cursor:pointer;color:var(--danger)" onclick="deleteCameraResolution('${r.id}','${factoryId}')">✕</span></span>`).join('') : '<span style="font-size:11px;color:var(--muted-2)">لا توجد دقات مضافة بعد.</span>'}</div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:12px">💡 القوائم دي خاصة بهذا المصنع فقط، وهتظهر تلقائيًا كخيارات عند إضافة أي كاميرا جديدة.</p>
+  `;
+}
+async function addCameraBrand(factoryId){
+  const name = document.getElementById('newBrandName').value.trim();
+  if(!name) return;
+  try{ const {error} = await supa.from('camera_brands').insert({factory_id:factoryId, name, created_by:currentProfile.id}); if(error) throw error; toast('✅ تمت الإضافة'); openCameraTypesManager(factoryId); }
+  catch(e){ toast('🚫 تعذّر الإضافة (ربما مُضافة بالفعل)'); }
+}
+async function deleteCameraBrand(id, factoryId){
+  try{ await supa.from('camera_brands').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId); }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+async function addCameraResolution(factoryId){
+  const name = document.getElementById('newResName').value.trim();
+  if(!name) return;
+  try{ const {error} = await supa.from('camera_resolutions').insert({factory_id:factoryId, name, created_by:currentProfile.id}); if(error) throw error; toast('✅ تمت الإضافة'); openCameraTypesManager(factoryId); }
+  catch(e){ toast('🚫 تعذّر الإضافة (ربما مُضافة بالفعل)'); }
+}
+async function deleteCameraResolution(id, factoryId){
+  try{ await supa.from('camera_resolutions').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId); }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function loadCameras(factoryId){
   try{
@@ -2772,6 +2820,7 @@ async function loadCameras(factoryId){
     if(error) throw error;
     camerasData = data||[];
   }catch(e){ console.error(e); camerasData=[]; }
+  renderCameraStats(factoryId);
   const host = document.getElementById('camerasListHost');
   if(!host) return;
   if(!camerasData.length){
@@ -2833,20 +2882,41 @@ async function confirmSwitchToIndividualCameras(factoryId){
 async function renderCameraFormModal(factoryId, camId){
   const c = camId ? camerasData.find(x=>x.id===camId) : null;
   const isNew = !c;
-  const d = c || {camera_number:'', camera_name:'', status:'تعمل', fault_reason:'', notes:'', responsible:'', switch_id:'', port_number:''};
-  let factorySwitches = [];
+  const d = c || {camera_number:'', camera_name:'', status:'تعمل', fault_reason:'', notes:'', responsible:'', switch_id:'', port_number:'',
+    camera_type:'', brand:'', resolution:'', model:'', serial_number:'', ip_address:'', mac_address:'', location:'', rack_id:'', install_date:''};
+  let factorySwitches = [], factoryRacks = [], brands = [], resolutions = [];
   try{ const {data} = await supa.from('factory_switches').select('*').eq('factory_id', factoryId).order('switch_name'); factorySwitches = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('factory_racks').select('*').eq('factory_id', factoryId).order('rack_name'); factoryRacks = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('camera_brands').select('*').eq('factory_id', factoryId).order('name'); brands = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('camera_resolutions').select('*').eq('factory_id', factoryId).order('name'); resolutions = data||[]; }catch(e){}
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا':'تعديل كاميرا'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="row2">
-      <div class="field"><label>رقم الكاميرا</label><input class="input" id="cf_number" value="${d.camera_number||''}"></div>
-      <div class="field"><label>الحالة</label><select class="input" id="cf_status">${['تعمل','عطل','تحت الصيانة','متوقفة مؤقتًا'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
-    </div>
+    <button class="btn sm block" style="margin-bottom:10px" onclick="openCameraTypesManager('${factoryId}', '${camId||''}')">📷 إدارة الشركات والدقات لهذا المصنع</button>
     <div class="field"><label>اسم/موقع الكاميرا</label><input class="input" id="cf_name" value="${d.camera_name}" placeholder="مثال: بوابة الملح"></div>
     <div class="row2">
-      <div class="field"><label>Switch المتصل (اختياري)</label><select class="input" id="cf_switch"><option value="">— بدون —</option>${factorySwitches.map(sw=>`<option value="${sw.id}" ${d.switch_id===sw.id?'selected':''}>${sw.switch_name}</option>`).join('')}</select></div>
-      <div class="field"><label>رقم الـ Port</label><input class="input" id="cf_port" value="${d.port_number||''}" placeholder="مثال: 17"></div>
+      <div class="field"><label>رقم/كود الكاميرا</label><input class="input" id="cf_number" value="${d.camera_number||''}"></div>
+      <div class="field"><label>الحالة</label><select class="input" id="cf_status">${['تعمل','عطل','تحت الصيانة','متوقفة مؤقتًا'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
+    <div class="row2">
+      <div class="field"><label>نوع الكاميرا</label><input class="input" id="cf_type" value="${d.camera_type||''}" placeholder="مثال: Dome / Bullet / PTZ"></div>
+      <div class="field"><label>الشركة المصنعة</label><select class="input" id="cf_brand"><option value="">— اختر —</option>${brands.map(b=>`<option ${d.brand===b.name?'selected':''}>${b.name}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الدقة</label><select class="input" id="cf_resolution"><option value="">— اختر —</option>${resolutions.map(r=>`<option ${d.resolution===r.name?'selected':''}>${r.name}</option>`).join('')}</select></div>
+      <div class="field"><label>الموديل</label><input class="input" id="cf_model" value="${d.model||''}"></div>
+    </div>
+    <div class="field"><label>Serial Number</label><input class="input" id="cf_serial" value="${d.serial_number||''}"></div>
+    <div class="row2">
+      <div class="field"><label>IP Address</label><input class="input" id="cf_ip" value="${d.ip_address||''}"></div>
+      <div class="field"><label>MAC Address</label><input class="input" id="cf_mac" value="${d.mac_address||''}"></div>
+    </div>
+    <div class="field"><label>مكان التركيب (المنطقة/البوابة/السور/الصالة)</label><input class="input" id="cf_location" value="${d.location||''}"></div>
+    <div class="row2">
+      <div class="field"><label>الراك (اختياري)</label><select class="input" id="cf_rack"><option value="">— بدون —</option>${factoryRacks.map(r=>`<option value="${r.id}" ${d.rack_id===r.id?'selected':''}>${r.rack_name}</option>`).join('')}</select></div>
+      <div class="field"><label>Switch المتصل (اختياري)</label><select class="input" id="cf_switch"><option value="">— بدون —</option>${factorySwitches.map(sw=>`<option value="${sw.id}" ${d.switch_id===sw.id?'selected':''}>${sw.switch_name}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>رقم الـ Port</label><input class="input" id="cf_port" value="${d.port_number||''}" placeholder="مثال: 17"></div>
+    <div class="field"><label>تاريخ التركيب</label><input class="input" type="date" id="cf_install" value="${d.install_date||''}"></div>
     <div class="field"><label>سبب العطل (إن وجد)</label><input class="input" id="cf_reason" value="${d.fault_reason||''}"></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="cf_resp" value="${d.responsible||''}"></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="cf_notes">${d.notes||''}</textarea></div>
@@ -2862,6 +2932,11 @@ async function saveCameraForm(factoryId, camId){
     camera_name: name, status: newStatus, fault_reason: document.getElementById('cf_reason').value.trim(),
     switch_id: document.getElementById('cf_switch').value || null, port_number: document.getElementById('cf_port').value.trim(),
     responsible: document.getElementById('cf_resp').value.trim(), notes: document.getElementById('cf_notes').value.trim(),
+    camera_type: document.getElementById('cf_type').value.trim(), brand: document.getElementById('cf_brand').value,
+    resolution: document.getElementById('cf_resolution').value, model: document.getElementById('cf_model').value.trim(),
+    serial_number: document.getElementById('cf_serial').value.trim(), ip_address: document.getElementById('cf_ip').value.trim(),
+    mac_address: document.getElementById('cf_mac').value.trim(), location: document.getElementById('cf_location').value.trim(),
+    rack_id: document.getElementById('cf_rack').value || null, install_date: document.getElementById('cf_install').value || null,
     updated_by: currentProfile.id
   };
   try{
@@ -4132,15 +4207,19 @@ async function confirmDeleteLighting(id){
 
 /* ============================================================
    الكاميرات المنقطعة ← الكاميرات المنقطعة التي تم تشغيلها
-   أرشفة تلقائية (وليس حذف) عند تشغيل أي كاميرا منقطعة، بكل بياناتها وصورتها
+   بُنيت فوق نظام "الأعطال" الموجود فعليًا (device_type='camera')
+   بدل جدول منفصل — عشان أي تسجيل في مكان واحد يظهر بكل تفاصيله
+   وصوره في المكان التاني تلقائيًا (نفس المصدر بالظبط)
    ============================================================ */
 let downCamsData = [];
+let downCamsImagesData = [];
 let downCamsTab = 'منقطعة';
+const DOWNCAM_OPEN_STATUSES = ['مفتوح','جاري الإصلاح','متوقف بانتظار قطع غيار'];
 function renderDownCamsPlaceholder(factoryId){
   if(!factoryId){
     return `<div class="view active">
       <div class="section-title" style="margin-top:0"><h2>📷 الكاميرات المنقطعة التي تم تشغيلها</h2></div>
-      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض كاميراته فقط.</p>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض كاميراته فقط. البيانات هنا نفسها المسجّلة في "الأعطال".</p>
       <div id="downCamsFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
     </div>`;
   }
@@ -4163,9 +4242,9 @@ async function loadDownCamsFactoryPicker(){
   if(!host) return;
   let counts = {};
   try{
-    const {data} = await supa.from('factory_down_cameras').select('factory_id, status');
-    (data||[]).forEach(r=>{ if(!counts[r.factory_id]) counts[r.factory_id]={down:0,restored:0}; if(r.status==='منقطعة') counts[r.factory_id].down++; else counts[r.factory_id].restored++; });
-  }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تشغيل schema_part19.sql في Supabase.</div>`; return; }
+    const {data} = await supa.from('faults').select('factory_id, status').eq('device_type','camera');
+    (data||[]).forEach(r=>{ if(!counts[r.factory_id]) counts[r.factory_id]={down:0,restored:0}; if(DOWNCAM_OPEN_STATUSES.includes(r.status)) counts[r.factory_id].down++; else counts[r.factory_id].restored++; });
+  }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تفعيل جدول الأعطال (schema_part3.sql) في Supabase.</div>`; return; }
   if(!factoriesData.length){ host.innerHTML = '<div class="empty">لا توجد مصانع مسجّلة بعد.</div>'; return; }
   host.innerHTML = factoriesData.map(f=>{
     const c = counts[f.id] || {down:0, restored:0};
@@ -4182,44 +4261,58 @@ async function loadDownCamsFactoryPicker(){
 }
 async function loadDownCams(factoryId){
   try{
-    const {data, error} = await supa.from('factory_down_cameras').select('*').eq('factory_id', factoryId).order('down_date',{ascending:false});
+    const {data, error} = await supa.from('faults').select('*').eq('factory_id', factoryId).eq('device_type','camera').order('reported_at',{ascending:false});
     if(error) throw error;
     downCamsData = data||[];
   }catch(e){
     console.warn(e);
     const host = document.getElementById('downCamsListHost');
-    if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part19.sql في Supabase أولًا.</div>`;
+    if(host) host.innerHTML = `<div class="empty">⚠️ يحتاج تفعيل جدول الأعطال (schema_part3.sql) في Supabase أولًا.</div>`;
     return;
   }
+  try{
+    const ids = downCamsData.map(c=>c.id);
+    if(ids.length){ const {data} = await supa.from('fault_images').select('*').in('fault_id', ids); downCamsImagesData = data||[]; }
+    else downCamsImagesData = [];
+  }catch(e){ downCamsImagesData = []; }
   renderDownCamsList();
 }
+function getDownCamPhoto(faultId){ const im = downCamsImagesData.find(x=>x.fault_id===faultId); return im ? im.image_url : null; }
 function renderDownCamsList(){
   const host = document.getElementById('downCamsListHost');
   if(!host) return;
-  const list = downCamsData.filter(c=>c.status===downCamsTab);
+  const list = downCamsData.filter(c=> downCamsTab==='منقطعة' ? DOWNCAM_OPEN_STATUSES.includes(c.status) : !DOWNCAM_OPEN_STATUSES.includes(c.status));
   if(!list.length){ host.innerHTML = `<div class="empty">${downCamsTab==='منقطعة'?'لا توجد كاميرات منقطعة حاليًا 🎉':'لا توجد كاميرات تم تشغيلها بعد.'}</div>`; return; }
-  host.innerHTML = list.map(c=>`
-    <div class="site-card">
-      <div class="site-name" style="font-size:14px">${c.camera_name}</div>
-      <div class="site-meta">انقطعت: ${new Date(c.down_date).toLocaleString('ar-EG')}</div>
-      ${c.restored_date? `<div class="site-meta" style="color:var(--success)">اشتغلت: ${new Date(c.restored_date).toLocaleString('ar-EG')}</div>`:''}
-      ${c.photo_url? `<img src="${c.photo_url}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">`:''}
+  host.innerHTML = list.map(c=>{
+    const photo = getDownCamPhoto(c.id);
+    return `<div class="site-card">
+      <div style="display:flex;justify-content:space-between">
+        <div class="site-name" style="font-size:14px">${c.device_name}</div>
+        <span class="pill ${FAULT_SEVERITY_COLOR[c.severity]}">${c.severity}</span>
+      </div>
+      ${c.description||c.fault_type? `<div class="site-meta">${c.fault_type||''}${c.fault_type&&c.description?' — ':''}${c.description||''}</div>`:''}
+      <div class="site-meta">انقطعت: ${new Date(c.reported_at).toLocaleString('ar-EG')}</div>
+      ${c.resolved_at? `<div class="site-meta" style="color:var(--success)">اشتغلت: ${new Date(c.resolved_at).toLocaleString('ar-EG')}</div>`:''}
+      ${photo? `<img src="${photo}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${photo}')">`:''}
       ${c.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${c.notes}</p>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
         <button class="btn sm" onclick="openEditDownCamName('${c.id}')">✏️ تعديل الاسم</button>
-        <label class="btn sm" style="cursor:pointer">${c.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadDownCamPhoto('${c.id}',this)"></label>
-        ${c.photo_url? `<button class="btn sm danger" onclick="removeDownCamPhoto('${c.id}')">🗑 حذف الصورة</button>`:''}
-        ${c.status==='منقطعة'
+        <label class="btn sm" style="cursor:pointer">${photo?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadDownCamPhoto('${c.id}',this)"></label>
+        ${photo? `<button class="btn sm danger" onclick="removeDownCamPhoto('${c.id}')">🗑 حذف الصورة</button>`:''}
+        ${DOWNCAM_OPEN_STATUSES.includes(c.status)
           ? `<button class="btn sm" style="background:var(--success);color:#fff" onclick="markCameraRestored('${c.id}')">✅ تم تشغيلها</button>`
           : `<button class="btn sm" style="background:var(--danger);color:#fff" onclick="markCameraDownAgain('${c.id}')">🔴 قطعت مرة أخرى</button>`}
         <button class="btn sm danger" onclick="deleteDownCam('${c.id}')">🗑 حذف السجل</button>
       </div>`:''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function openDownCamForm(factoryId){
   openModal(`
     <div class="modal-head"><h3>+ تسجيل كاميرا منقطعة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>اسم الكاميرا *</label><input class="input" id="dc_name"></div>
+    <div class="field"><label>وصف المشكلة</label><input class="input" id="dc_desc" placeholder="مثال: انقطاع الصورة والتسجيل"></div>
+    <div class="field"><label>درجة الخطورة</label><select class="input" id="dc_severity">${['عالية','متوسطة','منخفضة'].map(s=>`<option ${s==='متوسطة'?'selected':''}>${s}</option>`).join('')}</select></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="dc_notes"></textarea></div>
     <button class="btn primary block" onclick="saveDownCamForm('${factoryId}')">💾 حفظ</button>
   `);
@@ -4228,9 +4321,10 @@ async function saveDownCamForm(factoryId){
   const name = document.getElementById('dc_name').value.trim();
   if(!name){ toast('أدخل اسم الكاميرا'); return; }
   try{
-    const {error} = await supa.from('factory_down_cameras').insert({
-      factory_id: factoryId, camera_name: name, notes: document.getElementById('dc_notes').value.trim(),
-      status:'منقطعة', created_by: currentProfile.id
+    const {error} = await supa.from('faults').insert({
+      factory_id: factoryId, device_type:'camera', device_name: name,
+      description: document.getElementById('dc_desc').value.trim(), severity: document.getElementById('dc_severity').value,
+      notes: document.getElementById('dc_notes').value.trim(), status:'مفتوح', reported_at: new Date().toISOString(), created_by: currentProfile.id
     });
     if(error) throw error;
     const f = factoriesData.find(x=>x.id===factoryId);
@@ -4241,22 +4335,22 @@ async function saveDownCamForm(factoryId){
 async function markCameraRestored(id){
   try{
     const c = downCamsData.find(x=>x.id===id);
-    const {error} = await supa.from('factory_down_cameras').update({status:'تم تشغيلها', restored_date:new Date().toISOString(), updated_by:currentProfile.id}).eq('id',id);
+    const {error} = await supa.from('faults').update({status:'مغلق', resolved_at:new Date().toISOString()}).eq('id',id);
     if(error) throw error;
     const f = factoriesData.find(x=>x.id===c.factory_id);
     const now = new Date().toLocaleString('ar-EG');
-    await logAudit('تشغيل كاميرا ونقلها للأرشيف', `تم تشغيل الكاميرا ونقلها من "الكاميرات المنقطعة" إلى "الكاميرات المنقطعة التي تم تشغيلها" — مصنع (${f?f.name:''}) — اسم الكاميرا (${c.camera_name}) — التاريخ والوقت (${now})`);
-    toast('✅ تم تشغيلها ونقلها للأرشيف تلقائيًا'); loadDownCams(c.factory_id);
+    await logAudit('تشغيل كاميرا ونقلها للأرشيف', `تم تشغيل الكاميرا ونقلها من "الكاميرات المنقطعة" إلى "الكاميرات المنقطعة التي تم تشغيلها" — مصنع (${f?f.name:''}) — اسم الكاميرا (${c.device_name}) — التاريخ والوقت (${now})`);
+    toast('✅ تم تشغيلها ونقلها للأرشيف تلقائيًا (نفس سجل الأعطال)'); loadDownCams(c.factory_id);
   }catch(e){ console.error(e); toast('🚫 تعذّر التحديث: '+(e.message||'')); }
 }
 async function markCameraDownAgain(id){
   try{
     const c = downCamsData.find(x=>x.id===id);
-    const {error} = await supa.from('factory_down_cameras').update({status:'منقطعة', down_date:new Date().toISOString(), restored_date:null, updated_by:currentProfile.id}).eq('id',id);
+    const {error} = await supa.from('faults').update({status:'مفتوح', resolved_at:null, reported_at:new Date().toISOString()}).eq('id',id);
     if(error) throw error;
     const f = factoriesData.find(x=>x.id===c.factory_id);
     const now = new Date().toLocaleString('ar-EG');
-    await logAudit('عودة كاميرا للانقطاع', `انقطعت الكاميرا مرة أخرى — مصنع (${f?f.name:''}) — اسم الكاميرا (${c.camera_name}) — التاريخ والوقت (${now})`);
+    await logAudit('عودة كاميرا للانقطاع', `انقطعت الكاميرا مرة أخرى — مصنع (${f?f.name:''}) — اسم الكاميرا (${c.device_name}) — التاريخ والوقت (${now})`);
     toast('🔴 تم تسجيلها كمنقطعة مرة أخرى — بنفس بياناتها وصورتها'); downCamsTab='منقطعة'; loadDownCams(c.factory_id);
   }catch(e){ console.error(e); toast('🚫 تعذّر التحديث: '+(e.message||'')); }
 }
@@ -4265,7 +4359,7 @@ function openEditDownCamName(id){
   if(!c) return;
   openModal(`
     <div class="modal-head"><h3>✏️ تعديل بيانات الكاميرا</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>اسم الكاميرا</label><input class="input" id="edc_name" value="${c.camera_name}"></div>
+    <div class="field"><label>اسم الكاميرا</label><input class="input" id="edc_name" value="${c.device_name}"></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="edc_notes">${c.notes||''}</textarea></div>
     <button class="btn primary block" onclick="saveEditDownCamName('${id}')">💾 حفظ</button>
   `);
@@ -4275,8 +4369,8 @@ async function saveEditDownCamName(id){
   if(!newName){ toast('أدخل اسم الكاميرا'); return; }
   try{
     const c = downCamsData.find(x=>x.id===id);
-    const oldName = c.camera_name;
-    const {error} = await supa.from('factory_down_cameras').update({camera_name:newName, notes:document.getElementById('edc_notes').value.trim(), updated_by:currentProfile.id}).eq('id',id);
+    const oldName = c.device_name;
+    const {error} = await supa.from('faults').update({device_name:newName, notes:document.getElementById('edc_notes').value.trim()}).eq('id',id);
     if(error) throw error;
     if(newName!==oldName) await logAudit('تعديل اسم كاميرا منقطعة', `${oldName} → ${newName}`, oldName, newName);
     closeModal(); toast('✅ تم الحفظ'); loadDownCams(currentViewCtx);
@@ -4284,14 +4378,14 @@ async function saveEditDownCamName(id){
 }
 function deleteDownCam(id){
   openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">هذا حذف نهائي للسجل (وليس نقل للأرشيف). متأكد؟</p>
+    <p style="font-size:13px;color:var(--muted)">هذا حذف نهائي لسجل العطل بالكامل (وسيختفي من شاشة الأعطال أيضًا). متأكد؟</p>
     <button class="btn danger block" onclick="confirmDeleteDownCam('${id}')">حذف نهائيًا</button>`);
 }
 async function confirmDeleteDownCam(id){
   try{
     const c = downCamsData.find(x=>x.id===id);
-    await supa.from('factory_down_cameras').delete().eq('id',id);
-    await logAudit('حذف سجل كاميرا منقطعة نهائيًا', c?c.camera_name:id);
+    await supa.from('faults').delete().eq('id',id);
+    await logAudit('حذف سجل كاميرا منقطعة نهائيًا', c?c.device_name:id);
     closeModal(); toast('تم الحذف'); loadDownCams(c?.factory_id||currentViewCtx);
   }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
@@ -4300,19 +4394,30 @@ async function uploadDownCamPhoto(id, inputEl){
   toast('جاري رفع الصورة...');
   try{
     const compressed = await compressImageFile(file);
-    const path = `downcams/${id}-${Date.now()}.jpg`;
+    const path = `faults/${id}-${Date.now()}.jpg`;
     const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
     if(upErr) throw upErr;
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
-    const {error} = await supa.from('factory_down_cameras').update({photo_url: pub.publicUrl}).eq('id', id);
-    if(error) throw error;
-    toast('✅ تم رفع الصورة'); loadDownCams(currentViewCtx);
+    const existing = getDownCamPhoto(id);
+    if(existing){
+      const oldImg = downCamsImagesData.find(x=>x.fault_id===id);
+      await supa.from('fault_images').update({image_url: pub.publicUrl}).eq('id', oldImg.id);
+    } else {
+      const {error} = await supa.from('fault_images').insert({fault_id:id, image_url:pub.publicUrl, created_by:currentProfile.id});
+      if(error) throw error;
+    }
+    toast('✅ تم رفع الصورة (ستظهر في الأعطال أيضًا)');
+    const ids = downCamsData.map(c=>c.id);
+    const {data} = await supa.from('fault_images').select('*').in('fault_id', ids);
+    downCamsImagesData = data||[];
+    renderDownCamsList();
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
 async function removeDownCamPhoto(id){
   try{
-    await supa.from('factory_down_cameras').update({photo_url:null}).eq('id', id);
-    toast('✅ تم حذف الصورة'); loadDownCams(currentViewCtx);
+    const im = downCamsImagesData.find(x=>x.fault_id===id);
+    if(im){ await supa.from('fault_images').delete().eq('id', im.id); downCamsImagesData = downCamsImagesData.filter(x=>x.id!==im.id); }
+    toast('✅ تم حذف الصورة'); renderDownCamsList();
   }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function uploadLightingPhoto(id, inputEl){
@@ -5656,50 +5761,90 @@ function renderCentralNetworkMap(){
   const otherFactories = factoriesData.filter(f=>!f.is_central_hub);
   const isLight = centralMapTheme==='light';
   const pal = isLight
-    ? { bg:'#FFFFFF', text:'#111111', sub:'#555555', hubF:'#FFF6E5', hubS:'#B8860B', facF:'#EEF3FF', facS:'#1D4ED8', ok:'#0F7A3D', warn:'#B8860B', bad:'#C62828', line:'#333333' }
-    : { bg:'#0B1220', text:'#E9EEFB', sub:'#8CA0C4', hubF:'#2A1F0E', hubS:'#F5A623', facF:'#182446', facS:'#38D9C9', ok:'#4ADE80', warn:'#F5A623', bad:'#FF6B6B', line:'#38D9C9' };
-
+    ? { bg:'#FFFFFF', text:'#111111', sub:'#555555', hubF:'#FFF6E5', hubS:'#B8860B', facF:'#EEF3FF', facS:'#1D4ED8', towerF:'#FFF0E9', towerS:'#C2410C', srvF:'#E9FBF3', srvS:'#0F7A3D', ok:'#0F7A3D', warn:'#B8860B', bad:'#C62828', line:'#333333' }
+    : { bg:'#0B1220', text:'#E9EEFB', sub:'#8CA0C4', hubF:'#2A1F0E', hubS:'#F5A623', facF:'#182446', facS:'#38D9C9', towerF:'#2A180F', towerS:'#FF9F5A', srvF:'#0F2A20', srvS:'#4ADE80', ok:'#4ADE80', warn:'#F5A623', bad:'#FF6B6B', line:'#38D9C9' };
   const statusColor = s => s==='يعمل'?pal.ok : (s==='منقطع'||s==='خارج الخدمة'?pal.bad : pal.warn);
 
-  const N = otherFactories.length;
-  const RW = 130, RH = 46, GAP = 26;
-  const svgW = Math.max(400, N*(RW+GAP)+GAP);
-  const svgH = 320;
-  const hubX = svgW/2, hubY = 50;
-  const rowY = 230;
+  if(!centralFactory){
+    document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>🌐 الخريطة المركزية للشبكة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <div class="offline-banner" style="display:block">⚠️ لم يتم تحديد أي مصنع كـ"الغرفة المركزية" بعد. حدّد ذلك من تعديل بيانات المصنع (مصنع الدولية).</div>`;
+    return;
+  }
+
+  // لكل مصنع فرعي: برجه الخاص + الرابط + البرج المقابل له داخل مصنع الدولية
+  const chains = otherFactories.map(f=>{
+    const ownTowers = allTowers.filter(t=>t.factory_id===f.id);
+    let chain = null;
+    for(const t of ownTowers){
+      const link = allLinks.find(l=>l.from_tower_id===t.id);
+      if(link){
+        const hubTower = link.to_tower_id ? allTowers.find(x=>x.id===link.to_tower_id && x.factory_id===centralFactory.id) : null;
+        chain = { factory:f, ownTower:t, link, hubTower };
+        break;
+      }
+    }
+    if(!chain) chain = { factory:f, ownTower: ownTowers[0]||null, link:null, hubTower:null };
+    return chain;
+  });
+
+  const N = Math.max(1, chains.length);
+  const COL_W = 148, GAP = 20, NODE_H = 42;
+  const svgW = Math.max(420, N*(COL_W+GAP)+GAP);
+  const yFactory = 40, yOwnTower = 120, yHubTower = 220, yServer = 310;
+  const svgH = yServer + 60;
+  const serverX = svgW/2;
 
   let svg = `<svg id="centralMapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:${pal.bg};border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
-  // خطوط من كل مصنع للغرفة المركزية
-  otherFactories.forEach((f,i)=>{
-    const fx = GAP + i*(RW+GAP) + RW/2;
-    const facTowers = allTowers.filter(t=>t.factory_id===f.id);
-    const facLinks = allLinks.filter(l=> facTowers.some(t=>t.id===l.from_tower_id));
-    const worstLink = facLinks.find(l=>l.status==='منقطع') || facLinks.find(l=>l.status==='ضعيف'||l.status==='يحتاج صيانة') || facLinks[0];
-    const lineColor = worstLink ? statusColor(worstLink.status) : pal.sub;
-    const dash = worstLink && worstLink.status==='منقطع' ? 'stroke-dasharray="6,5"' : '';
-    svg += `<path onclick="showCentralLinkDetails('${f.id}')" style="cursor:pointer" d="M${hubX},${hubY+RH/2} C${hubX},${(hubY+rowY)/2} ${fx},${(hubY+rowY)/2} ${fx},${rowY-RH/2}" stroke="${lineColor}" stroke-width="2.5" fill="none" ${dash}/>`;
-    if(worstLink){
-      const midX = (hubX+fx)/2, midY = (hubY+rowY)/2;
-      svg += `<text x="${midX}" y="${midY-4}" text-anchor="middle" fill="${lineColor}" font-size="9" font-weight="bold" font-family="Arial">${escapeXml(worstLink.status)}</text>`;
-    }
-  });
-  // الغرفة المركزية (Hub)
-  svg += `<g onclick="${centralFactory?`openFactoryReportPickerFor('${centralFactory.id}')`:''}" style="cursor:pointer">
-    <rect x="${hubX-100}" y="${hubY-RH/2}" width="200" height="${RH}" rx="10" fill="${pal.hubF}" stroke="${pal.hubS}" stroke-width="2"/>
-    <text x="${hubX}" y="${hubY-3}" text-anchor="middle" fill="${pal.text}" font-size="13" font-weight="bold" font-family="Arial">🏛️ ${centralFactory?escapeXml(centralFactory.name):'الغرفة المركزية'}</text>
-    <text x="${hubX}" y="${hubY+13}" text-anchor="middle" fill="${pal.hubS}" font-size="9.5" font-family="Arial">Central Monitoring Room</text>
-  </g>`;
-  // كل مصنع تحت
-  otherFactories.forEach((f,i)=>{
-    const fx = GAP + i*(RW+GAP) + RW/2;
-    const facTowers = allTowers.filter(t=>t.factory_id===f.id);
-    const hasTower = facTowers.length>0;
-    svg += `<g onclick="showCentralFactoryDetails('${f.id}')" style="cursor:pointer">
-      <rect x="${fx-RW/2}" y="${rowY-RH/2}" width="${RW}" height="${RH}" rx="8" fill="${pal.facF}" stroke="${pal.facS}" stroke-width="1.5"/>
-      <text x="${fx}" y="${rowY-4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">${escapeXml(f.name)}</text>
-      <text x="${fx}" y="${rowY+12}" text-anchor="middle" fill="${pal.sub}" font-size="8.5" font-family="Arial">${hasTower?'🗼 '+facTowers.length+' برج':'⚠️ بدون برج'}</text>
+
+  chains.forEach((c,i)=>{
+    const cx = GAP + i*(COL_W+GAP) + COL_W/2;
+    // 1) صندوق المصنع نفسه
+    svg += `<g onclick="showCentralFactoryDetails('${c.factory.id}')" style="cursor:pointer">
+      <rect x="${cx-COL_W/2+8}" y="${yFactory-NODE_H/2}" width="${COL_W-16}" height="${NODE_H}" rx="8" fill="${pal.facF}" stroke="${pal.facS}" stroke-width="1.5"/>
+      <text x="${cx}" y="${yFactory+4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">${escapeXml(c.factory.name)}</text>
     </g>`;
+    if(!c.ownTower){
+      svg += `<text x="${cx}" y="${yOwnTower}" text-anchor="middle" fill="${pal.sub}" font-size="9" font-family="Arial">⚠️ لا يوجد برج مسجّل</text>`;
+      return;
+    }
+    // خط: المصنع → برجه
+    svg += `<line x1="${cx}" y1="${yFactory+NODE_H/2}" x2="${cx}" y2="${yOwnTower-NODE_H/2}" stroke="${pal.line}" stroke-width="2" opacity="0.5"/>`;
+    // 2) برج المصنع نفسه
+    svg += `<g onclick="showTowerDetailsPopup('${c.ownTower.id}')" style="cursor:pointer">
+      <rect x="${cx-COL_W/2+8}" y="${yOwnTower-NODE_H/2}" width="${COL_W-16}" height="${NODE_H}" rx="8" fill="${pal.towerF}" stroke="${pal.towerS}" stroke-width="1.5"/>
+      <text x="${cx}" y="${yOwnTower-2}" text-anchor="middle" fill="${pal.text}" font-size="9.5" font-weight="bold" font-family="Arial">🗼 ${escapeXml(c.ownTower.tower_name)}</text>
+      <text x="${cx}" y="${yOwnTower+12}" text-anchor="middle" fill="${pal.towerS}" font-size="8" font-family="Arial">${escapeXml(c.ownTower.status)}</text>
+    </g>`;
+    if(!c.link){
+      svg += `<text x="${cx}" y="${yHubTower}" text-anchor="middle" fill="${pal.sub}" font-size="9" font-family="Arial">⚠️ لا يوجد رابط مسجّل</text>`;
+      return;
+    }
+    // 3) الرابط اللاسلكي (بحالته)
+    const lc = statusColor(c.link.status);
+    const dash = c.link.status==='منقطع' ? 'stroke-dasharray="6,5"' : '';
+    svg += `<line onclick="showWirelessLinkDetails('${c.link.id}')" style="cursor:pointer" x1="${cx}" y1="${yOwnTower+NODE_H/2}" x2="${cx}" y2="${yHubTower-NODE_H/2}" stroke="${lc}" stroke-width="2.5" ${dash}/>
+      <text x="${cx+4}" y="${(yOwnTower+yHubTower)/2}" fill="${lc}" font-size="8.5" font-weight="bold" font-family="Arial">${escapeXml(c.link.status)}</text>`;
+    if(!c.hubTower){
+      svg += `<text x="${cx}" y="${yHubTower}" text-anchor="middle" fill="${pal.sub}" font-size="9" font-family="Arial">⚠️ لا يوجد برج مقابل بالدولية</text>`;
+      return;
+    }
+    // 4) البرج المقابل داخل مصنع الدولية
+    svg += `<g onclick="showTowerDetailsPopup('${c.hubTower.id}')" style="cursor:pointer">
+      <rect x="${cx-COL_W/2+8}" y="${yHubTower-NODE_H/2}" width="${COL_W-16}" height="${NODE_H}" rx="8" fill="${pal.hubF}" stroke="${pal.hubS}" stroke-width="1.5"/>
+      <text x="${cx}" y="${yHubTower-2}" text-anchor="middle" fill="${pal.text}" font-size="9.5" font-weight="bold" font-family="Arial">🗼 ${escapeXml(c.hubTower.tower_name)}</text>
+      <text x="${cx}" y="${yHubTower+12}" text-anchor="middle" fill="${pal.hubS}" font-size="8" font-family="Arial">داخل ${escapeXml(centralFactory.name)}</text>
+    </g>`;
+    // خط تجميع: من برج الدولية → السيرفر المركزي
+    const midY = (yHubTower+yServer)/2;
+    svg += `<path d="M${cx},${yHubTower+NODE_H/2} C${cx},${midY} ${serverX},${midY} ${serverX},${yServer-NODE_H/2}" stroke="${pal.line}" stroke-width="2" fill="none" opacity="0.55"/>`;
   });
+
+  // السيرفر / نقطة التجميع النهائية
+  svg += `<g onclick="closeModal(); goTo('network','${centralFactory.id}')" style="cursor:pointer">
+    <rect x="${serverX-110}" y="${yServer-NODE_H/2}" width="220" height="${NODE_H}" rx="10" fill="${pal.srvF}" stroke="${pal.srvS}" stroke-width="2"/>
+    <text x="${serverX}" y="${yServer-2}" text-anchor="middle" fill="${pal.text}" font-size="12" font-weight="bold" font-family="Arial">🖥️ السيرفر / البنية التحتية المركزية</text>
+    <text x="${serverX}" y="${yServer+13}" text-anchor="middle" fill="${pal.srvS}" font-size="8.5" font-family="Arial">${escapeXml(centralFactory.name)} — دوس لعرض Racks/Switches/Servers</text>
+  </g>`;
   svg += `</svg>`;
 
   document.getElementById('modalHost').innerHTML = `
@@ -5709,14 +5854,34 @@ function renderCentralNetworkMap(){
       <div class="mini"><div class="n">${allTowers.length}</div><div class="t">إجمالي الأبراج</div></div>
       <div class="mini"><div class="n" style="color:var(--success)">${allLinks.filter(l=>l.status==='يعمل').length}/${allLinks.length}</div><div class="t">روابط تعمل</div></div>
     </div>
-    ${!centralFactory ? `<div class="offline-banner" style="display:block;margin-bottom:10px">⚠️ لم يتم تحديد أي مصنع كـ"الغرفة المركزية" بعد. حدّد ذلك من تعديل بيانات المصنع.</div>`:''}
     <div style="overflow-x:auto">${svg}</div>
     <div class="btn-row" style="margin-top:10px">
       <button class="btn" onclick="toggleCentralMapTheme()">🎨 تغيير لون الخريطة (${isLight?'أبيض':'أسود'})</button>
       <button class="btn primary" onclick="downloadCentralMap()">⬇️ تنزيل كصورة</button>
     </div>
-    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 دوس على أي مصنع لعرض بيانات اتصاله بالغرفة المركزية، أو على الخط نفسه لعرض تفاصيل الرابط.</p>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 كل مصنع له سلسلة: برجه الخاص ← الرابط اللاسلكي ← برجه المقابل داخل ${escapeXml(centralFactory.name)} ← تجميع على السيرفر المركزي. دوس على أي عنصر لعرض بياناته الكاملة. الأبراج والروابط غير المسجَّلة تظهر كتنبيه واضح بدل افتراض وجودها.</p>
   `;
+}
+function showTowerDetailsPopup(towerId){
+  const { allTowers } = window.__centralMapData || { allTowers: towersData||[] };
+  const t = allTowers.find(x=>x.id===towerId) || (towersData||[]).find(x=>x.id===towerId);
+  if(!t){ toast('تعذّر إيجاد البرج'); return; }
+  const f = factoriesData.find(x=>x.id===t.factory_id);
+  openModal(`
+    <div class="modal-head"><h3>🗼 ${t.tower_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:12px"><b>المصنع:</b> ${f?f.name:'—'} &nbsp; <b>الحالة:</b> <span class="pill ${TOWER_STATUS_COLOR[t.status]}">${t.status}</span></p>
+    <div class="mini-grid" style="margin-top:8px">
+      <div class="mini"><div class="n" style="font-size:10.5px">${t.frequency||'—'}</div><div class="t">Frequency</div></div>
+      <div class="mini"><div class="n" style="font-size:10.5px">${t.bandwidth||'—'}</div><div class="t">Bandwidth</div></div>
+      <div class="mini"><div class="n" style="font-size:10.5px">${t.antenna_count||'—'}</div><div class="t">عدد الأنتن</div></div>
+      <div class="mini"><div class="n" style="font-size:10.5px">${t.distance_km||'—'}</div><div class="t">المسافة (كم)</div></div>
+    </div>
+    ${t.brand||t.model? `<p style="font-size:11.5px;color:var(--muted);margin-top:8px"><b>الجهاز:</b> ${t.brand||''} ${t.model||''}</p>`:''}
+    ${t.ip_address? `<p style="font-size:11.5px;color:var(--muted)"><b>IP:</b> ${t.ip_address}</p>`:''}
+    ${t.direction? `<p style="font-size:11.5px;color:var(--muted)"><b>الاتجاه:</b> ${t.direction}</p>`:''}
+    ${t.notes? `<p style="font-size:11.5px;color:var(--muted)">${t.notes}</p>`:''}
+    ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn primary block" style="margin-top:10px" onclick="openTowerForm('${t.factory_id}','${t.id}')">✏️ تعديل بيانات البرج</button>`:''}
+  `);
 }
 function showCentralFactoryDetails(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
@@ -6555,14 +6720,21 @@ async function gatherFullFactoryData(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
   const s = computeFactory(f);
   const safe = async (table, extra) => { try{ let q = supa.from(table).select('*').eq('factory_id', factoryId); if(extra) q = extra(q); const {data,error} = await q; if(error) throw error; return data||[]; }catch(e){ return []; } };
-  const [cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenanceLog, restoredCameras] = await Promise.all([
+  const [cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenanceLog] = await Promise.all([
     safe('cameras', q=>q.order('camera_name')), safe('screens', q=>q.order('screen_name')),
     safe('faults', q=>q.order('reported_at',{ascending:false})), safe('lighting_needs'), safe('camera_modifications'),
     safe('factory_racks'), safe('factory_switches'), safe('factory_servers'), safe('factory_ups'), safe('factory_layouts'),
-    safe('maintenance_log'), safe('factory_down_cameras', q=>q.eq('status','تم تشغيلها').order('restored_date',{ascending:false}))
+    safe('maintenance_log')
   ]);
   let drives = [];
   if(servers.length){ try{ const {data} = await supa.from('server_drives').select('*').in('server_id', servers.map(x=>x.id)); drives = data||[]; }catch(e){} }
+  // الكاميرات المنقطعة التي تم تشغيلها = نفس سجلات الأعطال (device_type='camera') المُغلقة — مصدر واحد موحّد
+  const restoredCameras = faults.filter(fl=> fl.device_type==='camera' && !DOWNCAM_OPEN_STATUSES.includes(fl.status))
+    .map(fl=>({ camera_name: fl.device_name, down_date: fl.reported_at, restored_date: fl.resolved_at, notes: fl.notes, photo_url: null, _faultId: fl.id }));
+  try{
+    const ids = restoredCameras.map(c=>c._faultId);
+    if(ids.length){ const {data} = await supa.from('fault_images').select('*').in('fault_id', ids); (data||[]).forEach(im=>{ const rc = restoredCameras.find(c=>c._faultId===im.fault_id); if(rc) rc.photo_url = im.image_url; }); }
+  }catch(e){}
   // الصيانة الوقائية غير مرتبطة بـfactory_id مباشرة (target_name نصي) — نطابقها باسم المصنع أو أسماء أجهزته
   const deviceNames = new Set([f?.name, ...cameras.map(c=>c.camera_name), ...servers.map(sv=>sv.server_name)]);
   const maintenance = (preventiveTasks||[]).filter(t=> deviceNames.has(t.target_name));
@@ -6619,10 +6791,20 @@ async function buildFullFactoryReportHtml(d){
 
   // 3) الكاميرات
   html += h2('3. الكاميرات') + (fmtNoData(cameras) ||
-    table(['الرقم','الاسم','الحالة','Switch','Port','ملاحظات','صورة'], cameras.map(c=>{
+    table(['الرقم','الاسم','الحالة','النوع','الشركة','الدقة','Switch','Port','صورة'], cameras.map(c=>{
       const sw = switches.find(x=>x.id===c.switch_id);
-      return [c.camera_number||'—', c.camera_name, c.status, sw?sw.switch_name:'—', c.port_number||'—', c.notes||'', img(c.photo_url,55)];
+      return [c.camera_number||'—', c.camera_name, c.status, c.camera_type||'—', c.brand||'—', c.resolution||'—', sw?sw.switch_name:'—', c.port_number||'—', img(c.photo_url,55)];
     })));
+  // 3.5) إحصائيات أنواع الكاميرات
+  if(cameras.length){
+    const byBrand={}, byRes={}, byType={};
+    cameras.forEach(c=>{ if(c.brand) byBrand[c.brand]=(byBrand[c.brand]||0)+1; if(c.resolution) byRes[c.resolution]=(byRes[c.resolution]||0)+1; if(c.camera_type) byType[c.camera_type]=(byType[c.camera_type]||0)+1; });
+    const rows = [];
+    Object.entries(byBrand).forEach(([k,v])=> rows.push(['الشركة المصنعة', k, v]));
+    Object.entries(byRes).forEach(([k,v])=> rows.push(['الدقة', k, v]));
+    Object.entries(byType).forEach(([k,v])=> rows.push(['النوع', k, v]));
+    if(rows.length) html += h2('إحصائيات أنواع الكاميرات') + table(['التصنيف','القيمة','العدد'], rows);
+  }
 
   // 4) الشاشات
   html += h2('4. الشاشات') + (fmtNoData(screens) ||
@@ -6811,8 +6993,17 @@ async function generateFactoryExcelReport(factoryId){
     ['نسبة تشغيل الشاشات %', Math.round(s.scrUptime*100)/100]
   ], [26,20]);
 
-  if(cameras.length) sheetWithImages('الكاميرات', ['الرقم','الاسم','الحالة','Switch','Port','ملاحظات','صورة'],
-    cameras.map(c=>{ const sw=switches.find(x=>x.id===c.switch_id); return [c.camera_number||'',c.camera_name,c.status,sw?sw.switch_name:'',c.port_number||'',c.notes||'',null]; }), 6, i=>cameras[i].photo_url);
+  if(cameras.length) sheetWithImages('الكاميرات', ['الرقم','الاسم','الحالة','النوع','الشركة','الدقة','Switch','Port','صورة'],
+    cameras.map(c=>{ const sw=switches.find(x=>x.id===c.switch_id); return [c.camera_number||'',c.camera_name,c.status,c.camera_type||'',c.brand||'',c.resolution||'',sw?sw.switch_name:'',c.port_number||'',null]; }), 8, i=>cameras[i].photo_url);
+  if(cameras.length){
+    const byBrand={}, byRes={}, byType={};
+    cameras.forEach(c=>{ if(c.brand) byBrand[c.brand]=(byBrand[c.brand]||0)+1; if(c.resolution) byRes[c.resolution]=(byRes[c.resolution]||0)+1; if(c.camera_type) byType[c.camera_type]=(byType[c.camera_type]||0)+1; });
+    const rows = [];
+    Object.entries(byBrand).forEach(([k,v])=> rows.push(['الشركة المصنعة', k, v]));
+    Object.entries(byRes).forEach(([k,v])=> rows.push(['الدقة', k, v]));
+    Object.entries(byType).forEach(([k,v])=> rows.push(['النوع', k, v]));
+    if(rows.length) sheet('إحصائيات الكاميرات', ['التصنيف','القيمة','العدد'], rows);
+  }
   if(screens.length) sheet('الشاشات', ['الرقم','الاسم','الحالة','ملاحظات'], screens.map(sc=>[sc.screen_number||'',sc.screen_name,sc.status,sc.notes||'']));
   if(racks.length) sheetWithImages('Racks', ['الاسم','الموقع','ملاحظات','صورة'], racks.map(r=>[r.rack_name,r.location||'',r.notes||'',null]), 3, i=>racks[i].photo_url);
   if(switches.length){
@@ -7667,6 +7858,85 @@ async function forceAppUpdate(){
     }
   }catch(e){ console.warn('تعذّر مسح الكاش بالكامل (غير خطير)', e); }
   setTimeout(()=>{ location.href = location.origin + location.pathname + '?refresh=' + Date.now(); }, 300);
+}
+
+/* ============================================================
+   أداة ترحيل الكاميرات المنقطعة القديمة (factory_down_cameras)
+   إلى النظام الموحّد الحالي (faults) — بضغطة واحدة لكل سجل،
+   بدون إعادة كتابة أي بيانات أو صور يدويًا
+   ============================================================ */
+let migrationOldRecords = [];
+async function openDownCamsMigrationTool(){
+  openModal(`<div class="modal-head"><h3>📥 ترحيل الكاميرات المنقطعة القديمة</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  try{
+    const {data, error} = await supa.from('factory_down_cameras').select('*').order('down_date',{ascending:false});
+    if(error) throw error;
+    migrationOldRecords = data||[];
+  }catch(e){
+    document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>📥 ترحيل الكاميرات المنقطعة القديمة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <div class="empty">لا يوجد جدول بيانات قديم، أو تم ترحيل كل شيء بالفعل ✅</div>`;
+    return;
+  }
+  renderMigrationTool();
+}
+function renderMigrationTool(){
+  const host = document.getElementById('modalHost');
+  if(!migrationOldRecords.length){
+    host.innerHTML = `<div class="modal-head"><h3>📥 ترحيل الكاميرات المنقطعة القديمة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <div class="empty">🎉 تم ترحيل كل السجلات القديمة بنجاح — مفيش حاجة متبقية.</div>`;
+    return;
+  }
+  host.innerHTML = `
+    <div class="modal-head"><h3>📥 ترحيل الكاميرات المنقطعة القديمة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px;margin-bottom:10px">${migrationOldRecords.length} سجل متبقي. لكل سجل، دوس "✅ اشتغلت" أو "🔴 لسه واقفة" — هيترحّل تلقائيًا لنظام الأعطال بنفس الاسم والصورة والتاريخ.</p>
+    ${migrationOldRecords.map(c=>{
+      const f = factoriesData.find(x=>x.id===c.factory_id);
+      return `<div class="site-card" id="mig_${c.id}">
+        <div style="display:flex;align-items:center;gap:10px">
+          ${c.photo_url? `<img src="${c.photo_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:700">${c.camera_name}</div>
+            <div style="font-size:10.5px;color:var(--muted-2)">${f?f.name:'مصنع غير معروف'} — انقطعت: ${new Date(c.down_date).toLocaleDateString('ar-EG')}</div>
+          </div>
+        </div>
+        ${c.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${c.notes}</p>`:''}
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn sm" style="background:var(--success);color:#fff" onclick="migrateDownCam('${c.id}', true)">✅ اشتغلت</button>
+          <button class="btn sm" style="background:var(--danger);color:#fff" onclick="migrateDownCam('${c.id}', false)">🔴 لسه واقفة</button>
+          <button class="btn sm" onclick="skipMigrateDownCam('${c.id}')">⏭️ تجاهل السجل ده</button>
+        </div>
+      </div>`;
+    }).join('')}
+  `;
+}
+async function migrateDownCam(oldId, isFixed){
+  const c = migrationOldRecords.find(x=>x.id===oldId);
+  if(!c) return;
+  try{
+    const payload = {
+      factory_id: c.factory_id, device_type:'camera', device_name: c.camera_name,
+      severity:'متوسطة', status: isFixed?'مغلق':'مفتوح',
+      reported_at: c.down_date, resolved_at: isFixed?(c.restored_date||new Date().toISOString()):null,
+      notes: c.notes||'', created_by: currentProfile.id
+    };
+    const {data: newFault, error} = await supa.from('faults').insert(payload).select().single();
+    if(error) throw error;
+    if(c.photo_url && newFault){
+      await supa.from('fault_images').insert({fault_id:newFault.id, image_url:c.photo_url, created_by:currentProfile.id});
+    }
+    await supa.from('factory_down_cameras').delete().eq('id', oldId);
+    await logAudit('ترحيل كاميرا منقطعة قديمة', `${c.camera_name} — ${isFixed?'تم تشغيلها':'لسه منقطعة'}`);
+    migrationOldRecords = migrationOldRecords.filter(x=>x.id!==oldId);
+    toast(`✅ تم الترحيل (${migrationOldRecords.length} متبقي)`);
+    renderMigrationTool();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الترحيل: '+(e.message||'')); }
+}
+async function skipMigrateDownCam(oldId){
+  try{
+    await supa.from('factory_down_cameras').delete().eq('id', oldId);
+    migrationOldRecords = migrationOldRecords.filter(x=>x.id!==oldId);
+    toast('تم تجاهل السجل وحذفه من القائمة القديمة'); renderMigrationTool();
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 
 /* ============================================================
