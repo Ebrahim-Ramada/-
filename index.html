@@ -6090,7 +6090,7 @@ async function generateNetworkInfraReport(factoryId){
       <p style="color:#888">${new Date().toLocaleDateString('ar-EG')} — إعداد وتشغيل النظام: إبراهيم رمضان</p>
     </div>
     <h3>الملخص</h3>
-    <p>عدد Racks: ${racks.length} — عدد Switches: ${switches.length} — عدد Servers: ${servers.length} — عدد UPS: ${ups.length} — عدد الهاردات المسجّلة: ${drives.length}</p>
+    ${table(['البند','العدد'], [['Racks', racks.length], ['Switches', switches.length], ['Servers', servers.length], ['UPS', ups.length], ['الهاردات المسجّلة', drives.length]])}
 
     <h3>Racks</h3>
     ${racks.length? table(['الاسم','المكان','صورة'], racks.map(r=>[r.rack_name,r.location||'',imgTagLocal(r.photo_url)])) : '<p>لا توجد راكات مسجّلة.</p>'}
