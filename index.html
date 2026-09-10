@@ -1084,7 +1084,10 @@ function renderCurrentView(){
   else if(currentView==='reportscenter') { host.innerHTML = renderReportsCenterView(); }
   else if(currentView==='faults') { host.innerHTML = renderFaultsPlaceholder(); loadFaults(); }
   else if(currentView==='store') { host.innerHTML = renderStorePlaceholder(); loadStoreData(); }
-  else if(currentView==='cameramods') { host.innerHTML = renderCameraModsPlaceholder(); loadCameraMods(); }
+  else if(currentView==='cameramods') {
+    host.innerHTML = renderCameraModsPlaceholder(currentViewCtx);
+    if(currentViewCtx) loadCameraMods(currentViewCtx); else loadCameraModsFactoryPicker();
+  }
   else if(currentView==='lighting') {
     host.innerHTML = renderLightingPlaceholder(currentViewCtx);
     if(currentViewCtx) loadLightingNeeds(currentViewCtx); else loadLightingFactoryPicker();
@@ -3674,11 +3677,21 @@ async function exportStorePdf(){
    ============================================================ */
 let cameraModsData = [];
 let cameraModsFilter = { text:'', factory:'', status:'', priority:'' };
-function renderCameraModsPlaceholder(){
+function renderCameraModsPlaceholder(factoryId){
+  if(!factoryId){
+    return `<div class="view active">
+      <div class="section-title" style="margin-top:0"><h2>🎥 الكاميرات التي تحتاج إلى تعديل</h2></div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض الكاميرات الخاصة به فقط.</p>
+      <div id="cameraModsFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
+    </div>`;
+  }
+  const f = factoriesData.find(x=>x.id===factoryId);
   return `<div class="view active">
-    <div class="section-title" style="margin-top:0"><h2>🎥 الكاميرات التي تحتاج إلى تعديل</h2>
-      ${isAdmin()? `<button class="btn primary sm" onclick="openCameraModForm()">+ إضافة</button>`:''}
+    <div class="section-title" style="margin-top:0"><h2>🎥 كاميرات للتعديل: ${f?f.name:''}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openCameraModForm('${factoryId}')">+ إضافة</button>`:''}
     </div>
+    <button class="btn sm" onclick="goTo('cameramods')">→ رجوع لكل المصانع</button>
+    <div id="cameraModsSummaryHost" style="margin-top:8px"></div>
     <div class="field"><input class="input" placeholder="🔍 بحث..." oninput="cameraModsFilter.text=this.value; renderCameraModsList()"></div>
     <div class="row2">
       <div class="field"><select class="input" onchange="cameraModsFilter.status=this.value; renderCameraModsList()">
@@ -3696,11 +3709,30 @@ function renderCameraModsPlaceholder(){
     <div id="cameraModsListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
+async function loadCameraModsFactoryPicker(){
+  const host = document.getElementById('cameraModsFactoryPickerHost');
+  if(!host) return;
+  if(!factoriesData.length){ host.innerHTML = '<div class="empty">لا توجد مصانع مسجّلة بعد.</div>'; return; }
+  let counts = {};
+  try{
+    const {data} = await supa.from('camera_modifications').select('factory_id, status');
+    (data||[]).forEach(r=>{ if(!counts[r.factory_id]) counts[r.factory_id] = {total:0, open:0}; counts[r.factory_id].total++; if(r.status!=='تم التعديل') counts[r.factory_id].open++; });
+  }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تشغيل schema_part4.sql في Supabase.</div>`; return; }
+  host.innerHTML = factoriesData.map(f=>{
+    const c = counts[f.id] || {total:0, open:0};
+    return `<div class="site-card" style="cursor:pointer" onclick="goTo('cameramods','${f.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="site-name" style="font-size:14px">${f.name}</div>
+        <span class="pill ${c.open>0?'warn':'ok'}">${c.total} كاميرا${c.open>0?' · '+c.open+' مفتوح':''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
 const PRIORITY_COLOR = {'منخفضة':'ok','متوسطة':'warn','عالية':'bad','عاجلة':'bad'};
 const MOD_STATUS_COLOR = {'تحتاج تعديل':'bad','جاري التعديل':'warn','تم التعديل':'ok'};
-async function loadCameraMods(){
+async function loadCameraMods(factoryId){
   try{
-    const {data, error} = await supa.from('camera_modifications').select('*').order('created_at',{ascending:false});
+    const {data, error} = await supa.from('camera_modifications').select('*').eq('factory_id', factoryId).order('created_at',{ascending:false});
     if(error) throw error;
     cameraModsData = data||[];
   }catch(e){
@@ -3708,6 +3740,11 @@ async function loadCameraMods(){
     const host = document.getElementById('cameraModsListHost');
     if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part4.sql في Supabase أولًا.</div>`;
     return;
+  }
+  const sumHost = document.getElementById('cameraModsSummaryHost');
+  if(sumHost){
+    const open = cameraModsData.filter(c=>c.status!=='تم التعديل').length;
+    sumHost.innerHTML = `<div class="mini-grid"><div class="mini"><div class="n">${cameraModsData.length}</div><div class="t">الإجمالي</div></div><div class="mini"><div class="n" style="color:var(--danger)">${open}</div><div class="t">لسه مفتوح</div></div><div class="mini"><div class="n" style="color:var(--success)">${cameraModsData.length-open}</div><div class="t">تم التعديل</div></div></div>`;
   }
   renderCameraModsList();
 }
@@ -3759,13 +3796,14 @@ function renderCameraModsList(){
       </div>`:''}
     </div>`).join('');
 }
-function openCameraModForm(id){
+function openCameraModForm(factoryId, id){
   const c = id ? cameraModsData.find(x=>x.id===id) : null;
   const isNew = !c;
-  const d = c || {factory_name:'', place_name:'', camera_number:'', camera_name:'', camera_type:'', problem_description:'', modification_reason:'', required_change:'', priority:'متوسطة', status:'تحتاج تعديل', notes:''};
+  const currentFactory = factoriesData.find(f=>f.id===factoryId);
+  const d = c || {factory_name: currentFactory?currentFactory.name:'', place_name:'', camera_number:'', camera_name:'', camera_type:'', problem_description:'', modification_reason:'', required_change:'', priority:'متوسطة', status:'تحتاج تعديل', notes:''};
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا للتعديل':'تعديل السجل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>المصنع</label><select class="input" id="cm_factory">${factoriesData.map(f=>`<option ${d.factory_name===f.name?'selected':''}>${f.name}</option>`).join('')}</select></div>
+    <div class="field"><label>المصنع</label><select class="input" id="cm_factory">${factoriesData.map(f=>`<option value="${f.id}" ${d.factory_name===f.name?'selected':''}>${f.name}</option>`).join('')}</select></div>
     <div class="row2">
       <div class="field"><label>المكان</label><input class="input" id="cm_place" value="${d.place_name||''}"></div>
       <div class="field"><label>رقم الكاميرا</label><input class="input" id="cm_number" value="${d.camera_number||''}"></div>
@@ -3788,10 +3826,10 @@ function openCameraModForm(id){
 async function saveCameraModForm(id){
   const name = document.getElementById('cm_name').value.trim();
   if(!name){ toast('أدخل اسم الكاميرا'); return; }
-  const factoryName = document.getElementById('cm_factory').value;
-  const factory = factoriesData.find(f=>f.name===factoryName);
+  const factoryId = document.getElementById('cm_factory').value;
+  const factory = factoriesData.find(f=>f.id===factoryId);
   const payload = {
-    factory_id: factory?factory.id:null, factory_name: factoryName,
+    factory_id: factoryId||null, factory_name: factory?factory.name:'',
     place_name: document.getElementById('cm_place').value.trim(), camera_number: document.getElementById('cm_number').value.trim(),
     camera_name: name, camera_type: document.getElementById('cm_type').value.trim(),
     problem_description: document.getElementById('cm_problem').value.trim(), modification_reason: document.getElementById('cm_reason').value.trim(),
@@ -3801,11 +3839,11 @@ async function saveCameraModForm(id){
   try{
     if(id){ const {error}=await supa.from('camera_modifications').update(payload).eq('id',id); if(error) throw error; await logAudit('تعديل سجل كاميرا للتعديل', name); }
     else { payload.created_by=currentProfile.id; const {error}=await supa.from('camera_modifications').insert(payload); if(error) throw error; await logAudit('إضافة كاميرا للتعديل', name); }
-    closeModal(); toast('✅ تم الحفظ'); loadCameraMods();
+    closeModal(); toast('✅ تم الحفظ'); loadCameraMods(factoryId);
   }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 async function updateModStatus(id, status){
-  try{ await supa.from('camera_modifications').update({status}).eq('id',id); const c=cameraModsData.find(x=>x.id===id); await logAudit('تحديث حالة كاميرا للتعديل', c.camera_name,c.status,status); toast('✅ تم التحديث'); loadCameraMods(); }
+  try{ await supa.from('camera_modifications').update({status}).eq('id',id); const c=cameraModsData.find(x=>x.id===id); await logAudit('تحديث حالة كاميرا للتعديل', c.camera_name,c.status,status); toast('✅ تم التحديث'); loadCameraMods(currentViewCtx); }
   catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteCameraMod(id){
@@ -3813,7 +3851,7 @@ function deleteCameraMod(id){
     <button class="btn danger block" onclick="confirmDeleteCameraMod('${id}')">حذف نهائيًا</button>`);
 }
 async function confirmDeleteCameraMod(id){
-  try{ await supa.from('camera_modifications').delete().eq('id',id); await logAudit('حذف سجل كاميرا للتعديل', id); closeModal(); toast('تم الحذف'); loadCameraMods(); }
+  try{ await supa.from('camera_modifications').delete().eq('id',id); await logAudit('حذف سجل كاميرا للتعديل', id); closeModal(); toast('تم الحذف'); loadCameraMods(currentViewCtx); }
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function uploadModPhoto(id, which, inputEl){
@@ -3828,7 +3866,7 @@ async function uploadModPhoto(id, which, inputEl){
     const col = which==='before' ? 'photo_before_url' : 'photo_after_url';
     const {error} = await supa.from('camera_modifications').update({[col]: pub.publicUrl}).eq('id', id);
     if(error) throw error;
-    toast('✅ تم رفع الصورة'); loadCameraMods();
+    toast('✅ تم رفع الصورة'); loadCameraMods(currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
 async function removeModPhoto(id, which){
@@ -3838,7 +3876,7 @@ async function removeModPhoto(id, which){
     if(error) throw error;
     const c = cameraModsData.find(x=>x.id===id);
     await logAudit('حذف صورة '+(which==='before'?'قبل التعديل':'بعد التعديل'), c?c.camera_name:id);
-    toast('✅ تم حذف الصورة'); loadCameraMods();
+    toast('✅ تم حذف الصورة'); loadCameraMods(currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 function compareBeforeAfter(id){
