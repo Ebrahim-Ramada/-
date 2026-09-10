@@ -4240,6 +4240,7 @@ async function loadLayouts(factoryId){
       <div style="font-size:12.5px;font-weight:700;margin-top:6px">${l.layout_name}</div>
       ${l.notes? `<div style="font-size:10.5px;color:var(--muted)">${l.notes}</div>`:''}
       ${l.original_file_url? `<div style="font-size:9.5px;color:var(--amber);margin-top:2px">✏️ مُعدَّلة</div>`:''}
+      ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">📍 السيرفرات على الخريطة</button>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
         ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
         ${l.original_file_url? `<button class="btn sm" onclick="restoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
@@ -4280,6 +4281,100 @@ async function saveLayoutForm(factoryId){
     await logAudit('إضافة خريطة مصنع', `${f?f.name:''}: ${name}`);
     closeModal(); toast('✅ تم رفع الخريطة'); loadLayouts(factoryId);
   }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+}
+
+/* ============================================================
+   علامات السيرفرات على خرائط الـ Layout — نقاط تفاعلية حقيقية
+   (منفصلة عن صورة الخريطة نفسها، فتبقى قابلة للنقر والتحريك دائمًا)
+   ============================================================ */
+let currentLayoutMarkers = [];
+let pendingMarkerCoords = null;
+async function openLayoutServerMarkers(layoutId, factoryId){
+  const l = layoutsData.find(x=>x.id===layoutId);
+  if(!l){ toast('تعذّر إيجاد الخريطة'); return; }
+  let factoryServers = [];
+  try{ const {data} = await supa.from('factory_servers').select('*').eq('factory_id', factoryId); factoryServers = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('layout_server_markers').select('*').eq('layout_id', layoutId); currentLayoutMarkers = data||[]; }catch(e){ currentLayoutMarkers=[]; }
+  window.__currentMarkerLayout = { layoutId, factoryId, imageUrl: l.file_url, servers: factoryServers };
+  pendingMarkerCoords = null;
+  renderLayoutMarkersModal();
+}
+function renderLayoutMarkersModal(){
+  const ctx = window.__currentMarkerLayout;
+  const markersHtml = currentLayoutMarkers.map(m=>{
+    const srv = ctx.servers.find(s=>s.id===m.server_id);
+    return `<div class="layout-marker-pin" style="position:absolute;right:${100-m.x_pct}%;top:${m.y_pct}%;transform:translate(50%,-50%);cursor:pointer;z-index:2" onclick='handleMarkerClick("${m.id}")'>
+      <div style="width:26px;height:26px;border-radius:50% 50% 50% 0;background:var(--accent);transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.4)">
+        <span style="transform:rotate(45deg);font-size:12px">🖥️</span>
+      </div>
+      <div style="position:absolute;top:28px;right:50%;transform:translateX(50%);white-space:nowrap;background:rgba(0,0,0,.7);color:#fff;font-size:9px;padding:1px 5px;border-radius:4px">${srv?srv.server_name:'؟'}</div>
+    </div>`;
+  }).join('');
+  const pendingHtml = pendingMarkerCoords ? `<div style="position:absolute;right:${100-pendingMarkerCoords.x}%;top:${pendingMarkerCoords.y}%;transform:translate(50%,-50%);z-index:3">
+    <div style="width:26px;height:26px;border-radius:50% 50% 50% 0;background:var(--amber);transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;animation:blink 1s infinite"></div>
+  </div>` : '';
+  openModal(`
+    <div class="modal-head"><h3>📍 السيرفرات على الخريطة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div id="layoutMarkerImgWrap" style="position:relative;width:100%;border-radius:10px;overflow:hidden;cursor:${isAdmin()?'crosshair':'default'}" onclick="${isAdmin()?'onLayoutMapClick(event)':''}">
+      <img src="${ctx.imageUrl}" style="width:100%;display:block" draggable="false">
+      ${markersHtml}
+      ${pendingHtml}
+    </div>
+    ${pendingMarkerCoords ? `
+      <div class="field" style="margin-top:10px"><label>اختر السيرفر لوضع العلامة هنا</label>
+        <select class="input" id="pendingMarkerServer">${ctx.servers.length? ctx.servers.map(s=>`<option value="${s.id}">${s.server_name}</option>`).join('') : '<option value="">لا توجد سيرفرات مسجّلة لهذا المصنع</option>'}</select>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary sm" onclick="saveLayoutMarker()">💾 حفظ العلامة</button>
+        <button class="btn sm" onclick="pendingMarkerCoords=null; renderLayoutMarkersModal()">إلغاء</button>
+      </div>` : ''}
+    ${isAdmin() && !pendingMarkerCoords ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:10px">💡 دوس في أي مكان على الخريطة فوق عشان تحط علامة سيرفر جديدة. دوس على أي علامة موجودة عشان تفتح ملف السيرفر أو تحذفها.</p>` : ''}
+    ${!isAdmin() ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:10px">💡 دوس على أي علامة 🖥️ عشان تفتح ملف السيرفر الكامل.</p>` : ''}
+  `);
+}
+function onLayoutMapClick(evt){
+  if(evt.target.closest('.layout-marker-pin')) return; // تجاهل الضغط لو كان على علامة موجودة (بيتعامل معاها handleMarkerClick)
+  const wrap = document.getElementById('layoutMarkerImgWrap');
+  const rect = wrap.getBoundingClientRect();
+  const x = ((evt.clientX - rect.left) / rect.width) * 100;
+  const y = ((evt.clientY - rect.top) / rect.height) * 100;
+  pendingMarkerCoords = {x: Math.max(1,Math.min(99,x)), y: Math.max(1,Math.min(99,y))};
+  renderLayoutMarkersModal();
+}
+async function saveLayoutMarker(){
+  const serverId = document.getElementById('pendingMarkerServer').value;
+  if(!serverId){ toast('اختر سيرفر أولًا'); return; }
+  const ctx = window.__currentMarkerLayout;
+  try{
+    const {data, error} = await supa.from('layout_server_markers').insert({
+      layout_id: ctx.layoutId, server_id: serverId, x_pct: pendingMarkerCoords.x, y_pct: pendingMarkerCoords.y, created_by: currentProfile.id
+    }).select().single();
+    if(error) throw error;
+    currentLayoutMarkers.push(data);
+    pendingMarkerCoords = null;
+    const srv = ctx.servers.find(s=>s.id===serverId);
+    await logAudit('إضافة علامة سيرفر على خريطة', srv?srv.server_name:serverId);
+    toast('✅ تم وضع العلامة'); renderLayoutMarkersModal();
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+function handleMarkerClick(markerId){
+  const m = currentLayoutMarkers.find(x=>x.id===markerId);
+  if(!m) return;
+  if(isAdmin()){
+    openModal(`<div class="modal-head"><h3>خيارات العلامة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <button class="btn primary block" onclick="closeModal(); openServerProfile('${m.server_id}')">📋 فتح ملف السيرفر</button>
+      <button class="btn danger block" style="margin-top:8px" onclick="deleteLayoutMarker('${m.id}')">🗑 حذف العلامة من الخريطة</button>
+      <button class="btn block" style="margin-top:8px" onclick="renderLayoutMarkersModal()">رجوع</button>`);
+  } else {
+    closeModal(); openServerProfile(m.server_id);
+  }
+}
+async function deleteLayoutMarker(markerId){
+  try{
+    await supa.from('layout_server_markers').delete().eq('id', markerId);
+    currentLayoutMarkers = currentLayoutMarkers.filter(x=>x.id!==markerId);
+    toast('✅ تم حذف العلامة'); renderLayoutMarkersModal();
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function deleteLayout(id, factoryId){
   const l = layoutsData.find(x=>x.id===id);
@@ -4938,36 +5033,81 @@ function openNetworkMap(factoryId){
   const rootSwitches = fSwitches.filter(sw=>!sw.uplink_switch_id);
   const childrenOf = (swId) => fSwitches.filter(sw=>sw.uplink_switch_id===swId);
 
-  // تجميع الإجمالي (سيرفرات وكاميرات) للسويتش نفسه + كل السويتشات الفرعية تحته بشكل تكراري
-  function aggregate(sw){
-    let srv = serversData.filter(s=>s.switch_id===sw.id).length;
-    let cam = getSwitchCameraCount(sw);
-    childrenOf(sw.id).forEach(child=>{ const a = aggregate(child); srv += a.srv; cam += a.cam; });
-    return {srv, cam};
+  if(!fSwitches.length){
+    openModal(`<div class="modal-head"><h3>🗺️ خريطة الشبكة — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <div class="empty">أضف سويتشات أولًا لتظهر خريطة الشبكة.</div>`);
+    return;
   }
 
-  function renderSwitchNode(sw, depth){
-    const direct = { srv: serversData.filter(s=>s.switch_id===sw.id).length, cam: getSwitchCameraCount(sw) };
-    const children = childrenOf(sw.id);
-    const agg = aggregate(sw);
-    const showAgg = children.length>0;
-    return `<div style="margin-inline-start:${depth*18}px;margin-top:8px">
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px;${depth>0?'border-right:3px solid var(--accent)':'border-right:3px solid var(--amber)'}">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <b style="font-size:12.5px">${depth>0?'↳ ':'🔌 '}${sw.switch_name}</b>
-          ${depth===0?'<span class="pill warn" style="font-size:9px">رئيسي</span>':''}
-        </div>
-        <div style="display:flex;gap:10px;margin-top:6px;font-size:11px">
-          <span style="color:var(--accent)">🖥️ ${direct.srv} سيرفر مباشر</span>
-          <span style="color:var(--success)">🎥 ${direct.cam} كاميرا مباشرة</span>
-        </div>
-        ${showAgg? `<div style="margin-top:4px;font-size:10.5px;color:var(--muted)">📊 الإجمالي (شامل الفروع): ${agg.srv} سيرفر، ${agg.cam} كاميرا</div>`:''}
-      </div>
-      ${children.map(c=>renderSwitchNode(c, depth+1)).join('')}
-    </div>`;
+  // ---------- بناء شجرة العُقد (سويتشات + عُقد أجهزة فرعية للسيرفرات والكاميرات) ----------
+  const UNIT = 128, NODE_W = 112, NODE_H = 44, LEVEL_H = 100;
+  let leafCounter = 0;
+  function buildNode(sw){
+    const directSrv = serversData.filter(s=>s.switch_id===sw.id).length;
+    const directCam = getSwitchCameraCount(sw);
+    const childSwitches = childrenOf(sw.id).map(buildNode);
+    const deviceLeaves = [];
+    if(directSrv>0) deviceLeaves.push({type:'device', icon:'🖥️', label:`${directSrv} Server${directSrv>1?'s':''}`, color:'var(--accent)', width:1});
+    if(directCam>0) deviceLeaves.push({type:'device', icon:'🎥', label:`${directCam} كاميرا`, color:'var(--success)', width:1});
+    const children = [...childSwitches, ...deviceLeaves];
+    const width = children.length ? children.reduce((a,c)=>a+c.width,0) : 1;
+    return { type:'switch', sw, children, width: Math.max(1,width), isRoot: !sw.uplink_switch_id };
   }
+  const rootNodes = rootSwitches.map(buildNode);
+  const totalWidth = Math.max(1, rootNodes.reduce((a,n)=>a+n.width,0));
 
-  const treeHtml = rootSwitches.map(sw=>renderSwitchNode(sw,0)).join('');
+  // ---------- حساب الإحداثيات (x,y) لكل عقدة ----------
+  const positioned = [];
+  const edges = [];
+  function place(node, xStart, depth, parentPos){
+    const cx = (xStart + node.width/2) * UNIT;
+    const cy = 70 + depth*LEVEL_H;
+    const pos = {...node, x:cx, y:cy};
+    positioned.push(pos);
+    if(parentPos) edges.push({x1:parentPos.x, y1:parentPos.y+NODE_H/2, x2:cx, y2:cy-NODE_H/2});
+    let cursor = xStart;
+    (node.children||[]).forEach(child=>{
+      place(child, cursor, depth+1, pos);
+      cursor += child.width;
+    });
+    return pos;
+  }
+  let xCursor = 0;
+  rootNodes.forEach(n=>{ place(n, xCursor, 1, null); xCursor += n.width; });
+
+  const svgW = Math.max(360, totalWidth*UNIT + 20);
+  const maxDepth = positioned.reduce((m,p)=>Math.max(m, (p.y-70)/LEVEL_H), 0);
+  const svgH = 70 + maxDepth*LEVEL_H + 60;
+  const coreX = svgW/2;
+
+  let svg = `<svg id="netmapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:#0B1220;border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
+  svg += `<rect x="${coreX-90}" y="16" width="180" height="34" rx="8" fill="#182446" stroke="#38D9C9" stroke-width="1.5"/>
+    <text x="${coreX}" y="37" text-anchor="middle" fill="#38D9C9" font-size="13" font-weight="bold" font-family="Arial">🌐 Internet / Core</text>`;
+  // خطوط من Core لكل سويتش رئيسي (باستخدام موضعهم الفعلي)
+  positioned.filter(p=>p.type==='switch' && p.isRoot).forEach(p=>{
+    edges.unshift({x1:coreX, y1:50, x2:p.x, y2:p.y-NODE_H/2});
+  });
+  // رسم كل خطوط التوصيل (الأسلاك) أولًا عشان تكون تحت الصناديق
+  edges.forEach(e=>{
+    const midY = (e.y1+e.y2)/2;
+    svg += `<path d="M${e.x1},${e.y1} C${e.x1},${midY} ${e.x2},${midY} ${e.x2},${e.y2}" stroke="#38D9C9" stroke-width="2" fill="none" opacity="0.55"/>`;
+  });
+  // رسم كل العُقد فوق الأسلاك
+  positioned.forEach(p=>{
+    if(p.type==='switch'){
+      const fill = p.isRoot ? '#2A1F0E' : '#182446';
+      const stroke = p.isRoot ? '#F5A623' : '#38D9C9';
+      svg += `<rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+        <text x="${p.x}" y="${p.y-4}" text-anchor="middle" fill="#E9EEFB" font-size="10.5" font-weight="bold" font-family="Arial">🔌 ${escapeXml(p.sw.switch_name)}</text>
+        <text x="${p.x}" y="${p.y+11}" text-anchor="middle" fill="${stroke}" font-size="8.5" font-family="Arial">${p.isRoot?'رئيسي':'فرعي'}</text>`;
+    } else {
+      svg += `<rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="#0F1A30" stroke="${p.color.replace('var(--accent)','#38D9C9').replace('var(--success)','#4ADE80')}" stroke-width="1.5"/>
+        <text x="${p.x}" y="${p.y-2}" text-anchor="middle" font-size="15">${p.icon}</text>
+        <text x="${p.x}" y="${p.y+14}" text-anchor="middle" fill="#CFF7F1" font-size="9" font-family="Arial">${escapeXml(p.label)}</text>`;
+    }
+  });
+  svg += `</svg>`;
+
   openModal(`
     <div class="modal-head"><h3>🗺️ خريطة الشبكة — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="mini-grid" style="margin-bottom:10px">
@@ -4975,12 +5115,31 @@ function openNetworkMap(factoryId){
       <div class="mini"><div class="n">${serversData.filter(s=>s.factory_id===factoryId).length}</div><div class="t">إجمالي Servers</div></div>
       <div class="mini"><div class="n" style="color:var(--success)">${totalMappedCams}</div><div class="t">إجمالي الكاميرات المربوطة</div></div>
     </div>
-    <div style="background:var(--panel-2);border:1px solid var(--accent);border-radius:10px;padding:10px;text-align:center;margin-bottom:6px">
-      <b style="font-size:12px;color:var(--accent)">🌐 Internet / Core — ${f?f.name:''}</b>
-    </div>
-    ${fSwitches.length? `<div style="max-height:50vh;overflow-y:auto">${treeHtml}</div>` : '<div class="empty">أضف سويتشات أولًا لتظهر خريطة الشبكة.</div>'}
-    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 السويتشات المُعلَّمة "رئيسي" متصلة مباشرة بالشبكة. أي سويتش تحدّد له "سويتش رئيسي" في نموذج التعديل هيظهر متفرّعًا تحته هنا، وأرقامه بتتجمّع تلقائيًا لأعلى.</p>
+    <div style="overflow-x:auto">${svg}</div>
+    <button class="btn primary block" style="margin-top:10px" onclick="downloadNetworkMap('${(f?f.name:'network').replace(/'/g,'')}')">⬇️ تنزيل الخريطة كصورة</button>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 خريطة تلقائية حقيقية بخطوط توصيل من بيانات Switches الفعلية. السويتشات "الفرعية" تتفرّع من السويتش الرئيسي اللي حددته له في نموذج التعديل.</p>
   `);
+}
+function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function downloadNetworkMap(factoryName){
+  const svgEl = document.getElementById('netmapSvg');
+  if(!svgEl){ toast('تعذّر إيجاد الخريطة'); return; }
+  const svgStr = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = ()=>{
+    const scale = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width*scale; canvas.height = img.height*scale;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0B1220'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(blob=> saveOrShareFile(blob, `خريطة-الشبكة-${factoryName}-${new Date().toISOString().slice(0,10)}.png`), 'image/png', 0.95);
+  };
+  img.onerror = ()=>{ URL.revokeObjectURL(url); toast('🚫 تعذّر تحويل الخريطة لصورة'); };
+  img.src = url;
 }
 function renderRacksList(factoryId){
   const host = document.getElementById('racksListHost');
@@ -5358,6 +5517,7 @@ function renderReportsCenterView(){
     <div class="section-title"><h2 style="font-size:13px">حسب القسم</h2></div>
     <div class="quickgrid">
       <button class="qbtn" onclick="openFactoryReportPicker()"><span class="qicon">🏭</span> تقرير مصنع محدد</button>
+      <button class="qbtn" onclick="openNetworkReportPicker()"><span class="qicon">🗄️</span> تقرير البنية التحتية للشبكة</button>
       <button class="qbtn" onclick="goTo('faults')"><span class="qicon">📋</span> تقرير الأعطال</button>
       <button class="qbtn" onclick="goTo('maintenance')"><span class="qicon">🛠️</span> تقرير الصيانة</button>
       <button class="qbtn" onclick="goTo('store')"><span class="qicon">📦</span> تقرير المخزن</button>
@@ -5367,6 +5527,83 @@ function renderReportsCenterView(){
     <div class="section-title"><h2 style="font-size:13px">تصدير شامل لكل التطبيق</h2></div>
     <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
   </div>`;
+}
+function openNetworkReportPicker(){
+  openModal(`
+    <div class="modal-head"><h3>🗄️ تقرير البنية التحتية للشبكة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>المصنع</label><select class="input" id="nrp_factory">${factoriesData.map(f=>`<option value="${f.id}">${f.name}</option>`).join('')}</select></div>
+    <button class="btn primary block" onclick="generateNetworkInfraReport(document.getElementById('nrp_factory').value)">📄 إنشاء التقرير (PDF بالصور)</button>
+  `);
+}
+async function generateNetworkInfraReport(factoryId){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  const f = factoriesData.find(x=>x.id===factoryId);
+  toast('جاري تجميع بيانات البنية التحتية والصور...');
+  let racks=[], switches=[], ups=[], servers=[], drives=[], layouts=[];
+  try{ const {data}=await supa.from('factory_racks').select('*').eq('factory_id',factoryId); racks=data||[]; }catch(e){}
+  try{ const {data}=await supa.from('factory_switches').select('*').eq('factory_id',factoryId); switches=data||[]; }catch(e){}
+  try{ const {data}=await supa.from('factory_ups').select('*').eq('factory_id',factoryId); ups=data||[]; }catch(e){}
+  try{ const {data}=await supa.from('factory_servers').select('*').eq('factory_id',factoryId); servers=data||[]; }catch(e){}
+  try{ const ids=servers.map(s=>s.id); if(ids.length){ const {data}=await supa.from('server_drives').select('*').in('server_id',ids); drives=data||[]; } }catch(e){}
+  try{ const {data}=await supa.from('factory_layouts').select('*').eq('factory_id',factoryId); layouts=data||[]; }catch(e){}
+  const netFaults = (faultsData||[]).filter(x=>x.factory_id===factoryId && x.device_type==='server');
+  const netMaint = (preventiveTasks||[]).filter(t=> servers.some(s=>s.server_name===t.target_name));
+
+  const imgUrls = [...racks.map(r=>r.photo_url), ...switches.map(sw=>sw.photo_url), ...ups.map(u=>u.photo_url), ...layouts.filter(l=>l.file_type==='image').map(l=>l.file_url)];
+  await urlsToDataUris(imgUrls);
+  const imgTagLocal = (url,w) => { const du = __imgDataCache[url]; return du ? `<img src="${du}" style="width:${w||70}px;height:${w||70}px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px">` : ''; };
+  const table = (headers, rows) => `<table style="width:100%;border-collapse:collapse;font-size:10.5px;margin-top:6px" border="1" cellpadding="5">
+    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}</tr>
+    ${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}
+  </table>`;
+
+  const el = document.createElement('div');
+  el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
+  el.innerHTML = `
+    <div style="text-align:center;padding:30px 0;border-bottom:4px solid #12716A;margin-bottom:20px">
+      <h1>تقرير البنية التحتية للشبكة</h1>
+      <h2 style="color:#555">${f?f.name:''}</h2>
+      <p style="color:#888">${new Date().toLocaleDateString('ar-EG')} — إعداد وتشغيل النظام: إبراهيم رمضان</p>
+    </div>
+    <h3>الملخص</h3>
+    <p>عدد Racks: ${racks.length} — عدد Switches: ${switches.length} — عدد Servers: ${servers.length} — عدد UPS: ${ups.length} — عدد الهاردات المسجّلة: ${drives.length}</p>
+
+    <h3>Racks</h3>
+    ${racks.length? table(['الاسم','المكان','صورة'], racks.map(r=>[r.rack_name,r.location||'',imgTagLocal(r.photo_url)])) : '<p>لا توجد راكات مسجّلة.</p>'}
+
+    <h3>Switches والمنافذ</h3>
+    ${switches.length? table(['الاسم','النوع','إجمالي المنافذ','مستخدمة','كاميرات متصلة','سويتش رئيسي','صورة'], switches.map(sw=>{
+      const uplink = switches.find(x=>x.id===sw.uplink_switch_id);
+      return [sw.switch_name, sw.switch_type||'', sw.total_ports||0, sw.used_ports||0, getSwitchCameraCount(sw), uplink?uplink.switch_name:'رئيسي', imgTagLocal(sw.photo_url)];
+    })) : '<p>لا توجد سويتشات مسجّلة.</p>'}
+
+    <h3>Servers</h3>
+    ${servers.length? table(['الاسم','الحالة','الموديل','IP','OS','Switch المتصل'], servers.map(s=>{
+      const sw = switches.find(x=>x.id===s.switch_id);
+      return [s.server_name, s.status, `${s.brand||''} ${s.model||''}`, s.ip_address||'—', s.os_name||'—', sw?sw.switch_name:'—'];
+    })) : '<p>لا توجد سيرفرات مسجّلة.</p>'}
+
+    <h3>Storage / Hard Drives</h3>
+    ${drives.length? table(['السيرفر','Slot','النوع','السعة','الحالة'], drives.map(dr=>{
+      const srv = servers.find(s=>s.id===dr.server_id);
+      return [srv?srv.server_name:'', dr.slot_number||'', dr.drive_type||'', fmtStorage(dr.capacity_gb), dr.status];
+    })) : '<p>لا توجد بيانات تخزين مسجّلة.</p>'}
+
+    <h3>UPS</h3>
+    ${ups.length? table(['الاسم','المكان','الحالة','صورة'], ups.map(u=>[u.ups_name,u.location||'',u.status,imgTagLocal(u.photo_url)])) : '<p>لا توجد أجهزة UPS مسجّلة.</p>'}
+
+    ${layouts.filter(l=>l.file_type==='image').length? `<h3>الخرائط (Layouts)</h3>
+      <div>${layouts.filter(l=>l.file_type==='image').map(l=>`<div style="display:inline-block;text-align:center;margin:6px">${imgTagLocal(l.file_url,140)}<div style="font-size:10px">${l.layout_name}</div></div>`).join('')}</div>` : ''}
+
+    ${netFaults.length? `<h3>أعطال السيرفرات</h3>${table(['الجهاز','الخطورة','الحالة','التاريخ'], netFaults.map(x=>[x.device_name,x.severity,x.status,new Date(x.reported_at).toLocaleDateString('ar-EG')]))}` : ''}
+    ${netMaint.length? `<h3>صيانة السيرفرات</h3>${table(['السيرفر','النوع','التاريخ'], netMaint.map(m=>[m.target_name,m.maintenance_type,fmtDateAr(m.scheduled_date)]))}` : ''}
+
+    <p style="text-align:center;color:#888;margin-top:30px;font-size:11px;border-top:1px dashed #ccc;padding-top:10px">— تقرير تلقائي من نظام غرفة المراقبة المركزية —</p>`;
+  document.body.appendChild(el);
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['css','legacy']}}).from(el).outputPdf('blob');
+  el.remove(); closeModal();
+  await saveOrShareFile(blob, `تقرير-البنية-التحتية-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.pdf`);
+  await logAudit('إنشاء تقرير البنية التحتية للشبكة', f?f.name:factoryId);
 }
 function openFactoryReportPicker(){
   openModal(`
