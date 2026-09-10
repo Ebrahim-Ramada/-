@@ -5043,12 +5043,13 @@ function openNetworkMap(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
   const fSwitches = switchesData.filter(sw=>sw.factory_id===factoryId);
   const totalMappedCams = fSwitches.reduce((a,sw)=>a+getSwitchCameraCount(sw),0);
-  const rootSwitches = fSwitches.filter(sw=>!sw.uplink_switch_id);
-  const childrenOf = (swId) => fSwitches.filter(sw=>sw.uplink_switch_id===swId);
+  const rootSwitches = fSwitches.filter(sw=>!sw.uplink_switch_id && !sw.uplink_server_id);
+  const childSwitchesOf = (swId) => fSwitches.filter(sw=>sw.uplink_switch_id===swId);
+  const serversWithUplinkChildren = serversData.filter(sv=>sv.factory_id===factoryId && fSwitches.some(sw=>sw.uplink_server_id===sv.id));
   const isLight = netMapTheme==='light';
   const pal = isLight
-    ? { bg:'#FFFFFF', line:'#333333', coreF:'#EFEFEF', coreS:'#111111', coreT:'#111111', rootF:'#FFF6E5', rootS:'#B8860B', accF:'#EEF3FF', accS:'#1D4ED8', text:'#111111', sub:'#555555', devF:'#F5F5F5', devSrv:'#1D4ED8', devCam:'#0F7A3D', devText:'#111111' }
-    : { bg:'#0B1220', line:'#38D9C9', coreF:'#182446', coreS:'#38D9C9', coreT:'#38D9C9', rootF:'#2A1F0E', rootS:'#F5A623', accF:'#182446', accS:'#38D9C9', text:'#E9EEFB', sub:'#38D9C9', devF:'#0F1A30', devSrv:'#38D9C9', devCam:'#4ADE80', devText:'#CFF7F1' };
+    ? { bg:'#FFFFFF', line:'#333333', coreF:'#EFEFEF', coreS:'#111111', coreT:'#111111', rootF:'#FFF6E5', rootS:'#B8860B', accF:'#EEF3FF', accS:'#1D4ED8', text:'#111111', sub:'#555555', devF:'#F5F5F5', devSrv:'#1D4ED8', devCam:'#0F7A3D', devText:'#111111', srvF:'#E9FBF3', srvS:'#0F7A3D' }
+    : { bg:'#0B1220', line:'#38D9C9', coreF:'#182446', coreS:'#38D9C9', coreT:'#38D9C9', rootF:'#2A1F0E', rootS:'#F5A623', accF:'#182446', accS:'#38D9C9', text:'#E9EEFB', sub:'#38D9C9', devF:'#0F1A30', devSrv:'#38D9C9', devCam:'#4ADE80', devText:'#CFF7F1', srvF:'#0F2A20', srvS:'#4ADE80' };
 
   if(!fSwitches.length){
     openModal(`<div class="modal-head"><h3>🗺️ خريطة الشبكة — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
@@ -5056,20 +5057,25 @@ function openNetworkMap(factoryId){
     return;
   }
 
-  // ---------- بناء شجرة العُقد (سويتشات + عُقد أجهزة فرعية للسيرفرات والكاميرات) ----------
+  // ---------- بناء شجرة العُقد: سيرفرات (لو مُختارة كأصل) → سويتشات → أجهزة فرعية ----------
   const UNIT = 128, NODE_W = 112, NODE_H = 44, LEVEL_H = 100;
-  function buildNode(sw){
-    const directSrv = serversData.filter(s=>s.switch_id===sw.id).length;
+  function buildSwitchNode(sw){
+    const directSrv = serversData.filter(s=>s.switch_id===sw.id && !serversWithUplinkChildren.some(x=>x.id===s.id)).length;
     const directCam = getSwitchCameraCount(sw);
-    const childSwitches = childrenOf(sw.id).map(buildNode);
+    const childSwitches = childSwitchesOf(sw.id).map(buildSwitchNode);
     const deviceLeaves = [];
     if(directSrv>0) deviceLeaves.push({type:'device', kind:'srv', icon:'🖥️', label:`${directSrv} Server${directSrv>1?'s':''}`, width:1});
     if(directCam>0) deviceLeaves.push({type:'device', kind:'cam', icon:'🎥', label:`${directCam} كاميرا`, width:1});
     const children = [...childSwitches, ...deviceLeaves];
     const width = children.length ? children.reduce((a,c)=>a+c.width,0) : 1;
-    return { type:'switch', sw, children, width: Math.max(1,width), isRoot: !sw.uplink_switch_id };
+    return { type:'switch', sw, children, width: Math.max(1,width), isRoot: !sw.uplink_switch_id && !sw.uplink_server_id };
   }
-  const rootNodes = rootSwitches.map(buildNode);
+  function buildServerNode(sv){
+    const childSwitches = fSwitches.filter(sw=>sw.uplink_server_id===sv.id).map(buildSwitchNode);
+    const width = childSwitches.length ? childSwitches.reduce((a,c)=>a+c.width,0) : 1;
+    return { type:'server', sv, children: childSwitches, width: Math.max(1,width) };
+  }
+  const rootNodes = [...serversWithUplinkChildren.map(buildServerNode), ...rootSwitches.map(buildSwitchNode)];
   const totalWidth = Math.max(1, rootNodes.reduce((a,n)=>a+n.width,0));
 
   // ---------- حساب الإحداثيات (x,y) لكل عقدة ----------
@@ -5099,7 +5105,7 @@ function openNetworkMap(factoryId){
   let svg = `<svg id="netmapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:${pal.bg};border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
   svg += `<rect x="${coreX-90}" y="16" width="180" height="34" rx="8" fill="${pal.coreF}" stroke="${pal.coreS}" stroke-width="1.5"/>
     <text x="${coreX}" y="37" text-anchor="middle" fill="${pal.coreT}" font-size="13" font-weight="bold" font-family="Arial">🌐 Internet / Core</text>`;
-  positioned.filter(p=>p.type==='switch' && p.isRoot).forEach(p=>{
+  positioned.filter(p=>(p.type==='switch' && p.isRoot) || p.type==='server').forEach(p=>{
     edges.unshift({x1:coreX, y1:50, x2:p.x, y2:p.y-NODE_H/2});
   });
   edges.forEach(e=>{
@@ -5107,7 +5113,13 @@ function openNetworkMap(factoryId){
     svg += `<path d="M${e.x1},${e.y1} C${e.x1},${midY} ${e.x2},${midY} ${e.x2},${e.y2}" stroke="${pal.line}" stroke-width="2" fill="none" opacity="0.6"/>`;
   });
   positioned.forEach(p=>{
-    if(p.type==='switch'){
+    if(p.type==='server'){
+      svg += `<g onclick="openServerProfile('${p.sv.id}')" style="cursor:pointer">
+        <rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${pal.srvF}" stroke="${pal.srvS}" stroke-width="1.5"/>
+        <text x="${p.x}" y="${p.y-4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">🖥️ ${escapeXml(p.sv.server_name)}</text>
+        <text x="${p.x}" y="${p.y+11}" text-anchor="middle" fill="${pal.srvS}" font-size="8.5" font-family="Arial">سيرفر رئيسي</text>
+      </g>`;
+    } else if(p.type==='switch'){
       const fill = p.isRoot ? pal.rootF : pal.accF;
       const stroke = p.isRoot ? pal.rootS : pal.accS;
       svg += `<g onclick="showSwitchDetailsPopup('${p.sw.id}')" style="cursor:pointer">
@@ -5315,8 +5327,10 @@ function renderSwitchesList(factoryId){
 function openSwitchForm(factoryId, switchId){
   const sw = switchId ? switchesData.find(x=>x.id===switchId) : null;
   const isNew = !sw;
-  const d = sw || {switch_name:'', location:'', switch_type:'Managed', brand:'', model:'', total_ports:24, used_ports:0, connected_cameras:[], notes:'', rack_id:'', uplink_switch_id:'', camera_count_manual:''};
+  const d = sw || {switch_name:'', location:'', switch_type:'Managed', brand:'', model:'', total_ports:24, used_ports:0, connected_cameras:[], notes:'', rack_id:'', uplink_switch_id:'', uplink_server_id:'', camera_count_manual:''};
   const otherSwitches = switchesData.filter(x=>x.id!==switchId);
+  const factoryServers = serversData.filter(x=>x.factory_id===factoryId);
+  const currentUplinkValue = d.uplink_server_id ? `server:${d.uplink_server_id}` : (d.uplink_switch_id ? `switch:${d.uplink_switch_id}` : '');
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة سويتش':'تعديل سويتش'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>اسم/رقم السويتش</label><input class="input" id="sw_name" value="${d.switch_name}" placeholder="مثال: Switch 01"></div>
@@ -5324,9 +5338,13 @@ function openSwitchForm(factoryId, switchId){
       <div class="field"><label>المكان</label><input class="input" id="sw_location" value="${d.location||''}"></div>
       <div class="field"><label>الراك (اختياري)</label><select class="input" id="sw_rack"><option value="">— بدون —</option>${racksData.map(r=>`<option value="${r.id}" ${d.rack_id===r.id?'selected':''}>${r.rack_name}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>متصل بسويتش رئيسي (Uplink) — اختياري</label>
-      <select class="input" id="sw_uplink"><option value="">— هذا سويتش رئيسي (مباشر على الشبكة) —</option>${otherSwitches.map(s=>`<option value="${s.id}" ${d.uplink_switch_id===s.id?'selected':''}>${s.switch_name}</option>`).join('')}</select>
-      <p style="font-size:10px;color:var(--muted-2);margin-top:4px">💡 استخدم ده لو السويتش ده فرعي ومتوصل بسويتش تاني رئيسي (زي: سويتشات الأدوار كلها متوصلة على Core Switch واحد اللي هو متوصل بالسيرفر). سيب الاختيار فاضي لو السويتش ده رئيسي بنفسه.</p>
+    <div class="field"><label>متصل تصاعديًا بـ (Uplink) — اختياري</label>
+      <select class="input" id="sw_uplink">
+        <option value="">— هذا سويتش/جهاز رئيسي (مباشر على الشبكة) —</option>
+        ${factoryServers.length? `<optgroup label="🖥️ سيرفرات">${factoryServers.map(sv=>`<option value="server:${sv.id}" ${currentUplinkValue==='server:'+sv.id?'selected':''}>${sv.server_name}</option>`).join('')}</optgroup>`:''}
+        ${otherSwitches.length? `<optgroup label="🔌 سويتشات">${otherSwitches.map(s=>`<option value="switch:${s.id}" ${currentUplinkValue==='switch:'+s.id?'selected':''}>${s.switch_name}</option>`).join('')}</optgroup>`:''}
+      </select>
+      <p style="font-size:10px;color:var(--muted-2);margin-top:4px">💡 اختار سيرفر هنا لو عايز يظهر في الخريطة كـ"السيرفر فوق والسويتش متفرّع منه تحته" (بدل العكس). أو اختار سويتش تاني لو ده سويتش فرعي تحته. سيب الاختيار فاضي لو ده الجهاز الرئيسي المتصل بالشبكة مباشرة.</p>
     </div>
     <div class="row2">
       <div class="field"><label>نوع السويتش</label><select class="input" id="sw_type">${['Managed','Unmanaged','PoE','Non-PoE','أخرى'].map(t=>`<option ${d.switch_type===t?'selected':''}>${t}</option>`).join('')}</select></div>
@@ -5364,9 +5382,11 @@ async function saveSwitchForm(factoryId, switchId){
   const usedPorts = Math.min(totalPorts, Math.max(0, parseInt(document.getElementById('sw_used').value)||0));
   const camerasList = Array.from(document.querySelectorAll('.sw_cam_chk:checked')).map(el=>el.value);
   const manualCountRaw = document.getElementById('sw_cam_count').value;
+  const uplinkRaw = document.getElementById('sw_uplink').value; // بصيغة "switch:id" أو "server:id" أو فاضي
   const payload = {
     factory_id: factoryId, rack_id: document.getElementById('sw_rack').value || null,
-    uplink_switch_id: document.getElementById('sw_uplink').value || null,
+    uplink_switch_id: uplinkRaw.startsWith('switch:') ? uplinkRaw.slice(7) : null,
+    uplink_server_id: uplinkRaw.startsWith('server:') ? uplinkRaw.slice(7) : null,
     switch_name: name, location: document.getElementById('sw_location').value.trim(),
     switch_type: document.getElementById('sw_type').value, brand: document.getElementById('sw_brand').value.trim(),
     model: document.getElementById('sw_model').value.trim(), total_ports: totalPorts, used_ports: usedPorts,
