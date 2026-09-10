@@ -1085,7 +1085,10 @@ function renderCurrentView(){
   else if(currentView==='faults') { host.innerHTML = renderFaultsPlaceholder(); loadFaults(); }
   else if(currentView==='store') { host.innerHTML = renderStorePlaceholder(); loadStoreData(); }
   else if(currentView==='cameramods') { host.innerHTML = renderCameraModsPlaceholder(); loadCameraMods(); }
-  else if(currentView==='lighting') { host.innerHTML = renderLightingPlaceholder(); loadLightingNeeds(); }
+  else if(currentView==='lighting') {
+    host.innerHTML = renderLightingPlaceholder(currentViewCtx);
+    if(currentViewCtx) loadLightingNeeds(currentViewCtx); else loadLightingFactoryPicker();
+  }
   else if(currentView==='roomneeds') { host.innerHTML = renderRoomNeedsPlaceholder(); loadRoomNeeds(); }
   renderAlertsBar();
 }
@@ -3884,11 +3887,21 @@ async function exportCameraModsPdf(){
    ============================================================ */
 let lightingData = [];
 let lightingFilter = { text:'', status:'', priority:'' };
-function renderLightingPlaceholder(){
+function renderLightingPlaceholder(factoryId){
+  if(!factoryId){
+    return `<div class="view active">
+      <div class="section-title" style="margin-top:0"><h2>💡 احتياجات الإضاءة</h2></div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض بيانات الإضاءة الخاصة به فقط.</p>
+      <div id="lightingFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
+    </div>`;
+  }
+  const f = factoriesData.find(x=>x.id===factoryId);
   return `<div class="view active">
-    <div class="section-title" style="margin-top:0"><h2>💡 احتياجات الإضاءة</h2>
-      ${isAdmin()? `<button class="btn primary sm" onclick="openLightingForm()">+ إضافة</button>`:''}
+    <div class="section-title" style="margin-top:0"><h2>💡 الإضاءة: ${f?f.name:''}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openLightingForm('${factoryId}')">+ إضافة</button>`:''}
     </div>
+    <button class="btn sm" onclick="goTo('lighting')">→ رجوع لكل المصانع</button>
+    <div id="lightingSummaryHost" style="margin-top:8px"></div>
     <div class="field"><input class="input" placeholder="🔍 بحث..." oninput="lightingFilter.text=this.value; renderLightingList()"></div>
     <div class="row2">
       <div class="field"><select class="input" onchange="lightingFilter.status=this.value; renderLightingList()">
@@ -3906,10 +3919,29 @@ function renderLightingPlaceholder(){
     <div id="lightingListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
-const LIGHTING_STATUS_COLOR = {'تحتاج إضاءة':'bad','تم الإبلاغ':'warn','قيد التنفيذ':'warn','تم الإصلاح':'ok','مغلقة':'ok'};
-async function loadLightingNeeds(){
+async function loadLightingFactoryPicker(){
+  const host = document.getElementById('lightingFactoryPickerHost');
+  if(!host) return;
+  if(!factoriesData.length){ host.innerHTML = '<div class="empty">لا توجد مصانع مسجّلة بعد.</div>'; return; }
+  let counts = {};
   try{
-    const {data, error} = await supa.from('lighting_needs').select('*').order('created_at',{ascending:false});
+    const {data} = await supa.from('lighting_needs').select('factory_id, status');
+    (data||[]).forEach(r=>{ if(!counts[r.factory_id]) counts[r.factory_id] = {total:0, open:0}; counts[r.factory_id].total++; if(r.status!=='تم الإصلاح' && r.status!=='مغلقة') counts[r.factory_id].open++; });
+  }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تشغيل schema_part4.sql في Supabase.</div>`; return; }
+  host.innerHTML = factoriesData.map(f=>{
+    const c = counts[f.id] || {total:0, open:0};
+    return `<div class="site-card" style="cursor:pointer" onclick="goTo('lighting','${f.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="site-name" style="font-size:14px">${f.name}</div>
+        <span class="pill ${c.open>0?'warn':'ok'}">${c.total} احتياج${c.open>0?' · '+c.open+' مفتوح':''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+const LIGHTING_STATUS_COLOR = {'تحتاج إضاءة':'bad','تم الإبلاغ':'warn','قيد التنفيذ':'warn','تم الإصلاح':'ok','مغلقة':'ok'};
+async function loadLightingNeeds(factoryId){
+  try{
+    const {data, error} = await supa.from('lighting_needs').select('*').eq('factory_id', factoryId).order('created_at',{ascending:false});
     if(error) throw error;
     lightingData = data||[];
   }catch(e){
@@ -3917,6 +3949,11 @@ async function loadLightingNeeds(){
     const host = document.getElementById('lightingListHost');
     if(host) host.innerHTML = `<div class="empty">⚠️ هذه الميزة تحتاج تشغيل ملف schema_part4.sql في Supabase أولًا.</div>`;
     return;
+  }
+  const sumHost = document.getElementById('lightingSummaryHost');
+  if(sumHost){
+    const open = lightingData.filter(l=>l.status!=='تم الإصلاح' && l.status!=='مغلقة').length;
+    sumHost.innerHTML = `<div class="mini-grid"><div class="mini"><div class="n">${lightingData.length}</div><div class="t">الإجمالي</div></div><div class="mini"><div class="n" style="color:var(--danger)">${open}</div><div class="t">مفتوح</div></div><div class="mini"><div class="n" style="color:var(--success)">${lightingData.length-open}</div><div class="t">مُغلق</div></div></div>`;
   }
   renderLightingList();
 }
@@ -3948,13 +3985,14 @@ function renderLightingList(){
       </div>`:''}
     </div>`).join('');
 }
-function openLightingForm(id){
+function openLightingForm(factoryId, id){
   const l = id ? lightingData.find(x=>x.id===id) : null;
   const isNew = !l;
-  const d = l || {factory_name:'', place_name:'', problem_description:'', need_type:'', priority:'متوسطة', status:'تحتاج إضاءة', notes:''};
+  const currentFactory = factoriesData.find(f=>f.id===factoryId);
+  const d = l || {factory_name: currentFactory?currentFactory.name:'', place_name:'', problem_description:'', need_type:'', priority:'متوسطة', status:'تحتاج إضاءة', notes:''};
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة احتياج إضاءة':'تعديل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>المصنع</label><select class="input" id="lt_factory">${factoriesData.map(f=>`<option ${d.factory_name===f.name?'selected':''}>${f.name}</option>`).join('')}</select></div>
+    <div class="field"><label>المصنع</label><select class="input" id="lt_factory">${factoriesData.map(f=>`<option value="${f.id}" ${(d.factory_name===f.name)?'selected':''}>${f.name}</option>`).join('')}</select></div>
     <div class="field"><label>المكان</label><input class="input" id="lt_place" value="${d.place_name||''}"></div>
     <div class="field"><label>وصف المشكلة</label><textarea class="input" id="lt_problem">${d.problem_description||''}</textarea></div>
     <div class="field"><label>نوع احتياج الإضاءة</label><input class="input" id="lt_type" value="${d.need_type||''}" placeholder="مثال: كشاف جديد / استبدال لمبة"></div>
@@ -3969,10 +4007,10 @@ function openLightingForm(id){
 async function saveLightingForm(id){
   const place = document.getElementById('lt_place').value.trim();
   if(!place){ toast('أدخل اسم المكان'); return; }
-  const factoryName = document.getElementById('lt_factory').value;
-  const factory = factoriesData.find(f=>f.name===factoryName);
+  const factoryId = document.getElementById('lt_factory').value;
+  const factory = factoriesData.find(f=>f.id===factoryId);
   const payload = {
-    factory_id: factory?factory.id:null, factory_name: factoryName, place_name: place,
+    factory_id: factoryId||null, factory_name: factory?factory.name:'', place_name: place,
     problem_description: document.getElementById('lt_problem').value.trim(), need_type: document.getElementById('lt_type').value.trim(),
     priority: document.getElementById('lt_priority').value, status: document.getElementById('lt_status').value,
     notes: document.getElementById('lt_notes').value.trim(), updated_by: currentProfile.id
@@ -3980,11 +4018,11 @@ async function saveLightingForm(id){
   try{
     if(id){ const {error}=await supa.from('lighting_needs').update(payload).eq('id',id); if(error) throw error; await logAudit('تعديل احتياج إضاءة', place); }
     else { payload.created_by=currentProfile.id; const {error}=await supa.from('lighting_needs').insert(payload); if(error) throw error; await logAudit('إضافة احتياج إضاءة', place); }
-    closeModal(); toast('✅ تم الحفظ'); loadLightingNeeds();
+    closeModal(); toast('✅ تم الحفظ'); loadLightingNeeds(factoryId);
   }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 async function updateLightingStatus(id, status){
-  try{ await supa.from('lighting_needs').update({status}).eq('id',id); const l=lightingData.find(x=>x.id===id); await logAudit('تحديث حالة إضاءة', l.place_name, l.status, status); toast('✅ تم التحديث'); loadLightingNeeds(); }
+  try{ await supa.from('lighting_needs').update({status}).eq('id',id); const l=lightingData.find(x=>x.id===id); await logAudit('تحديث حالة إضاءة', l.place_name, l.status, status); toast('✅ تم التحديث'); loadLightingNeeds(currentViewCtx); }
   catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteLightingNeed(id){
@@ -3992,7 +4030,7 @@ function deleteLightingNeed(id){
     <button class="btn danger block" onclick="confirmDeleteLighting('${id}')">حذف نهائيًا</button>`);
 }
 async function confirmDeleteLighting(id){
-  try{ await supa.from('lighting_needs').delete().eq('id',id); await logAudit('حذف احتياج إضاءة', id); closeModal(); toast('تم الحذف'); loadLightingNeeds(); }
+  try{ await supa.from('lighting_needs').delete().eq('id',id); await logAudit('حذف احتياج إضاءة', id); closeModal(); toast('تم الحذف'); loadLightingNeeds(currentViewCtx); }
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function uploadLightingPhoto(id, inputEl){
@@ -4006,7 +4044,7 @@ async function uploadLightingPhoto(id, inputEl){
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
     const {error} = await supa.from('lighting_needs').update({photo_url: pub.publicUrl}).eq('id', id);
     if(error) throw error;
-    toast('✅ تم رفع الصورة'); loadLightingNeeds();
+    toast('✅ تم رفع الصورة'); loadLightingNeeds(currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
 }
 async function removeLightingPhoto(id){
@@ -4015,7 +4053,7 @@ async function removeLightingPhoto(id){
     if(error) throw error;
     const l = lightingData.find(x=>x.id===id);
     await logAudit('حذف صورة إضاءة', l?l.place_name:id);
-    toast('✅ تم حذف الصورة'); loadLightingNeeds();
+    toast('✅ تم حذف الصورة'); loadLightingNeeds(currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 async function exportLightingExcel(){
@@ -6138,8 +6176,93 @@ function openFactoryReportPicker(){
       <button class="btn primary" onclick="generateFullFactoryReport(document.getElementById('frp_factory').value,'pdf')">🧾 PDF</button>
       <button class="btn" onclick="generateFullFactoryReport(document.getElementById('frp_factory').value,'word')">📝 Word</button>
       <button class="btn" onclick="generateFactoryExcelReport(document.getElementById('frp_factory').value)">📊 Excel</button>
+      <button class="btn" onclick="generateFactoryPptxReport(document.getElementById('frp_factory').value)">📽️ PowerPoint</button>
+      <button class="btn" onclick="generateFactoryImageReport(document.getElementById('frp_factory').value)">🖼️ صورة</button>
+      <button class="btn" onclick="generateFactoryCsvReport(document.getElementById('frp_factory').value)">📃 CSV</button>
+      <button class="btn" onclick="generateFactoryJsonReport(document.getElementById('frp_factory').value)">🗂️ JSON</button>
+      <button class="btn" onclick="generateFactoryZipReport(document.getElementById('frp_factory').value)">📦 ZIP (كل الصيغ)</button>
     </div>
   `);
+}
+
+/* ============================================================
+   رسم بياني تلقائي من بيانات المصنع الفعلية (Canvas)
+   يُستخدم داخل PDF/Word (كصورة)، PowerPoint، Excel، والتقرير المصوّر
+   ============================================================ */
+function buildFactoryChartCanvas(d){
+  const { s, faults, switches } = d;
+  const W=760, H=420;
+  const cv = document.createElement('canvas'); cv.width=W; cv.height=H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0B1220'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#38D9C9'; ctx.font='bold 18px Arial'; ctx.fillText('الرسم البياني — بيانات المصنع الفعلية', W/2, 28);
+
+  // 1) أعمدة: تشغيل الكاميرات/الشاشات
+  const barX=40, barY=60, barW=320, barH=140;
+  const bars = [['الكاميرات', s.camUptime, '#38D9C9'], ['الشاشات', s.scrUptime, '#4ADE80']];
+  bars.forEach((b,i)=>{
+    const x = barX + i*150;
+    const h = Math.max(2, (b[1]/100)*barH);
+    ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(x, barY, 90, barH);
+    ctx.fillStyle=b[2]; ctx.fillRect(x, barY+barH-h, 90, h);
+    ctx.fillStyle='#E9EEFB'; ctx.font='12px Arial'; ctx.fillText(b[0], x+45, barY+barH+18);
+    ctx.font='bold 14px Arial'; ctx.fillText(fmtPct2(b[1]), x+45, barY+barH-h-6>20?barY+barH-h-6:20);
+  });
+
+  // 2) دائرة: الأعطال حسب الخطورة
+  const sevCounts = {'عالية':0,'متوسطة':0,'منخفضة':0};
+  faults.forEach(f=> sevCounts[f.severity] = (sevCounts[f.severity]||0)+1);
+  const totalF = faults.length;
+  const cx=560, cy=130, r=70;
+  ctx.fillStyle='#E9EEFB'; ctx.font='bold 13px Arial'; ctx.fillText('توزيع الأعطال حسب الخطورة', cx, 40);
+  if(totalF>0){
+    let start=-Math.PI/2;
+    const colors={'عالية':'#FF6B6B','متوسطة':'#F5A623','منخفضة':'#4ADE80'};
+    Object.entries(sevCounts).forEach(([k,v])=>{
+      if(!v) return;
+      const angle = (v/totalF)*Math.PI*2;
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,start,start+angle); ctx.closePath();
+      ctx.fillStyle = colors[k]; ctx.fill();
+      start += angle;
+    });
+  } else {
+    ctx.strokeStyle='#333'; ctx.beginPath(); ctx.arc(cx,cy,r,0,2*Math.PI); ctx.stroke();
+    ctx.fillStyle='#666'; ctx.font='12px Arial'; ctx.fillText('لا توجد أعطال', cx, cy+5);
+  }
+  let ly=cy+r+24;
+  Object.entries(sevCounts).forEach(([k,v])=>{
+    ctx.fillStyle = k==='عالية'?'#FF6B6B':(k==='متوسطة'?'#F5A623':'#4ADE80');
+    ctx.fillRect(cx-60, ly-9, 10,10);
+    ctx.fillStyle='#E9EEFB'; ctx.font='11px Arial'; ctx.textAlign='left'; ctx.fillText(`${k}: ${v}`, cx-44, ly);
+    ly+=16;
+  });
+  ctx.textAlign='center';
+
+  // 3) أعمدة: منافذ السويتشات المستخدمة/الفارغة
+  const totalPorts = switches.reduce((a,sw)=>a+(sw.total_ports||0),0);
+  const usedPorts = switches.reduce((a,sw)=>a+(sw.used_ports||0),0);
+  const freePorts = Math.max(0,totalPorts-usedPorts);
+  const py = 250, pw = 640, ph=26;
+  ctx.fillStyle='#E9EEFB'; ctx.font='bold 13px Arial'; ctx.textAlign='right'; ctx.fillText('استخدام منافذ الشبكة (Ports)', 700, py-10);
+  ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(40, py, pw, ph);
+  if(totalPorts>0){
+    const usedW = (usedPorts/totalPorts)*pw;
+    ctx.fillStyle='#F5A623'; ctx.fillRect(40, py, usedW, ph);
+  }
+  ctx.fillStyle='#E9EEFB'; ctx.font='12px Arial'; ctx.textAlign='center';
+  ctx.fillText(`إجمالي: ${totalPorts}  ·  مستخدمة: ${usedPorts}  ·  فارغة: ${freePorts}`, 40+pw/2, py+ph+18);
+
+  ctx.fillStyle='#5E6E92'; ctx.font='10px Arial'; ctx.fillText('رسم تلقائي من البيانات الفعلية المسجّلة — بدون أرقام افتراضية', W/2, H-12);
+  return cv;
+}
+async function previewFactoryChart(factoryId){
+  toast('جاري تجميع البيانات...');
+  const d = await gatherFullFactoryData(factoryId);
+  const cv = buildFactoryChartCanvas(d);
+  openModal(`<div class="modal-head"><h3>📊 الرسم البياني — ${d.f?d.f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <img src="${cv.toDataURL('image/png')}" style="width:100%;border-radius:10px">
+    <button class="btn primary block" style="margin-top:10px" onclick="(function(){const a=document.createElement('a');a.href='${cv.toDataURL('image/png')}';a.download='رسم-بياني.png';a.click();})()">⬇️ تنزيل</button>`);
 }
 
 /* ============================================================
@@ -6269,6 +6392,12 @@ async function buildFullFactoryReportHtml(d){
   // 12) UPS
   html += h2('12. UPS') + (fmtNoData(ups) ||
     table(['الاسم','الموقع','الحالة','صورة'], ups.map(u=>[u.ups_name, u.location||'', u.status, img(u.photo_url,55)])));
+
+  // 12.5) الرسم البياني التلقائي من البيانات الفعلية
+  try{
+    const chartCv = buildFactoryChartCanvas(d);
+    html += h2('الرسم البياني') + `<div style="text-align:center"><img src="${chartCv.toDataURL('image/png')}" style="max-width:100%;border-radius:8px"></div>`;
+  }catch(e){ console.warn('تعذّر إنشاء الرسم البياني', e); }
 
   // 13) Network Infrastructure (ملخص)
   html += h2('13. البنية التحتية للشبكة (ملخص)') + table(['البند','العدد'], [
@@ -6408,6 +6537,127 @@ async function generateFactoryExcelReport(factoryId){
   await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.xlsx`);
   await logAudit('إنشاء تقرير مصنع شامل (Excel)', f?f.name:factoryId);
 }
+
+async function generateFactoryPptxReport(factoryId){
+  const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
+  toast('جاري تجميع بيانات المصنع...');
+  const d = await gatherFullFactoryData(factoryId);
+  const { f, s, cameras, screens, faults, racks, switches, servers, ups } = d;
+  const pptx = new PptxGenJS();
+  pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
+  const cover = pptx.addSlide({masterName:'MASTER'});
+  cover.addText(f?f.name:'', {x:0.5,y:2.2,w:9,h:1,fontSize:32,bold:true,color:'38D9C9',align:'center'});
+  cover.addText('التقرير الشامل', {x:0.5,y:3.1,w:9,h:0.6,fontSize:18,color:'E9EEFB',align:'center'});
+  cover.addText(new Date().toLocaleDateString('ar-EG'), {x:0.5,y:3.7,w:9,h:0.4,fontSize:12,color:'8CA0C4',align:'center'});
+
+  const dash = pptx.addSlide({masterName:'MASTER'});
+  dash.addText('الملخص العام', {x:0.4,y:0.3,w:9,h:0.6,fontSize:22,bold:true,color:'38D9C9',align:'center'});
+  const cards = [['نسبة تشغيل الكاميرات',fmtPct2(s.camUptime)],['نسبة تشغيل الشاشات',fmtPct2(s.scrUptime)],['إجمالي الأعطال',faults.length],['إجمالي السيرفرات',servers.length]];
+  cards.forEach((c,i)=>{ const x=0.5+(i%2)*4.7, y=1.3+Math.floor(i/2)*1.6;
+    dash.addShape('roundRect', {x,y,w:4.3,h:1.3,fill:{color:'182446'},line:{color:'243055'}});
+    dash.addText(String(c[0]), {x,y:y+0.1,w:4.3,h:0.4,fontSize:12,color:'8CA0C4',align:'center'});
+    dash.addText(String(c[1]), {x,y:y+0.5,w:4.3,h:0.7,fontSize:24,bold:true,color:'4ADE80',align:'center'});
+  });
+
+  try{
+    const chartCv = buildFactoryChartCanvas(d);
+    const chartSlide = pptx.addSlide({masterName:'MASTER'});
+    chartSlide.addText('الرسم البياني', {x:0.4,y:0.2,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
+    chartSlide.addImage({ data: chartCv.toDataURL('image/png'), x:0.5, y:0.8, w:9, h:5 });
+  }catch(e){}
+
+  if(cameras.length){ const sl=pptx.addSlide({masterName:'MASTER'});
+    sl.addText('الكاميرات', {x:0.4,y:0.3,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
+    sl.addTable([['الاسم','الحالة'], ...cameras.slice(0,12).map(c=>[c.camera_name,c.status])], {x:0.5,y:1,w:9,fontSize:11,color:'E9EEFB',fill:{color:'182446'}});
+  }
+  if(faults.length){ const sl=pptx.addSlide({masterName:'MASTER'});
+    sl.addText('الأعطال', {x:0.4,y:0.3,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
+    sl.addTable([['الجهاز','الخطورة','الحالة'], ...faults.slice(0,12).map(fl=>[fl.device_name,fl.severity,fl.status])], {x:0.5,y:1,w:9,fontSize:11,color:'E9EEFB',fill:{color:'182446'}});
+  }
+  if(switches.length){ const sl=pptx.addSlide({masterName:'MASTER'});
+    sl.addText('البنية التحتية للشبكة', {x:0.4,y:0.3,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
+    sl.addTable([['Switch','Ports','مستخدمة'], ...switches.slice(0,12).map(sw=>[sw.switch_name,String(sw.total_ports||0),String(sw.used_ports||0)])], {x:0.5,y:1,w:9,fontSize:11,color:'E9EEFB',fill:{color:'182446'}});
+  }
+  const blob = await pptx.write('blob');
+  await saveOrShareFile(blob, `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.pptx`);
+  await logAudit('إنشاء تقرير مصنع شامل (PowerPoint)', f?f.name:factoryId);
+}
+
+async function generateFactoryImageReport(factoryId){
+  toast('جاري تجميع بيانات المصنع...');
+  const d = await gatherFullFactoryData(factoryId);
+  const { f, s, cameras, faults, racks, switches, servers, ups } = d;
+  const chartCv = buildFactoryChartCanvas(d);
+  const W=1080, H=1500;
+  const cv = document.createElement('canvas'); cv.width=W; cv.height=H;
+  const ctx = cv.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,H); grad.addColorStop(0,'#0B1220'); grad.addColorStop(1,'#0E1830');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,W,H); ctx.textAlign='center';
+  ctx.fillStyle='#38D9C9'; ctx.font='700 26px Arial'; ctx.fillText(f?f.name:'', W/2, 60);
+  ctx.fillStyle='#E9EEFB'; ctx.font='900 22px Arial'; ctx.fillText('التقرير الشامل', W/2, 96);
+  ctx.fillStyle='#8CA0C4'; ctx.font='14px Arial'; ctx.fillText(new Date().toLocaleDateString('ar-EG'), W/2, 122);
+  const cards = [['الكاميرات',cameras.length],['نسبة التشغيل',fmtPct2(s.camUptime)],['الشاشات',s.screens],['الأعطال',faults.length],['Racks',racks.length],['Switches',switches.length],['Servers',servers.length],['UPS',ups.length],['Ports فارغة',switches.reduce((a,sw)=>a+Math.max(0,(sw.total_ports||0)-(sw.used_ports||0)),0)]];
+  const cw=(W-4*30)/3, ch=95, top=150;
+  cards.forEach(([label,val],i)=>{
+    const col=i%3, row=Math.floor(i/3), x=30+col*(cw+30), y=top+row*(ch+14);
+    ctx.fillStyle='rgba(255,255,255,0.04)'; ctx.fillRect(x,y,cw,ch);
+    ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.strokeRect(x,y,cw,ch);
+    ctx.fillStyle='#8CA0C4'; ctx.font='500 14px Arial'; ctx.fillText(String(label),x+cw/2,y+28);
+    ctx.fillStyle='#38D9C9'; ctx.font='900 28px Arial'; ctx.fillText(String(val),x+cw/2,y+64);
+  });
+  const chartY = top + 3*(ch+14) + 20;
+  ctx.drawImage(chartCv, 20, chartY, W-40, (W-40)*(chartCv.height/chartCv.width));
+  ctx.fillStyle='#5E6E92'; ctx.font='12px Arial'; ctx.fillText('تصدير تلقائي — بيانات فعلية 100%', W/2, H-20);
+  cv.toBlob(async blob=>{ await saveOrShareFile(blob, `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.png`); await logAudit('إنشاء تقرير مصنع شامل (صورة)', f?f.name:factoryId); }, 'image/png', 0.95);
+}
+
+async function generateFactoryCsvReport(factoryId){
+  toast('جاري تجميع بيانات المصنع...');
+  const d = await gatherFullFactoryData(factoryId);
+  const { f, cameras, screens, faults, racks, switches, servers, ups } = d;
+  const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  const lines = ['\ufeff== الكاميرات ==', ['الاسم','الحالة'].map(esc).join(',')];
+  cameras.forEach(c=> lines.push([c.camera_name,c.status].map(esc).join(',')));
+  lines.push('', '== الشاشات ==', ['الاسم','الحالة'].map(esc).join(','));
+  screens.forEach(s=> lines.push([s.screen_name,s.status].map(esc).join(',')));
+  lines.push('', '== الأعطال ==', ['الجهاز','الخطورة','الحالة'].map(esc).join(','));
+  faults.forEach(fl=> lines.push([fl.device_name,fl.severity,fl.status].map(esc).join(',')));
+  lines.push('', '== Switches ==', ['الاسم','Ports','مستخدمة'].map(esc).join(','));
+  switches.forEach(sw=> lines.push([sw.switch_name,sw.total_ports||0,sw.used_ports||0].map(esc).join(',')));
+  await saveOrShareFile(new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}), `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.csv`);
+  await logAudit('إنشاء تقرير مصنع شامل (CSV)', f?f.name:factoryId);
+}
+
+async function generateFactoryJsonReport(factoryId){
+  toast('جاري تجميع بيانات المصنع...');
+  const d = await gatherFullFactoryData(factoryId);
+  await saveOrShareFile(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}), `تقرير-شامل-${d.f?d.f.name:''}-${new Date().toISOString().slice(0,10)}.json`);
+  await logAudit('إنشاء تقرير مصنع شامل (JSON)', d.f?d.f.name:factoryId);
+}
+
+async function generateFactoryZipReport(factoryId){
+  const zipOk = await ensureZipLib(); if(!zipOk){ toast('⚠️ تعذّر تحميل مكتبة ZIP'); return; }
+  toast('جاري تجهيز كل الصيغ... قد يستغرق دقيقة');
+  const d = await gatherFullFactoryData(factoryId);
+  const fname = d.f ? d.f.name : factoryId;
+  const zip = new JSZip();
+  const folder = zip.folder(`تقرير-شامل-${fname}-${new Date().toISOString().slice(0,10)}`);
+  folder.file('البيانات.json', JSON.stringify(d,null,2));
+  const bodyHtml = await buildFullFactoryReportHtml(d);
+  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body>${bodyHtml}</body></html>`);
+  if(await ensurePdfLib()){
+    const el = document.createElement('div'); el.innerHTML = bodyHtml; document.body.appendChild(el);
+    const pdfBlob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+    el.remove();
+    folder.file('التقرير.pdf', pdfBlob);
+  }
+  try{ const chartCv = buildFactoryChartCanvas(d); const chartBlob = await new Promise(r=>chartCv.toBlob(r,'image/png')); folder.file('الرسم-البياني.png', chartBlob); }catch(e){}
+  const zipBlob = await zip.generateAsync({type:'blob'});
+  await saveOrShareFile(zipBlob, `تقرير-شامل-${fname}-${new Date().toISOString().slice(0,10)}.zip`);
+  await logAudit('إنشاء تقرير مصنع شامل (ZIP)', fname);
+  toast('✅ تم تجهيز الحزمة الكاملة');
+}
+
 async function generatePeriodReport(period){
   const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
   toast('جاري تجميع بيانات التقرير...');
