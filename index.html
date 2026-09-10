@@ -1149,6 +1149,10 @@ async function openFactoryForm(id){
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة موقع جديد':'تعديل: '+d.name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>اسم المصنع / الموقع</label><input class="input" id="ff_name" value="${d.name}"></div>
+    <div class="field" style="background:var(--bg-2);padding:10px;border-radius:10px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="ff_ishub" ${d.is_central_hub?'checked':''} style="accent-color:var(--accent)"> 🏛️ هذا هو المصنع المضيف للغرفة المركزية (Central Monitoring Room)</label>
+      <p style="font-size:10px;color:var(--muted-2);margin-top:4px">اختَر ده لمصنع واحد بس (زي: مصنع الدولية) — كل باقي المصانع بتتصل بيه عن طريق أبراج الأنتنة في الخريطة المركزية.</p>
+    </div>
 
     ${migrated ? `
     <p style="font-size:10.5px;color:var(--muted-2);margin:6px 0">أعداد الكاميرات والشاشات تُحسب تلقائيًا من السجلات الفردية:</p>
@@ -1177,8 +1181,9 @@ async function saveFactoryForm(id, migrated){
   if(!isAdmin()){ toast('🚫 هذه العملية متاحة للأدمن فقط'); return; }
   const name = document.getElementById('ff_name').value.trim();
   if(!name){ toast('أدخل اسم الموقع'); return; }
+  const isHub = document.getElementById('ff_ishub').checked;
   const payload = {
-    name,
+    name, is_central_hub: isHub,
     root_causes: document.getElementById('ff_root').value.trim(),
     actions: document.getElementById('ff_actions').value.trim(),
     updated_by: currentProfile.id
@@ -1192,6 +1197,7 @@ async function saveFactoryForm(id, migrated){
     Object.assign(payload, { cameras_total:camerasTotal, cameras_down:camerasDown, screens, screens_down:screensDown, down_list:downList });
   }
   try{
+    if(isHub){ try{ await supa.from('factories').update({is_central_hub:false}).neq('id', id||'00000000-0000-0000-0000-000000000000'); }catch(e){} }
     if(id){
       if(!navigator.onLine){ queuePendingOp({table:'factories', type:'update', id, data:payload}); toast('📥 تم الحفظ محليًا، سيُرفع عند عودة الاتصال'); }
       else { const {error} = await supa.from('factories').update(payload).eq('id', id); if(error) throw error; }
@@ -1511,7 +1517,8 @@ const PERM_LABELS = {
   view_roomneeds:'عرض احتياجات الغرفة', view_roomneeds_images:'عرض صور احتياجات الغرفة', upload_roomneeds_images:'رفع صور احتياجات الغرفة', edit_roomneeds_images:'استبدال صور احتياجات الغرفة', delete_roomneeds_images:'حذف صور احتياجات الغرفة',
   view_servers:'عرض السيرفرات', add_server:'إضافة سيرفر', edit_server:'تعديل سيرفر', delete_server:'حذف سيرفر',
   view_server_images:'عرض صور السيرفرات', upload_server_images:'رفع صور السيرفرات', delete_server_images:'حذف صور السيرفرات',
-  view_storage:'عرض التخزين (Storage)', edit_storage:'تعديل التخزين (Storage)'
+  view_storage:'عرض التخزين (Storage)', edit_storage:'تعديل التخزين (Storage)',
+  view_network_map:'عرض خريطة الشبكة والأبراج', edit_network_map:'تعديل خريطة الشبكة والأبراج', export_network_data:'تصدير بيانات الشبكة'
 };
 function renderUsersList(){
   const host = document.getElementById('usersListHost');
@@ -4643,13 +4650,26 @@ function renderNetworkPlaceholder(factoryId){
     </div>
     <div id="serversListHost"><div class="empty">جاري التحميل...</div></div>
 
+    ${!f?.is_central_hub ? `
+    <div class="section-title"><h2 style="font-size:14px">🗼 أبراج الأنتنة والربط اللاسلكي</h2>
+      ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn sm primary" onclick="openTowerForm('${factoryId}')">+ إضافة برج</button>`:''}
+    </div>
+    <div id="towersListHost"><div class="empty">جاري التحميل...</div></div>
+    ` : `<div class="site-card" style="margin-top:14px;background:linear-gradient(150deg,#16233F,#0F1A30);border-color:var(--accent)">
+      <div class="site-name" style="font-size:14px">🏛️ هذا المصنع هو الغرفة المركزية (Central Hub)</div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:4px">كل المصانع الأخرى تتصل به عن طريق الروابط اللاسلكية — لا يحتاج بيانات برج بنفسه.</p>
+    </div>`}
+
     <div class="btn-row" style="margin-top:10px">
-      <button class="btn sm" onclick="openNetworkMap('${factoryId}')">🗺️ خريطة الشبكة</button>
+      <button class="btn sm" onclick="openNetworkMap('${factoryId}')">🗺️ خريطة الشبكة الداخلية</button>
+      <button class="btn sm primary" onclick="openCentralNetworkMap()">🌐 الخريطة المركزية لكل المصانع</button>
     </div>
   </div>`;
 }
 let serversData = [];
 let networkCamerasData = [];
+let towersData = [];
+let wirelessLinksData = [];
 async function loadNetworkData(factoryId){
   try{
     const [{data:racks, error:e1}, {data:sws, error:e2}, {data:cams}] = await Promise.all([
@@ -4668,9 +4688,19 @@ async function loadNetworkData(factoryId){
     try{ const {data} = await supa.from('factory_servers').select('*').eq('factory_id',factoryId).order('server_name'); serversData = data||[]; }
     catch(e){ serversData=[]; const h=document.getElementById('serversListHost'); if(h) h.innerHTML='<div class="empty">⚠️ يحتاج تشغيل schema_part11.sql في Supabase.</div>'; }
   } else { serversData = []; const h=document.getElementById('serversListHost'); if(h) h.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض السيرفرات.</div>'; }
+  if(isAdmin()||hasPerm('view_network_map')){
+    try{
+      const {data: towers} = await supa.from('antenna_towers').select('*').eq('factory_id',factoryId).order('tower_name');
+      towersData = towers||[];
+      const towerIds = towersData.map(t=>t.id);
+      if(towerIds.length){ const {data: links} = await supa.from('wireless_links').select('*').or(`from_tower_id.in.(${towerIds.join(',')}),to_tower_id.in.(${towerIds.join(',')})`); wirelessLinksData = links||[]; }
+      else { wirelessLinksData = []; }
+    }catch(e){ towersData=[]; wirelessLinksData=[]; const h=document.getElementById('towersListHost'); if(h) h.innerHTML='<div class="empty">⚠️ يحتاج تشغيل schema_part17.sql في Supabase.</div>'; }
+  } else { towersData=[]; const h=document.getElementById('towersListHost'); if(h) h.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض الأبراج.</div>'; }
   renderRacksList(factoryId);
   renderSwitchesList(factoryId);
   renderServersList(factoryId);
+  renderTowersList(factoryId);
   renderNetInfraSummary(factoryId);
 }
 function renderNetInfraSummary(factoryId){
@@ -4831,6 +4861,257 @@ function deleteServer(serverId, factoryId){
 async function confirmDeleteServer(serverId, factoryId){
   try{ const s=serversData.find(x=>x.id===serverId); await supa.from('factory_servers').delete().eq('id',serverId); await logAudit('حذف سيرفر', s?s.server_name:serverId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
   catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   أبراج الأنتنة والربط اللاسلكي (Antenna Towers + Wireless Links)
+   كل مصنع (عدا الغرفة المركزية) له برج أو أكتر، وكل برج له رابط
+   لاسلكي ينتهي في مصنع/برج تاني أو في الغرفة المركزية مباشرة
+   ============================================================ */
+const TOWER_STATUS_COLOR = {'يعمل':'ok','يعمل ويحتاج متابعة':'warn','ضعيف':'warn','منقطع':'bad','يحتاج صيانة':'warn','خارج الخدمة':'bad'};
+function renderTowersList(factoryId){
+  const host = document.getElementById('towersListHost');
+  if(!host) return;
+  const f = factoriesData.find(x=>x.id===factoryId);
+  if(f?.is_central_hub) return;
+  if(!isAdmin() && !hasPerm('view_network_map')){ host.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض الأبراج.</div>'; return; }
+  if(!towersData.length){ host.innerHTML='<div class="empty">لا توجد أبراج مسجّلة بعد لهذا المصنع.</div>'; return; }
+  host.innerHTML = towersData.map(t=>{
+    const links = wirelessLinksData.filter(l=>l.from_tower_id===t.id);
+    return `<div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div class="site-name" style="font-size:14px">🗼 ${t.tower_name}</div><div class="site-meta">${t.location||'—'} ${t.tower_type?'· '+t.tower_type:''}</div></div>
+        <span class="pill ${TOWER_STATUS_COLOR[t.status]}">${t.status}</span>
+      </div>
+      ${t.frequency||t.bandwidth? `<div style="font-size:10.5px;color:var(--muted);margin-top:4px">${t.frequency?'التردد: '+t.frequency:''} ${t.bandwidth?'· Bandwidth: '+t.bandwidth:''}</div>`:''}
+      ${links.length ? links.map(l=>{
+        const toLabel = l.to_central_hub ? '🏛️ الغرفة المركزية' : 'برج آخر';
+        return `<div style="margin-top:6px;padding:6px 8px;background:var(--bg-2);border-radius:8px;font-size:10.5px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showWirelessLinkDetails('${l.id}')">
+          <span>🔗 ${l.link_name} → ${toLabel}</span><span class="pill ${TOWER_STATUS_COLOR[l.status]}" style="font-size:9px">${l.status}</span>
+        </div>`;
+      }).join('') : ''}
+      <div class="btn-row" style="margin-top:8px">
+        ${(isAdmin()||hasPerm('edit_network_map'))? `
+        <button class="btn sm" onclick="openWirelessLinkForm('${t.id}')">+ رابط لاسلكي</button>
+        <button class="btn sm" onclick="openTowerGallery('${t.id}')">📷 الصور</button>
+        <button class="btn sm" onclick="openTowerForm('${factoryId}','${t.id}')">✏️ تعديل</button>
+        <button class="btn sm danger" onclick="deleteTower('${t.id}','${factoryId}')">🗑 حذف</button>` : `<button class="btn sm" onclick="openTowerGallery('${t.id}')">📷 الصور</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+function openTowerForm(factoryId, towerId){
+  const t = towerId ? towersData.find(x=>x.id===towerId) : null;
+  const isNew = !t;
+  const d = t || {tower_name:'',tower_number:'',location:'',tower_type:'',height:'',status:'يعمل',antenna_count:'',antenna_type:'',brand:'',model:'',serial_number:'',frequency:'',bandwidth:'',radio_model:'',ip_address:'',mac_address:'',direction:'',other_end:'',distance_km:'',notes:''};
+  openModal(`
+    <div class="modal-head"><h3>${isNew?'+ إضافة برج أنتنة':'تعديل: '+d.tower_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم البرج *</label><input class="input" id="tw_name" value="${d.tower_name}"></div>
+    <div class="row2">
+      <div class="field"><label>رقم البرج</label><input class="input" id="tw_number" value="${d.tower_number||''}"></div>
+      <div class="field"><label>الحالة</label><select class="input" id="tw_status">${['يعمل','يعمل ويحتاج متابعة','ضعيف','منقطع','يحتاج صيانة','خارج الخدمة'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الموقع</label><input class="input" id="tw_location" value="${d.location||''}"></div>
+      <div class="field"><label>النوع</label><input class="input" id="tw_type" value="${d.tower_type||''}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الارتفاع</label><input class="input" id="tw_height" value="${d.height||''}"></div>
+      <div class="field"><label>عدد الأنتن</label><input class="input" type="number" id="tw_antcount" value="${d.antenna_count||''}"></div>
+    </div>
+    <div class="field"><label>نوع الأنتن</label><input class="input" id="tw_anttype" value="${d.antenna_type||''}"></div>
+    <div class="row2">
+      <div class="field"><label>الشركة المصنعة</label><input class="input" id="tw_brand" value="${d.brand||''}"></div>
+      <div class="field"><label>الموديل</label><input class="input" id="tw_model" value="${d.model||''}"></div>
+    </div>
+    <div class="field"><label>Serial Number</label><input class="input" id="tw_serial" value="${d.serial_number||''}"></div>
+    <div class="row2">
+      <div class="field"><label>التردد (Frequency)</label><input class="input" id="tw_freq" value="${d.frequency||''}"></div>
+      <div class="field"><label>Bandwidth</label><input class="input" id="tw_bw" value="${d.bandwidth||''}"></div>
+    </div>
+    <div class="field"><label>موديل الـ Radio</label><input class="input" id="tw_radio" value="${d.radio_model||''}"></div>
+    <div class="row2">
+      <div class="field"><label>IP</label><input class="input" id="tw_ip" value="${d.ip_address||''}"></div>
+      <div class="field"><label>MAC</label><input class="input" id="tw_mac" value="${d.mac_address||''}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>اتجاه الأنتنة</label><input class="input" id="tw_dir" value="${d.direction||''}"></div>
+      <div class="field"><label>المسافة التقريبية (كم)</label><input class="input" type="number" step="0.1" id="tw_dist" value="${d.distance_km||''}"></div>
+    </div>
+    <div class="field"><label>الطرف الآخر للوصلة</label><input class="input" id="tw_otherend" value="${d.other_end||''}" placeholder="مثال: مصنع الدولية - الغرفة المركزية"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="tw_notes">${d.notes||''}</textarea></div>
+    <button class="btn primary block" onclick="saveTowerForm('${factoryId}','${isNew?'':towerId}')">💾 حفظ</button>
+  `);
+}
+async function saveTowerForm(factoryId, towerId){
+  const name = document.getElementById('tw_name').value.trim();
+  if(!name){ toast('أدخل اسم البرج'); return; }
+  const num = v=> v===''||v==null ? null : Number(v);
+  const payload = {
+    factory_id: factoryId, tower_name:name, tower_number:document.getElementById('tw_number').value.trim(),
+    status:document.getElementById('tw_status').value, location:document.getElementById('tw_location').value.trim(),
+    tower_type:document.getElementById('tw_type').value.trim(), height:document.getElementById('tw_height').value.trim(),
+    antenna_count:num(document.getElementById('tw_antcount').value), antenna_type:document.getElementById('tw_anttype').value.trim(),
+    brand:document.getElementById('tw_brand').value.trim(), model:document.getElementById('tw_model').value.trim(),
+    serial_number:document.getElementById('tw_serial').value.trim(), frequency:document.getElementById('tw_freq').value.trim(),
+    bandwidth:document.getElementById('tw_bw').value.trim(), radio_model:document.getElementById('tw_radio').value.trim(),
+    ip_address:document.getElementById('tw_ip').value.trim(), mac_address:document.getElementById('tw_mac').value.trim(),
+    direction:document.getElementById('tw_dir').value.trim(), distance_km:num(document.getElementById('tw_dist').value),
+    other_end:document.getElementById('tw_otherend').value.trim(), notes:document.getElementById('tw_notes').value.trim()
+  };
+  try{
+    if(towerId){ payload.updated_by=currentProfile.id; const {error}=await supa.from('antenna_towers').update(payload).eq('id',towerId); if(error) throw error; await logAudit('تعديل برج أنتنة', name); }
+    else { payload.created_by=currentProfile.id; const {error}=await supa.from('antenna_towers').insert(payload); if(error) throw error; await logAudit('إضافة برج أنتنة', name); }
+    closeModal(); toast('✅ تم الحفظ'); loadNetworkData(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+function deleteTower(towerId, factoryId){
+  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">حذف البرج وكل روابطه اللاسلكية المرتبطة به نهائيًا؟</p>
+    <button class="btn danger block" onclick="confirmDeleteTower('${towerId}','${factoryId}')">حذف نهائيًا</button>`);
+}
+async function confirmDeleteTower(towerId, factoryId){
+  try{ const t=towersData.find(x=>x.id===towerId); await supa.from('antenna_towers').delete().eq('id',towerId); await logAudit('حذف برج أنتنة', t?t.tower_name:towerId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ---------- صور البرج ---------- */
+let currentTowerImages = [];
+async function openTowerGallery(towerId){
+  const t = towersData.find(x=>x.id===towerId);
+  try{ const {data} = await supa.from('tower_images').select('*').eq('tower_id',towerId).order('sort_order'); currentTowerImages = data||[]; }catch(e){ currentTowerImages=[]; }
+  const canEdit = isAdmin()||hasPerm('edit_network_map');
+  openModal(`
+    <div class="modal-head"><h3>📷 صور برج: ${t?t.tower_name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${canEdit? `<label class="btn primary sm block" style="cursor:pointer;margin-bottom:10px;text-align:center">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadTowerImages('${towerId}', this)"></label>`:''}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      ${currentTowerImages.length===0? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
+        currentTowerImages.map((im,i)=>`<div style="position:relative">
+          <img src="${im.image_url}" style="width:100%;height:85px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(currentTowerImages.map(x=>x.image_url))},${i})'>
+          ${canEdit? `<button onclick="deleteTowerImage('${im.id}','${towerId}')" style="position:absolute;top:4px;left:4px;background:rgba(255,60,60,.9);color:#fff;border:none;width:22px;height:22px;border-radius:50%;font-size:11px;cursor:pointer">🗑</button>`:''}
+        </div>`).join('')}
+    </div>
+  `);
+}
+async function uploadTowerImages(towerId, inputEl){
+  const files = Array.from(inputEl.files||[]);
+  if(!files.length) return;
+  toast(`جاري رفع ${files.length} صورة...`);
+  let ok=0;
+  for(const file of files){
+    try{
+      const compressed = await compressImageFile(file);
+      const path = `towers/${towerId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
+      const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(upErr) throw upErr;
+      const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      const {error} = await supa.from('tower_images').insert({tower_id:towerId, image_url:pub.publicUrl, created_by:currentProfile.id});
+      if(error) throw error;
+      ok++;
+    }catch(e){ console.error(e); }
+  }
+  const {data} = await supa.from('tower_images').select('*').eq('tower_id',towerId).order('sort_order');
+  currentTowerImages = data||[];
+  toast(`✅ تم رفع ${ok} صورة`); openTowerGallery(towerId);
+}
+async function deleteTowerImage(imageId, towerId){
+  try{ await supa.from('tower_images').delete().eq('id',imageId); currentTowerImages = currentTowerImages.filter(x=>x.id!==imageId); toast('✅ تم الحذف'); openTowerGallery(towerId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ---------- الروابط اللاسلكية ---------- */
+async function openWirelessLinkForm(fromTowerId){
+  const fromTower = towersData.find(x=>x.id===fromTowerId);
+  let otherTowers = [];
+  try{ const {data} = await supa.from('antenna_towers').select('*, factories(name)').neq('id', fromTowerId); otherTowers = data||[]; }catch(e){}
+  openModal(`
+    <div class="modal-head"><h3>🔗 رابط لاسلكي من: ${fromTower?fromTower.tower_name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>اسم الرابط</label><input class="input" id="wl_name" placeholder="مثال: رابط المروة-الدولية"></div>
+    <div class="field"><label>الطرف الآخر</label>
+      <select class="input" id="wl_dest">
+        <option value="central">🏛️ الغرفة المركزية مباشرة (مصنع الدولية)</option>
+        ${otherTowers.length? `<optgroup label="🗼 أبراج أخرى">${otherTowers.map(t=>`<option value="tower:${t.id}">${t.tower_name} (${t.factories?.name||''})</option>`).join('')}</optgroup>`:''}
+      </select>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Radio Source</label><input class="input" id="wl_radiosrc"></div>
+      <div class="field"><label>Radio Destination</label><input class="input" id="wl_radiodst"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Frequency</label><input class="input" id="wl_freq"></div>
+      <div class="field"><label>Channel</label><input class="input" id="wl_channel"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Bandwidth</label><input class="input" id="wl_bw"></div>
+      <div class="field"><label>Speed</label><input class="input" id="wl_speed"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Signal Strength</label><input class="input" id="wl_signal"></div>
+      <div class="field"><label>Link Quality</label><input class="input" id="wl_quality"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الحالة</label><select class="input" id="wl_status">${['يعمل','يعمل ويحتاج متابعة','ضعيف','منقطع','يحتاج صيانة','خارج الخدمة'].map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>تاريخ آخر فحص</label><input class="input" type="date" id="wl_lastcheck"></div>
+    </div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="wl_notes"></textarea></div>
+    <button class="btn primary block" onclick="saveWirelessLinkForm('${fromTowerId}')">💾 حفظ الرابط</button>
+  `);
+}
+async function saveWirelessLinkForm(fromTowerId){
+  const name = document.getElementById('wl_name').value.trim();
+  if(!name){ toast('أدخل اسم الرابط'); return; }
+  const destVal = document.getElementById('wl_dest').value;
+  const payload = {
+    link_name:name, from_tower_id:fromTowerId,
+    to_central_hub: destVal==='central', to_tower_id: destVal.startsWith('tower:') ? destVal.slice(6) : null,
+    radio_source:document.getElementById('wl_radiosrc').value.trim(), radio_destination:document.getElementById('wl_radiodst').value.trim(),
+    frequency:document.getElementById('wl_freq').value.trim(), channel:document.getElementById('wl_channel').value.trim(),
+    bandwidth:document.getElementById('wl_bw').value.trim(), speed:document.getElementById('wl_speed').value.trim(),
+    signal_strength:document.getElementById('wl_signal').value.trim(), link_quality:document.getElementById('wl_quality').value.trim(),
+    status:document.getElementById('wl_status').value, last_check_date:document.getElementById('wl_lastcheck').value||null,
+    notes:document.getElementById('wl_notes').value.trim()
+  };
+  try{
+    payload.created_by=currentProfile.id;
+    const {error} = await supa.from('wireless_links').insert(payload);
+    if(error) throw error;
+    await logAudit('إضافة رابط لاسلكي', name);
+    const t = towersData.find(x=>x.id===fromTowerId);
+    closeModal(); toast('✅ تم حفظ الرابط'); loadNetworkData(t?.factory_id);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function showWirelessLinkDetails(linkId){
+  let l = wirelessLinksData.find(x=>x.id===linkId);
+  if(!l){ try{ const {data}=await supa.from('wireless_links').select('*').eq('id',linkId).single(); l=data; }catch(e){} }
+  if(!l){ toast('تعذّر إيجاد الرابط'); return; }
+  const fromTower = towersData.find(x=>x.id===l.from_tower_id);
+  let toLabel = 'الغرفة المركزية';
+  if(!l.to_central_hub && l.to_tower_id){
+    try{ const {data} = await supa.from('antenna_towers').select('*').eq('id',l.to_tower_id).single(); toLabel = data?data.tower_name:'برج آخر'; }catch(e){}
+  }
+  openModal(`
+    <div class="modal-head"><h3>🔗 ${l.link_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:12.5px"><b>من:</b> ${fromTower?fromTower.tower_name:'—'} &nbsp; <b>إلى:</b> ${toLabel}</p>
+    <span class="pill ${TOWER_STATUS_COLOR[l.status]}">${l.status}</span>
+    <div class="mini-grid" style="margin-top:10px">
+      <div class="mini"><div class="n" style="font-size:11px">${l.frequency||'—'}</div><div class="t">Frequency</div></div>
+      <div class="mini"><div class="n" style="font-size:11px">${l.bandwidth||'—'}</div><div class="t">Bandwidth</div></div>
+      <div class="mini"><div class="n" style="font-size:11px">${l.signal_strength||'—'}</div><div class="t">Signal</div></div>
+      <div class="mini"><div class="n" style="font-size:11px">${l.speed||'—'}</div><div class="t">Speed</div></div>
+    </div>
+    ${l.last_check_date? `<p style="font-size:11px;color:var(--muted);margin-top:8px">آخر فحص: ${fmtDateAr(l.last_check_date)}</p>`:''}
+    ${l.notes? `<p style="font-size:11px;color:var(--muted)">${l.notes}</p>`:''}
+    ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn danger block" style="margin-top:10px" onclick="deleteWirelessLink('${l.id}')">🗑 حذف الرابط</button>`:''}
+  `);
+}
+async function deleteWirelessLink(linkId){
+  try{
+    const l = wirelessLinksData.find(x=>x.id===linkId);
+    await supa.from('wireless_links').delete().eq('id',linkId);
+    await logAudit('حذف رابط لاسلكي', l?l.link_name:linkId);
+    const t = l ? towersData.find(x=>x.id===l.from_tower_id) : null;
+    closeModal(); toast('تم الحذف'); if(t) loadNetworkData(t.factory_id);
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 
 /* ============================================================
@@ -5028,6 +5309,127 @@ async function deleteServerImage(imageId, serverId){
     currentServerImages = currentServerImages.filter(x=>x.id!==imageId);
     toast('✅ تم الحذف'); renderServerProfileModal(2);
   }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   الخريطة المركزية للشبكة (Central Network Map)
+   تعرض كل المصانع وارتباطها اللاسلكي بالغرفة المركزية (مصنع الدولية)
+   ============================================================ */
+let centralMapTheme = localStorage.getItem('rc_centralmap_theme') || 'dark';
+function toggleCentralMapTheme(){
+  centralMapTheme = centralMapTheme==='dark' ? 'light' : 'dark';
+  localStorage.setItem('rc_centralmap_theme', centralMapTheme);
+  openCentralNetworkMap();
+}
+async function openCentralNetworkMap(){
+  if(!isAdmin() && !hasPerm('view_network_map')){ toast('🚫 لا تملك صلاحية عرض الخريطة المركزية'); return; }
+  openModal(`<div class="modal-head"><h3>🌐 الخريطة المركزية للشبكة</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  let allTowers = [], allLinks = [];
+  try{ const {data} = await supa.from('antenna_towers').select('*'); allTowers = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('wireless_links').select('*'); allLinks = data||[]; }catch(e){}
+  window.__centralMapData = { allTowers, allLinks };
+  renderCentralNetworkMap();
+}
+function renderCentralNetworkMap(){
+  const { allTowers, allLinks } = window.__centralMapData || {allTowers:[],allLinks:[]};
+  const centralFactory = factoriesData.find(f=>f.is_central_hub);
+  const otherFactories = factoriesData.filter(f=>!f.is_central_hub);
+  const isLight = centralMapTheme==='light';
+  const pal = isLight
+    ? { bg:'#FFFFFF', text:'#111111', sub:'#555555', hubF:'#FFF6E5', hubS:'#B8860B', facF:'#EEF3FF', facS:'#1D4ED8', ok:'#0F7A3D', warn:'#B8860B', bad:'#C62828', line:'#333333' }
+    : { bg:'#0B1220', text:'#E9EEFB', sub:'#8CA0C4', hubF:'#2A1F0E', hubS:'#F5A623', facF:'#182446', facS:'#38D9C9', ok:'#4ADE80', warn:'#F5A623', bad:'#FF6B6B', line:'#38D9C9' };
+
+  const statusColor = s => s==='يعمل'?pal.ok : (s==='منقطع'||s==='خارج الخدمة'?pal.bad : pal.warn);
+
+  const N = otherFactories.length;
+  const RW = 130, RH = 46, GAP = 26;
+  const svgW = Math.max(400, N*(RW+GAP)+GAP);
+  const svgH = 320;
+  const hubX = svgW/2, hubY = 50;
+  const rowY = 230;
+
+  let svg = `<svg id="centralMapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:${pal.bg};border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
+  // خطوط من كل مصنع للغرفة المركزية
+  otherFactories.forEach((f,i)=>{
+    const fx = GAP + i*(RW+GAP) + RW/2;
+    const facTowers = allTowers.filter(t=>t.factory_id===f.id);
+    const facLinks = allLinks.filter(l=> facTowers.some(t=>t.id===l.from_tower_id));
+    const worstLink = facLinks.find(l=>l.status==='منقطع') || facLinks.find(l=>l.status==='ضعيف'||l.status==='يحتاج صيانة') || facLinks[0];
+    const lineColor = worstLink ? statusColor(worstLink.status) : pal.sub;
+    const dash = worstLink && worstLink.status==='منقطع' ? 'stroke-dasharray="6,5"' : '';
+    svg += `<path onclick="showCentralLinkDetails('${f.id}')" style="cursor:pointer" d="M${hubX},${hubY+RH/2} C${hubX},${(hubY+rowY)/2} ${fx},${(hubY+rowY)/2} ${fx},${rowY-RH/2}" stroke="${lineColor}" stroke-width="2.5" fill="none" ${dash}/>`;
+    if(worstLink){
+      const midX = (hubX+fx)/2, midY = (hubY+rowY)/2;
+      svg += `<text x="${midX}" y="${midY-4}" text-anchor="middle" fill="${lineColor}" font-size="9" font-weight="bold" font-family="Arial">${escapeXml(worstLink.status)}</text>`;
+    }
+  });
+  // الغرفة المركزية (Hub)
+  svg += `<g onclick="${centralFactory?`openFactoryReportPickerFor('${centralFactory.id}')`:''}" style="cursor:pointer">
+    <rect x="${hubX-100}" y="${hubY-RH/2}" width="200" height="${RH}" rx="10" fill="${pal.hubF}" stroke="${pal.hubS}" stroke-width="2"/>
+    <text x="${hubX}" y="${hubY-3}" text-anchor="middle" fill="${pal.text}" font-size="13" font-weight="bold" font-family="Arial">🏛️ ${centralFactory?escapeXml(centralFactory.name):'الغرفة المركزية'}</text>
+    <text x="${hubX}" y="${hubY+13}" text-anchor="middle" fill="${pal.hubS}" font-size="9.5" font-family="Arial">Central Monitoring Room</text>
+  </g>`;
+  // كل مصنع تحت
+  otherFactories.forEach((f,i)=>{
+    const fx = GAP + i*(RW+GAP) + RW/2;
+    const facTowers = allTowers.filter(t=>t.factory_id===f.id);
+    const hasTower = facTowers.length>0;
+    svg += `<g onclick="showCentralFactoryDetails('${f.id}')" style="cursor:pointer">
+      <rect x="${fx-RW/2}" y="${rowY-RH/2}" width="${RW}" height="${RH}" rx="8" fill="${pal.facF}" stroke="${pal.facS}" stroke-width="1.5"/>
+      <text x="${fx}" y="${rowY-4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">${escapeXml(f.name)}</text>
+      <text x="${fx}" y="${rowY+12}" text-anchor="middle" fill="${pal.sub}" font-size="8.5" font-family="Arial">${hasTower?'🗼 '+facTowers.length+' برج':'⚠️ بدون برج'}</text>
+    </g>`;
+  });
+  svg += `</svg>`;
+
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>🌐 الخريطة المركزية للشبكة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="mini-grid" style="margin-bottom:10px">
+      <div class="mini"><div class="n">${factoriesData.length}</div><div class="t">إجمالي المصانع</div></div>
+      <div class="mini"><div class="n">${allTowers.length}</div><div class="t">إجمالي الأبراج</div></div>
+      <div class="mini"><div class="n" style="color:var(--success)">${allLinks.filter(l=>l.status==='يعمل').length}/${allLinks.length}</div><div class="t">روابط تعمل</div></div>
+    </div>
+    ${!centralFactory ? `<div class="offline-banner" style="display:block;margin-bottom:10px">⚠️ لم يتم تحديد أي مصنع كـ"الغرفة المركزية" بعد. حدّد ذلك من تعديل بيانات المصنع.</div>`:''}
+    <div style="overflow-x:auto">${svg}</div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" onclick="toggleCentralMapTheme()">🎨 تغيير لون الخريطة (${isLight?'أبيض':'أسود'})</button>
+      <button class="btn primary" onclick="downloadCentralMap()">⬇️ تنزيل كصورة</button>
+    </div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 دوس على أي مصنع لعرض بيانات اتصاله بالغرفة المركزية، أو على الخط نفسه لعرض تفاصيل الرابط.</p>
+  `;
+}
+function showCentralFactoryDetails(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  const { allTowers, allLinks } = window.__centralMapData || {allTowers:[],allLinks:[]};
+  const facTowers = allTowers.filter(t=>t.factory_id===factoryId);
+  const facLinks = allLinks.filter(l=> facTowers.some(t=>t.id===l.from_tower_id));
+  openModal(`
+    <div class="modal-head"><h3>🏭 ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <h4 style="font-size:12px;color:var(--accent);margin-top:0">🗼 الأبراج (${facTowers.length})</h4>
+    ${facTowers.length? facTowers.map(t=>`<div class="site-card" style="padding:8px 12px"><b>${t.tower_name}</b> <span class="pill ${TOWER_STATUS_COLOR[t.status]}">${t.status}</span></div>`).join('') : '<div class="empty">لا يوجد برج مسجّل.</div>'}
+    <h4 style="font-size:12px;color:var(--accent);margin-top:12px">🔗 الروابط (${facLinks.length})</h4>
+    ${facLinks.length? facLinks.map(l=>`<div class="site-card" style="padding:8px 12px;cursor:pointer" onclick="showWirelessLinkDetails('${l.id}')"><b>${l.link_name}</b> <span class="pill ${TOWER_STATUS_COLOR[l.status]}">${l.status}</span></div>`).join('') : '<div class="empty">لا يوجد رابط مسجّل.</div>'}
+    <button class="btn primary block" style="margin-top:10px" onclick="closeModal(); goTo('network','${factoryId}')">→ فتح شبكة المصنع الداخلية</button>
+  `);
+}
+function showCentralLinkDetails(factoryId){ showCentralFactoryDetails(factoryId); }
+function openFactoryReportPickerFor(factoryId){ closeModal(); goTo('network', factoryId); }
+function downloadCentralMap(){
+  const svgEl = document.getElementById('centralMapSvg');
+  if(!svgEl){ toast('تعذّر إيجاد الخريطة'); return; }
+  const svgStr = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = ()=>{
+    const scale=2; const canvas=document.createElement('canvas');
+    canvas.width=img.width*scale; canvas.height=img.height*scale;
+    const ctx=canvas.getContext('2d'); ctx.fillStyle=centralMapTheme==='light'?'#fff':'#0B1220'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height); URL.revokeObjectURL(url);
+    canvas.toBlob(blob=> saveOrShareFile(blob, `الخريطة-المركزية-${new Date().toISOString().slice(0,10)}.png`), 'image/png', 0.95);
+  };
+  img.onerror=()=>{ URL.revokeObjectURL(url); toast('🚫 تعذّر تحويل الخريطة لصورة'); };
+  img.src = url;
 }
 
 /* ============================================================
