@@ -5075,15 +5075,11 @@ function renderNetworkPlaceholder(factoryId){
     </div>
     <div id="serversListHost"><div class="empty">جاري التحميل...</div></div>
 
-    ${!f?.is_central_hub ? `
     <div class="section-title"><h2 style="font-size:14px">🗼 أبراج الأنتنة والربط اللاسلكي</h2>
       ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn sm primary" onclick="openTowerForm('${factoryId}')">+ إضافة برج</button>`:''}
     </div>
+    ${f?.is_central_hub ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:-8px;margin-bottom:8px">🏛️ هذا مصنع الدولية (الغرفة المركزية) — أضف هنا برجًا مستقلًا مقابلًا لكل مصنع فرعي (مثال: "برج جهينة - الدولية"، "برج المصرية - الدولية"...)، وبعدين اربط كل برج فرعي بالبرج المقابل له هنا من صفحة المصنع نفسه.</p>` : ''}
     <div id="towersListHost"><div class="empty">جاري التحميل...</div></div>
-    ` : `<div class="site-card" style="margin-top:14px;background:linear-gradient(150deg,#16233F,#0F1A30);border-color:var(--accent)">
-      <div class="site-name" style="font-size:14px">🏛️ هذا المصنع هو الغرفة المركزية (Central Hub)</div>
-      <p style="font-size:11px;color:var(--muted-2);margin-top:4px">كل المصانع الأخرى تتصل به عن طريق الروابط اللاسلكية — لا يحتاج بيانات برج بنفسه.</p>
-    </div>`}
 
     <div class="btn-row" style="margin-top:10px">
       <button class="btn sm" onclick="openNetworkMap('${factoryId}')">🗺️ خريطة الشبكة الداخلية</button>
@@ -5297,8 +5293,6 @@ const TOWER_STATUS_COLOR = {'يعمل':'ok','يعمل ويحتاج متابعة'
 function renderTowersList(factoryId){
   const host = document.getElementById('towersListHost');
   if(!host) return;
-  const f = factoriesData.find(x=>x.id===factoryId);
-  if(f?.is_central_hub) return;
   if(!isAdmin() && !hasPerm('view_network_map')){ host.innerHTML='<div class="empty">🚫 لا تملك صلاحية عرض الأبراج.</div>'; return; }
   if(!towersData.length){ host.innerHTML='<div class="empty">لا توجد أبراج مسجّلة بعد لهذا المصنع.</div>'; return; }
   host.innerHTML = towersData.map(t=>{
