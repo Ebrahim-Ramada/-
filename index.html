@@ -2786,10 +2786,12 @@ async function confirmSwitchToIndividualCameras(factoryId){
   try{ await supa.from('factories').update({use_individual_cameras:true}).eq('id',factoryId); }catch(e){ console.warn(e); }
   renderCameraFormModal(factoryId, null);
 }
-function renderCameraFormModal(factoryId, camId){
+async function renderCameraFormModal(factoryId, camId){
   const c = camId ? camerasData.find(x=>x.id===camId) : null;
   const isNew = !c;
-  const d = c || {camera_number:'', camera_name:'', status:'تعمل', fault_reason:'', notes:'', responsible:''};
+  const d = c || {camera_number:'', camera_name:'', status:'تعمل', fault_reason:'', notes:'', responsible:'', switch_id:'', port_number:''};
+  let factorySwitches = [];
+  try{ const {data} = await supa.from('factory_switches').select('*').eq('factory_id', factoryId).order('switch_name'); factorySwitches = data||[]; }catch(e){}
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا':'تعديل كاميرا'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="row2">
@@ -2797,6 +2799,10 @@ function renderCameraFormModal(factoryId, camId){
       <div class="field"><label>الحالة</label><select class="input" id="cf_status">${['تعمل','عطل','تحت الصيانة','متوقفة مؤقتًا'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>اسم/موقع الكاميرا</label><input class="input" id="cf_name" value="${d.camera_name}" placeholder="مثال: بوابة الملح"></div>
+    <div class="row2">
+      <div class="field"><label>Switch المتصل (اختياري)</label><select class="input" id="cf_switch"><option value="">— بدون —</option>${factorySwitches.map(sw=>`<option value="${sw.id}" ${d.switch_id===sw.id?'selected':''}>${sw.switch_name}</option>`).join('')}</select></div>
+      <div class="field"><label>رقم الـ Port</label><input class="input" id="cf_port" value="${d.port_number||''}" placeholder="مثال: 17"></div>
+    </div>
     <div class="field"><label>سبب العطل (إن وجد)</label><input class="input" id="cf_reason" value="${d.fault_reason||''}"></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="cf_resp" value="${d.responsible||''}"></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="cf_notes">${d.notes||''}</textarea></div>
@@ -2810,6 +2816,7 @@ async function saveCameraForm(factoryId, camId){
   const payload = {
     factory_id: factoryId, camera_number: document.getElementById('cf_number').value.trim(),
     camera_name: name, status: newStatus, fault_reason: document.getElementById('cf_reason').value.trim(),
+    switch_id: document.getElementById('cf_switch').value || null, port_number: document.getElementById('cf_port').value.trim(),
     responsible: document.getElementById('cf_resp').value.trim(), notes: document.getElementById('cf_notes').value.trim(),
     updated_by: currentProfile.id
   };
@@ -5026,12 +5033,22 @@ async function deleteServerImage(imageId, serverId){
 /* ============================================================
    خريطة الشبكة (Network Map) — رسم تلقائي من البيانات المسجّلة
    ============================================================ */
+let netMapTheme = localStorage.getItem('rc_netmap_theme') || 'dark';
+function toggleNetworkMapTheme(factoryId){
+  netMapTheme = netMapTheme==='dark' ? 'light' : 'dark';
+  localStorage.setItem('rc_netmap_theme', netMapTheme);
+  openNetworkMap(factoryId);
+}
 function openNetworkMap(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
   const fSwitches = switchesData.filter(sw=>sw.factory_id===factoryId);
   const totalMappedCams = fSwitches.reduce((a,sw)=>a+getSwitchCameraCount(sw),0);
   const rootSwitches = fSwitches.filter(sw=>!sw.uplink_switch_id);
   const childrenOf = (swId) => fSwitches.filter(sw=>sw.uplink_switch_id===swId);
+  const isLight = netMapTheme==='light';
+  const pal = isLight
+    ? { bg:'#FFFFFF', line:'#333333', coreF:'#EFEFEF', coreS:'#111111', coreT:'#111111', rootF:'#FFF6E5', rootS:'#B8860B', accF:'#EEF3FF', accS:'#1D4ED8', text:'#111111', sub:'#555555', devF:'#F5F5F5', devSrv:'#1D4ED8', devCam:'#0F7A3D', devText:'#111111' }
+    : { bg:'#0B1220', line:'#38D9C9', coreF:'#182446', coreS:'#38D9C9', coreT:'#38D9C9', rootF:'#2A1F0E', rootS:'#F5A623', accF:'#182446', accS:'#38D9C9', text:'#E9EEFB', sub:'#38D9C9', devF:'#0F1A30', devSrv:'#38D9C9', devCam:'#4ADE80', devText:'#CFF7F1' };
 
   if(!fSwitches.length){
     openModal(`<div class="modal-head"><h3>🗺️ خريطة الشبكة — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
@@ -5041,14 +5058,13 @@ function openNetworkMap(factoryId){
 
   // ---------- بناء شجرة العُقد (سويتشات + عُقد أجهزة فرعية للسيرفرات والكاميرات) ----------
   const UNIT = 128, NODE_W = 112, NODE_H = 44, LEVEL_H = 100;
-  let leafCounter = 0;
   function buildNode(sw){
     const directSrv = serversData.filter(s=>s.switch_id===sw.id).length;
     const directCam = getSwitchCameraCount(sw);
     const childSwitches = childrenOf(sw.id).map(buildNode);
     const deviceLeaves = [];
-    if(directSrv>0) deviceLeaves.push({type:'device', icon:'🖥️', label:`${directSrv} Server${directSrv>1?'s':''}`, color:'var(--accent)', width:1});
-    if(directCam>0) deviceLeaves.push({type:'device', icon:'🎥', label:`${directCam} كاميرا`, color:'var(--success)', width:1});
+    if(directSrv>0) deviceLeaves.push({type:'device', kind:'srv', icon:'🖥️', label:`${directSrv} Server${directSrv>1?'s':''}`, width:1});
+    if(directCam>0) deviceLeaves.push({type:'device', kind:'cam', icon:'🎥', label:`${directCam} كاميرا`, width:1});
     const children = [...childSwitches, ...deviceLeaves];
     const width = children.length ? children.reduce((a,c)=>a+c.width,0) : 1;
     return { type:'switch', sw, children, width: Math.max(1,width), isRoot: !sw.uplink_switch_id };
@@ -5080,30 +5096,30 @@ function openNetworkMap(factoryId){
   const svgH = 70 + maxDepth*LEVEL_H + 60;
   const coreX = svgW/2;
 
-  let svg = `<svg id="netmapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:#0B1220;border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
-  svg += `<rect x="${coreX-90}" y="16" width="180" height="34" rx="8" fill="#182446" stroke="#38D9C9" stroke-width="1.5"/>
-    <text x="${coreX}" y="37" text-anchor="middle" fill="#38D9C9" font-size="13" font-weight="bold" font-family="Arial">🌐 Internet / Core</text>`;
-  // خطوط من Core لكل سويتش رئيسي (باستخدام موضعهم الفعلي)
+  let svg = `<svg id="netmapSvg" viewBox="0 0 ${svgW} ${svgH}" style="width:100%;background:${pal.bg};border-radius:12px" xmlns="http://www.w3.org/2000/svg">`;
+  svg += `<rect x="${coreX-90}" y="16" width="180" height="34" rx="8" fill="${pal.coreF}" stroke="${pal.coreS}" stroke-width="1.5"/>
+    <text x="${coreX}" y="37" text-anchor="middle" fill="${pal.coreT}" font-size="13" font-weight="bold" font-family="Arial">🌐 Internet / Core</text>`;
   positioned.filter(p=>p.type==='switch' && p.isRoot).forEach(p=>{
     edges.unshift({x1:coreX, y1:50, x2:p.x, y2:p.y-NODE_H/2});
   });
-  // رسم كل خطوط التوصيل (الأسلاك) أولًا عشان تكون تحت الصناديق
   edges.forEach(e=>{
     const midY = (e.y1+e.y2)/2;
-    svg += `<path d="M${e.x1},${e.y1} C${e.x1},${midY} ${e.x2},${midY} ${e.x2},${e.y2}" stroke="#38D9C9" stroke-width="2" fill="none" opacity="0.55"/>`;
+    svg += `<path d="M${e.x1},${e.y1} C${e.x1},${midY} ${e.x2},${midY} ${e.x2},${e.y2}" stroke="${pal.line}" stroke-width="2" fill="none" opacity="0.6"/>`;
   });
-  // رسم كل العُقد فوق الأسلاك
   positioned.forEach(p=>{
     if(p.type==='switch'){
-      const fill = p.isRoot ? '#2A1F0E' : '#182446';
-      const stroke = p.isRoot ? '#F5A623' : '#38D9C9';
-      svg += `<rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
-        <text x="${p.x}" y="${p.y-4}" text-anchor="middle" fill="#E9EEFB" font-size="10.5" font-weight="bold" font-family="Arial">🔌 ${escapeXml(p.sw.switch_name)}</text>
-        <text x="${p.x}" y="${p.y+11}" text-anchor="middle" fill="${stroke}" font-size="8.5" font-family="Arial">${p.isRoot?'رئيسي':'فرعي'}</text>`;
+      const fill = p.isRoot ? pal.rootF : pal.accF;
+      const stroke = p.isRoot ? pal.rootS : pal.accS;
+      svg += `<g onclick="showSwitchDetailsPopup('${p.sw.id}')" style="cursor:pointer">
+        <rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+        <text x="${p.x}" y="${p.y-4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">🔌 ${escapeXml(p.sw.switch_name)}</text>
+        <text x="${p.x}" y="${p.y+11}" text-anchor="middle" fill="${stroke}" font-size="8.5" font-family="Arial">${p.isRoot?'رئيسي':'فرعي'}</text>
+      </g>`;
     } else {
-      svg += `<rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="#0F1A30" stroke="${p.color.replace('var(--accent)','#38D9C9').replace('var(--success)','#4ADE80')}" stroke-width="1.5"/>
+      const strokeColor = p.kind==='srv' ? pal.devSrv : pal.devCam;
+      svg += `<rect x="${p.x-NODE_W/2}" y="${p.y-NODE_H/2}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="${pal.devF}" stroke="${strokeColor}" stroke-width="1.5"/>
         <text x="${p.x}" y="${p.y-2}" text-anchor="middle" font-size="15">${p.icon}</text>
-        <text x="${p.x}" y="${p.y+14}" text-anchor="middle" fill="#CFF7F1" font-size="9" font-family="Arial">${escapeXml(p.label)}</text>`;
+        <text x="${p.x}" y="${p.y+14}" text-anchor="middle" fill="${pal.devText}" font-size="9" font-family="Arial">${escapeXml(p.label)}</text>`;
     }
   });
   svg += `</svg>`;
@@ -5116,9 +5132,59 @@ function openNetworkMap(factoryId){
       <div class="mini"><div class="n" style="color:var(--success)">${totalMappedCams}</div><div class="t">إجمالي الكاميرات المربوطة</div></div>
     </div>
     <div style="overflow-x:auto">${svg}</div>
-    <button class="btn primary block" style="margin-top:10px" onclick="downloadNetworkMap('${(f?f.name:'network').replace(/'/g,'')}')">⬇️ تنزيل الخريطة كصورة</button>
-    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 خريطة تلقائية حقيقية بخطوط توصيل من بيانات Switches الفعلية. السويتشات "الفرعية" تتفرّع من السويتش الرئيسي اللي حددته له في نموذج التعديل.</p>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" onclick="toggleNetworkMapTheme('${factoryId}')">🎨 تغيير لون الخريطة (${isLight?'أبيض':'أسود'})</button>
+      <button class="btn primary" onclick="downloadNetworkMap('${(f?f.name:'network').replace(/'/g,'')}')">⬇️ تنزيل الخريطة كصورة</button>
+    </div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:10px">💡 دوس على أي سويتش في الخريطة لعرض تفاصيله الكاملة. السويتشات "الفرعية" تتفرّع من السويتش الرئيسي المحدَّد لها.</p>
   `);
+  setTimeout(()=> captureNetworkMapForReport(factoryId), 200);
+}
+function showSwitchDetailsPopup(switchId){
+  const sw = switchesData.find(x=>x.id===switchId);
+  if(!sw) return;
+  const rack = racksData.find(r=>r.id===sw.rack_id);
+  const uplink = switchesData.find(x=>x.id===sw.uplink_switch_id);
+  const linkedServers = serversData.filter(s=>s.switch_id===sw.id);
+  const available = Math.max(0,(sw.total_ports||0)-(sw.used_ports||0));
+  openModal(`
+    <div class="modal-head"><h3>🔌 ${sw.switch_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="mini-grid">
+      <div class="mini"><div class="n">${sw.total_ports||0}</div><div class="t">إجمالي Ports</div></div>
+      <div class="mini"><div class="n" style="color:var(--danger)">${sw.used_ports||0}</div><div class="t">مستخدمة</div></div>
+      <div class="mini"><div class="n" style="color:var(--success)">${available}</div><div class="t">فارغة</div></div>
+      <div class="mini"><div class="n" style="color:var(--accent)">${getSwitchCameraCount(sw)}</div><div class="t">كاميرات</div></div>
+    </div>
+    <p style="font-size:12px;margin-top:10px"><b>النوع:</b> ${sw.switch_type||'—'} &nbsp; <b>الموديل:</b> ${sw.brand||''} ${sw.model||''}</p>
+    <p style="font-size:12px"><b>Rack:</b> ${rack?rack.rack_name:'—'} &nbsp; <b>سويتش رئيسي:</b> ${uplink?uplink.switch_name:'هو نفسه رئيسي'}</p>
+    ${linkedServers.length? `<p style="font-size:12px"><b>السيرفرات المتصلة:</b> ${linkedServers.map(s=>s.server_name).join('، ')}</p>`:''}
+    ${sw.notes? `<p style="font-size:11px;color:var(--muted)">${sw.notes}</p>`:''}
+    <button class="btn block" style="margin-top:10px" onclick="openNetworkMap('${sw.factory_id}')">→ رجوع للخريطة</button>
+  `);
+}
+async function captureNetworkMapForReport(factoryId){
+  const svgEl = document.getElementById('netmapSvg');
+  if(!svgEl) return;
+  try{
+    const svgStr = new XMLSerializer().serializeToString(svgEl);
+    const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(svgBlob);
+    const dataUri = await new Promise((resolve,reject)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width; canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img,0,0);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+    if(!window.__lastNetworkMapPng) window.__lastNetworkMapPng = {};
+    window.__lastNetworkMapPng[factoryId] = dataUri;
+  }catch(e){ console.warn('تعذّر حفظ صورة الخريطة للتقرير', e); }
 }
 function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function downloadNetworkMap(factoryName){
@@ -5607,41 +5673,282 @@ async function generateNetworkInfraReport(factoryId){
 }
 function openFactoryReportPicker(){
   openModal(`
-    <div class="modal-head"><h3>🏭 اختر المصنع</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><select class="input" id="frp_factory">${factoriesData.map(f=>`<option value="${f.id}">${f.name}</option>`).join('')}</select></div>
-    <button class="btn primary block" onclick="generateFactoryReport(document.getElementById('frp_factory').value)">📄 إنشاء التقرير (PDF)</button>
+    <div class="modal-head"><h3>🏭 تقرير مصنع شامل</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-4px">اختيار المصنع فقط = جمع كل بياناته تلقائيًا من كل أقسام التطبيق في تقرير واحد متصل.</p>
+    <div class="field"><label>المصنع</label><select class="input" id="frp_factory">${factoriesData.map(f=>`<option value="${f.id}">${f.name}</option>`).join('')}</select></div>
+    <div class="btn-row">
+      <button class="btn primary" onclick="generateFullFactoryReport(document.getElementById('frp_factory').value,'pdf')">🧾 PDF</button>
+      <button class="btn" onclick="generateFullFactoryReport(document.getElementById('frp_factory').value,'word')">📝 Word</button>
+      <button class="btn" onclick="generateFactoryExcelReport(document.getElementById('frp_factory').value)">📊 Excel</button>
+    </div>
   `);
 }
-async function generateFactoryReport(factoryId){
-  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+
+/* ============================================================
+   التقرير الشامل الحقيقي لمصنع محدد — يجمع كل بياناته تلقائيًا
+   من كل جداول التطبيق، كمستند واحد متصل (بدون فصل كل قسم بصفحة)
+   ============================================================ */
+async function gatherFullFactoryData(factoryId){
   const f = factoriesData.find(x=>x.id===factoryId);
   const s = computeFactory(f);
-  toast('جاري إنشاء التقرير...');
-  let camList=[], faultsList=[];
-  try{ const {data} = await supa.from('cameras').select('*').eq('factory_id',factoryId); camList = data||[]; }catch(e){}
-  try{ const {data} = await supa.from('faults').select('*').eq('factory_id',factoryId).order('reported_at',{ascending:false}); faultsList = data||[]; }catch(e){}
+  const safe = async (table, extra) => { try{ let q = supa.from(table).select('*').eq('factory_id', factoryId); if(extra) q = extra(q); const {data,error} = await q; if(error) throw error; return data||[]; }catch(e){ return []; } };
+  const [cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenanceLog] = await Promise.all([
+    safe('cameras', q=>q.order('camera_name')), safe('screens', q=>q.order('screen_name')),
+    safe('faults', q=>q.order('reported_at',{ascending:false})), safe('lighting_needs'), safe('camera_modifications'),
+    safe('factory_racks'), safe('factory_switches'), safe('factory_servers'), safe('factory_ups'), safe('factory_layouts'),
+    safe('maintenance_log')
+  ]);
+  let drives = [];
+  if(servers.length){ try{ const {data} = await supa.from('server_drives').select('*').in('server_id', servers.map(x=>x.id)); drives = data||[]; }catch(e){} }
+  // الصيانة الوقائية غير مرتبطة بـfactory_id مباشرة (target_name نصي) — نطابقها باسم المصنع أو أسماء أجهزته
+  const deviceNames = new Set([f?.name, ...cameras.map(c=>c.camera_name), ...servers.map(sv=>sv.server_name)]);
+  const maintenance = (preventiveTasks||[]).filter(t=> deviceNames.has(t.target_name));
+  return { f, s, cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenance, maintenanceLog, drives };
+}
+
+function fmtNoData(list, msg){ return list.length ? null : `<p style="color:#999;font-style:italic;font-size:11px">${msg||'لا توجد بيانات مسجلة.'}</p>`; }
+
+async function buildFullFactoryReportHtml(d){
+  const { f, s, cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenance, drives } = d;
+  const table = (headers, rows) => `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:6px" border="1" cellpadding="4">
+    <thead><tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`;
+  const h2 = t => `<h2 style="color:#12716A;border-bottom:2px solid #12716A;padding-bottom:4px;margin:18px 0 8px;font-size:15px">${t}</h2>`;
+
+  // تحميل كل الصور المطلوبة كـ Base64 لتضمينها فعليًا
+  const camImgs = cameras.map(c=>c.photo_url);
+  const faultImgsForFactory = []; // يُملأ أدناه بعد الجلب
+  let faultImages = [];
+  try{ const ids = faults.map(x=>x.id); if(ids.length){ const {data} = await supa.from('fault_images').select('*').in('fault_id', ids); faultImages = data||[]; } }catch(e){}
+  const allImgUrls = [
+    ...camImgs, ...faultImages.map(im=>im.image_url), ...lighting.map(l=>l.photo_url),
+    ...cameraMods.flatMap(c=>[c.photo_before_url,c.photo_after_url]),
+    ...racks.map(r=>r.photo_url), ...switches.map(sw=>sw.photo_url), ...ups.map(u=>u.photo_url),
+    ...servers.map(sv=>sv.id), // placeholder, server images fetched separately below
+    ...layouts.filter(l=>l.file_type==='image').map(l=>l.file_url)
+  ].filter(u=>typeof u==='string');
+  let serverImages = [];
+  try{ const ids=servers.map(x=>x.id); if(ids.length){ const {data} = await supa.from('server_images').select('*').in('server_id',ids); serverImages = data||[]; } }catch(e){}
+  await urlsToDataUris([...allImgUrls, ...serverImages.map(im=>im.image_url)]);
+  const img = (url,w) => { const du = __imgDataCache[url]; return du ? `<img src="${du}" style="width:${w||70}px;height:${w||70}px;object-fit:cover;border:1px solid #ccc;border-radius:4px;margin:2px">` : ''; };
+
+  let html = `<div style="direction:rtl;font-family:Arial;color:#0B1220;padding:6px">
+    <div style="text-align:center;padding:26px 0;border-bottom:4px solid #12716A;margin-bottom:16px">
+      <h1 style="margin-bottom:6px">التقرير الشامل — ${f?f.name:''}</h1>
+      <p style="color:#666">غرفة المراقبة المركزية — شركة جهينة للصناعات الغذائية</p>
+      <p style="color:#888;font-size:11px">تاريخ التقرير: ${new Date().toLocaleString('ar-EG')}</p>
+    </div>`;
+
+  // 1) بيانات المصنع
+  html += h2('1. بيانات المصنع') + `<p style="font-size:12px;line-height:1.9">
+    <b>الاسم:</b> ${f?f.name:'—'} &nbsp; | &nbsp; <b>تاريخ التقرير:</b> ${new Date().toLocaleDateString('ar-EG')}
+    ${f?.updated_at? ` &nbsp; | &nbsp; <b>آخر تحديث:</b> ${new Date(f.updated_at).toLocaleDateString('ar-EG')}`:''}
+  </p>`;
+
+  // 2) الملخص
+  html += h2('2. ملخص حالة المصنع') + table(['البند','القيمة'], [
+    ['إجمالي الكاميرات', s.camerasTotal], ['الكاميرات العاملة', s.camerasUp], ['الكاميرات المنقطعة', s.camerasDown],
+    ['نسبة تشغيل الكاميرات', fmtPct2(s.camUptime)], ['إجمالي الشاشات', s.screens], ['الشاشات المنقطعة', s.screensDown],
+    ['نسبة تشغيل الشاشات', fmtPct2(s.scrUptime)]
+  ]);
+
+  // 3) الكاميرات
+  html += h2('3. الكاميرات') + (fmtNoData(cameras) ||
+    table(['الرقم','الاسم','الحالة','Switch','Port','ملاحظات','صورة'], cameras.map(c=>{
+      const sw = switches.find(x=>x.id===c.switch_id);
+      return [c.camera_number||'—', c.camera_name, c.status, sw?sw.switch_name:'—', c.port_number||'—', c.notes||'', img(c.photo_url,55)];
+    })));
+
+  // 4) الشاشات
+  html += h2('4. الشاشات') + (fmtNoData(screens) ||
+    table(['الرقم','الاسم','الحالة','ملاحظات'], screens.map(sc=>[sc.screen_number||'—', sc.screen_name, sc.status, sc.notes||''])));
+
+  // 5) الأعطال
+  html += h2('5. الأعطال') + (fmtNoData(faults) ||
+    table(['الجهاز','النوع','الوصف','الخطورة','الحالة','تاريخ الإبلاغ','صورة'], faults.map(fl=>{
+      const fi = faultImages.find(im=>im.fault_id===fl.id);
+      return [fl.device_name, fl.fault_type||'', fl.description||'', fl.severity, fl.status, new Date(fl.reported_at).toLocaleDateString('ar-EG'), fi?img(fi.image_url,55):''];
+    })));
+
+  // 6) الإضاءة
+  html += h2('6. احتياجات الإضاءة') + (fmtNoData(lighting) ||
+    table(['المكان','المشكلة','الحالة','التاريخ','صورة'], lighting.map(l=>[l.place_name||'', l.problem_description||l.description||'', l.status, l.created_at?new Date(l.created_at).toLocaleDateString('ar-EG'):'', img(l.photo_url,55)])));
+
+  // 7) الكاميرات التي تحتاج تعديل
+  html += h2('7. الكاميرات التي تحتاج تعديل') + (fmtNoData(cameraMods) ||
+    table(['الكاميرا','الموقع','السبب','الحالة','قبل','بعد'], cameraMods.map(c=>[c.camera_name, c.place_name||'', c.problem_description||'', c.status, img(c.photo_before_url,50), img(c.photo_after_url,50)])));
+
+  // 8) Racks
+  html += h2('8. Racks') + (fmtNoData(racks) ||
+    table(['الاسم','الموقع','الأجهزة بداخله','صورة'], racks.map(r=>{
+      const devices = [...switches.filter(sw=>sw.rack_id===r.id).map(sw=>'🔌 '+sw.switch_name), ...servers.filter(sv=>sv.rack_id===r.id).map(sv=>'🖥️ '+sv.server_name)];
+      return [r.rack_name, r.location||'', devices.join('، ')||'—', img(r.photo_url,55)];
+    })));
+
+  // 9) Switches
+  html += h2('9. Switches') + (fmtNoData(switches) ||
+    table(['الاسم','النوع','Rack','إجمالي Ports','مستخدمة','فارغة','كاميرات متصلة','صورة'], switches.map(sw=>{
+      const rack = racks.find(r=>r.id===sw.rack_id);
+      return [sw.switch_name, sw.switch_type||'', rack?rack.rack_name:'—', sw.total_ports||0, sw.used_ports||0, Math.max(0,(sw.total_ports||0)-(sw.used_ports||0)), getSwitchCameraCount(sw), img(sw.photo_url,55)];
+    })));
+
+  // 10) Servers
+  html += h2('10. Servers') + (fmtNoData(servers) ||
+    table(['الاسم','الحالة','الموديل','IP','OS','Switch','صورة'], servers.map(sv=>{
+      const sw = switches.find(x=>x.id===sv.switch_id);
+      const simg = serverImages.find(im=>im.server_id===sv.id);
+      return [sv.server_name, sv.status, `${sv.brand||''} ${sv.model||''}`, sv.ip_address||'—', sv.os_name||'—', sw?sw.switch_name:'—', simg?img(simg.image_url,55):''];
+    })));
+
+  // 11) Hard Drives / Storage
+  html += h2('11. Hard Drives / Storage') + (fmtNoData(drives) ||
+    table(['السيرفر','Slot','النوع','السعة','الحالة'], drives.map(dr=>{
+      const sv = servers.find(x=>x.id===dr.server_id);
+      return [sv?sv.server_name:'', dr.slot_number||'', dr.drive_type||'', fmtStorage(dr.capacity_gb), dr.status];
+    })));
+
+  // 12) UPS
+  html += h2('12. UPS') + (fmtNoData(ups) ||
+    table(['الاسم','الموقع','الحالة','صورة'], ups.map(u=>[u.ups_name, u.location||'', u.status, img(u.photo_url,55)])));
+
+  // 13) Network Infrastructure (ملخص)
+  html += h2('13. البنية التحتية للشبكة (ملخص)') + table(['البند','العدد'], [
+    ['Racks', racks.length], ['Switches', switches.length], ['Servers', servers.length], ['UPS', ups.length],
+    ['إجمالي Ports', switches.reduce((a,sw)=>a+(sw.total_ports||0),0)], ['Ports مستخدمة', switches.reduce((a,sw)=>a+(sw.used_ports||0),0)],
+    ['Ports فارغة', switches.reduce((a,sw)=>a+Math.max(0,(sw.total_ports||0)-(sw.used_ports||0)),0)]
+  ]);
+
+  // 14) Network Map
+  html += h2('14. Network Map');
+  const mapImgDataUri = window.__lastNetworkMapPng?.[f?.id] || null;
+  html += mapImgDataUri ? `<div style="text-align:center"><img src="${mapImgDataUri}" style="max-width:100%;border-radius:8px"></div>` : `<p style="color:#999;font-style:italic;font-size:11px">افتح "خريطة الشبكة" لهذا المصنع مرة واحدة على الأقل ليتم تضمينها هنا تلقائيًا في المرات القادمة.</p>`;
+
+  // 15) Factory Layout
+  html += h2('15. Factory Layout');
+  const imgLayouts = layouts.filter(l=>l.file_type==='image');
+  html += imgLayouts.length ? imgLayouts.map(l=>`<div style="display:inline-block;text-align:center;margin:6px">${img(l.file_url,130)}<div style="font-size:9px">${l.layout_name}</div></div>`).join('') : `<p style="color:#999;font-style:italic;font-size:11px">لا توجد خرائط مسجلة.</p>`;
+
+  // 16) الصيانة
+  html += h2('16. الصيانة') + (fmtNoData(maintenance) ||
+    table(['الهدف','نوع الصيانة','الموعد','ملاحظات'], maintenance.map(m=>[m.target_name, m.maintenance_type, fmtDateAr(m.scheduled_date), m.notes||''])));
+
+  // 17-19: المشتملات / المخزن / الاحتياجات (غير مرتبطة بمصنع محدد في بنية البيانات الحالية)
+  html += h2('17. المشتملات والمخزن والاحتياجات') + `<p style="font-size:11px;color:#666">
+    هذه الأقسام (المخزن، مشتملات الغرفة، احتياجات الغرفة) مشتركة على مستوى غرفة المراقبة المركزية ككل وليست مرتبطة بمصنع محدد في تصميم النظام الحالي — لذلك لا تظهر ضمن تقرير مصنع بعينه. يمكن مراجعتها من أقسامها المستقلة في التطبيق.</p>`;
+
+  // 20) ملاحظات
+  html += h2('18. ملاحظات') + (f?.notes ? `<p style="font-size:12px">${f.notes}</p>` : `<p style="color:#999;font-style:italic;font-size:11px">لا توجد ملاحظات إضافية مسجلة.</p>`);
+
+  html += `<p style="text-align:center;color:#888;margin-top:24px;font-size:10.5px;border-top:1px dashed #ccc;padding-top:8px">— تقرير شامل تلقائي من نظام غرفة المراقبة المركزية — إعداد وتشغيل: إبراهيم رمضان —</p></div>`;
+  return html;
+}
+
+async function generateFullFactoryReport(factoryId, format){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  toast('جاري تجميع كل بيانات المصنع...');
+  const d = await gatherFullFactoryData(factoryId);
+  const bodyHtml = await buildFullFactoryReportHtml(d);
+
+  if(format==='word'){
+    const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset="utf-8"><style>@page{size:21cm 29.7cm;margin:2cm;} body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:4px;font-size:9.5pt;} th{background:#0B1220;color:#fff;}</style></head>
+      <body>${bodyHtml}</body></html>`;
+    const blob = new Blob(['\ufeff', html], {type:'application/msword'});
+    closeModal();
+    await saveOrShareFile(blob, `تقرير-شامل-${d.f?d.f.name:''}-${new Date().toISOString().slice(0,10)}.doc`);
+    await logAudit('إنشاء تقرير مصنع شامل (Word)', d.f?d.f.name:factoryId);
+    return;
+  }
+
+  // PDF — مستند واحد متصل بدون فصل الأقسام بصفحات، مع ترقيم صفحات وFooter احترافي
   const el = document.createElement('div');
-  el.style.cssText = 'direction:rtl;font-family:Arial;padding:14px;color:#0B1220';
-  el.innerHTML = `<h1 style="text-align:center">تقرير مصنع: ${f.name}</h1>
-    <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>
-    <h3>الملخص</h3>
-    <p>إجمالي الكاميرات: ${s.camerasTotal} — تعمل: ${s.camerasUp} — منقطعة: ${s.camerasDown} — نسبة التشغيل: ${fmtPct2(s.camUptime)}</p>
-    <p>إجمالي الشاشات: ${s.screens} — منقطعة: ${s.screensDown}</p>
-    <h3>الكاميرات</h3>
-    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
-      <tr style="background:#0B1220;color:#fff"><th>الاسم</th><th>الحالة</th><th>سبب العطل</th></tr>
-      ${camList.map(c=>`<tr><td>${c.camera_name}</td><td>${c.status}</td><td>${c.fault_reason||''}</td></tr>`).join('')}
-    </table>
-    <h3>الأعطال المسجّلة</h3>
-    <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
-      <tr style="background:#0B1220;color:#fff"><th>الجهاز</th><th>الخطورة</th><th>الحالة</th><th>التاريخ</th></tr>
-      ${faultsList.map(fl=>`<tr><td>${fl.device_name}</td><td>${fl.severity}</td><td>${fl.status}</td><td>${new Date(fl.reported_at).toLocaleDateString('ar-EG')}</td></tr>`).join('')}
-    </table>`;
+  el.innerHTML = bodyHtml;
   document.body.appendChild(el);
-  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  const worker = html2pdf().set({
+    margin:[10,8,16,8], image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2},
+    jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['css','avoid-all']}
+  }).from(el);
+  const pdf = await worker.toPdf().get('pdf');
+  const pageCount = pdf.internal.getNumberOfPages();
+  const factoryName = d.f?d.f.name:'';
+  const todayStr = new Date().toLocaleDateString('ar-EG');
+  for(let i=1;i<=pageCount;i++){
+    pdf.setPage(i);
+    const w = pdf.internal.pageSize.getWidth(), h = pdf.internal.pageSize.getHeight();
+    pdf.setFontSize(8); pdf.setTextColor(120);
+    pdf.text(`${factoryName} | تقرير شامل | صفحة ${i} من ${pageCount}`, w/2, h-8, {align:'center'});
+    pdf.text(todayStr, w-10, h-8, {align:'right'});
+  }
+  const blob = pdf.output('blob');
   el.remove(); closeModal();
-  await saveOrShareFile(blob, `تقرير-${f.name}-${new Date().toISOString().slice(0,10)}.pdf`);
-  await logAudit('إنشاء تقرير مصنع', f.name);
+  await saveOrShareFile(blob, `تقرير-شامل-${factoryName}-${new Date().toISOString().slice(0,10)}.pdf`);
+  await logAudit('إنشاء تقرير مصنع شامل (PDF)', factoryName);
+}
+async function generateFactoryExcelReport(factoryId){
+  const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
+  toast('جاري تجميع بيانات المصنع والصور...');
+  const d = await gatherFullFactoryData(factoryId);
+  const { f, s, cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, maintenance, drives } = d;
+  let faultImages=[], serverImages=[];
+  try{ const ids=faults.map(x=>x.id); if(ids.length){ const {data}=await supa.from('fault_images').select('*').in('fault_id',ids); faultImages=data||[]; } }catch(e){}
+  try{ const ids=servers.map(x=>x.id); if(ids.length){ const {data}=await supa.from('server_images').select('*').in('server_id',ids); serverImages=data||[]; } }catch(e){}
+  await urlsToDataUris([
+    ...cameras.map(c=>c.photo_url), ...faultImages.map(im=>im.image_url), ...lighting.map(l=>l.photo_url),
+    ...cameraMods.flatMap(c=>[c.photo_before_url,c.photo_after_url]), ...racks.map(r=>r.photo_url),
+    ...switches.map(sw=>sw.photo_url), ...ups.map(u=>u.photo_url), ...serverImages.map(im=>im.image_url)
+  ]);
+
+  const wb = new ExcelJS.Workbook();
+  const border = { top:{style:'thin',color:{argb:'FFC9D3E3'}}, left:{style:'thin',color:{argb:'FFC9D3E3'}}, bottom:{style:'thin',color:{argb:'FFC9D3E3'}}, right:{style:'thin',color:{argb:'FFC9D3E3'}} };
+  const headStyle = c=>{ c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF12716A'}}; c.border=border; c.alignment={horizontal:'center',vertical:'middle',wrapText:true}; };
+  function sheet(name, headers, rows, colWidths){
+    const ws = wb.addWorksheet(name, {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = (colWidths||headers.map(()=>18)).map(w=>({width:w}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=24;
+    rows.forEach((r,i)=>{ const row=ws.addRow(r); row.eachCell(c=>{ c.border=border; if(i%2===1) c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F7FB'}}; }); });
+    return ws;
+  }
+  function sheetWithImages(name, headers, rows, imgColIdx, getUrl){
+    const ws = wb.addWorksheet(name, {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+    ws.columns = headers.map(()=>({width:16}));
+    const hr = ws.getRow(1); headers.forEach((h,i)=>{ hr.getCell(i+1).value=h; headStyle(hr.getCell(i+1)); }); hr.height=24;
+    rows.forEach((r,i)=>{
+      const rr=i+2; r.forEach((v,ci)=>{ const c=ws.getCell(rr,ci+1); if(ci!==imgColIdx) c.value=v; c.border=border; });
+      ws.getRow(rr).height=70;
+      const url = getUrl(i); if(url) addEmbeddedImage(wb, ws, __imgDataCache[url], imgColIdx, rr-1, 85, 85);
+    });
+    return ws;
+  }
+
+  // 1) بيانات المصنع + 2) الملخص
+  sheet('بيانات المصنع والملخص', ['البند','القيمة'], [
+    ['اسم المصنع', f?f.name:''], ['تاريخ التقرير', new Date().toLocaleDateString('ar-EG')],
+    ['إجمالي الكاميرات', s.camerasTotal], ['الكاميرات العاملة', s.camerasUp], ['الكاميرات المنقطعة', s.camerasDown],
+    ['نسبة تشغيل الكاميرات %', Math.round(s.camUptime*100)/100], ['إجمالي الشاشات', s.screens], ['الشاشات المنقطعة', s.screensDown],
+    ['نسبة تشغيل الشاشات %', Math.round(s.scrUptime*100)/100]
+  ], [26,20]);
+
+  if(cameras.length) sheetWithImages('الكاميرات', ['الرقم','الاسم','الحالة','Switch','Port','ملاحظات','صورة'],
+    cameras.map(c=>{ const sw=switches.find(x=>x.id===c.switch_id); return [c.camera_number||'',c.camera_name,c.status,sw?sw.switch_name:'',c.port_number||'',c.notes||'',null]; }), 6, i=>cameras[i].photo_url);
+  if(screens.length) sheet('الشاشات', ['الرقم','الاسم','الحالة','ملاحظات'], screens.map(sc=>[sc.screen_number||'',sc.screen_name,sc.status,sc.notes||'']));
+  if(racks.length) sheetWithImages('Racks', ['الاسم','الموقع','ملاحظات','صورة'], racks.map(r=>[r.rack_name,r.location||'',r.notes||'',null]), 3, i=>racks[i].photo_url);
+  if(switches.length) sheetWithImages('Switches', ['الاسم','النوع','إجمالي Ports','مستخدمة','فارغة','كاميرات','صورة'],
+    switches.map(sw=>[sw.switch_name,sw.switch_type||'',sw.total_ports||0,sw.used_ports||0,Math.max(0,(sw.total_ports||0)-(sw.used_ports||0)),getSwitchCameraCount(sw),null]), 6, i=>switches[i].photo_url);
+  if(servers.length) sheetWithImages('Servers', ['الاسم','الحالة','الموديل','IP','OS','صورة'],
+    servers.map(sv=>[sv.server_name,sv.status,`${sv.brand||''} ${sv.model||''}`,sv.ip_address||'',sv.os_name||'',null]), 5, i=>{ const im=serverImages.find(x=>x.server_id===servers[i].id); return im?im.image_url:null; });
+  if(drives.length) sheet('Hard Drives', ['السيرفر','Slot','النوع','السعة','الحالة'], drives.map(dr=>{ const sv=servers.find(x=>x.id===dr.server_id); return [sv?sv.server_name:'',dr.slot_number||'',dr.drive_type||'',fmtStorage(dr.capacity_gb),dr.status]; }));
+  if(ups.length) sheetWithImages('UPS', ['الاسم','الموقع','الحالة','صورة'], ups.map(u=>[u.ups_name,u.location||'',u.status,null]), 3, i=>ups[i].photo_url);
+  if(faults.length) sheetWithImages('الأعطال', ['الجهاز','النوع','الخطورة','الحالة','التاريخ','صورة'],
+    faults.map(fl=>[fl.device_name,fl.fault_type||'',fl.severity,fl.status,new Date(fl.reported_at).toLocaleDateString('ar-EG'),null]), 5, i=>{ const im=faultImages.find(x=>x.fault_id===faults[i].id); return im?im.image_url:null; });
+  if(maintenance.length) sheet('الصيانة', ['الهدف','نوع الصيانة','الموعد','ملاحظات'], maintenance.map(m=>[m.target_name,m.maintenance_type,fmtDateAr(m.scheduled_date),m.notes||'']));
+  if(lighting.length) sheetWithImages('الإضاءة', ['المكان','المشكلة','الحالة','صورة'], lighting.map(l=>[l.place_name||'',l.problem_description||l.description||'',l.status,null]), 3, i=>lighting[i].photo_url);
+  if(cameraMods.length) sheet('الكاميرات للتعديل', ['الكاميرا','الموقع','السبب','الحالة'], cameraMods.map(c=>[c.camera_name,c.place_name||'',c.problem_description||'',c.status]));
+
+  const buf = await wb.xlsx.writeBuffer();
+  closeModal();
+  await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.xlsx`);
+  await logAudit('إنشاء تقرير مصنع شامل (Excel)', f?f.name:factoryId);
 }
 async function generatePeriodReport(period){
   const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
