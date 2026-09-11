@@ -863,6 +863,7 @@ async function loadAllData(){
   await loadFactories();
   await loadMaintenanceLog();
   await loadDashboardSummaries();
+  if(['dashboard'].includes(currentView)) renderCurrentView();
   try{ const {data} = await supa.from('faults').select('*').order('reported_at',{ascending:false}).limit(300); faultsData = data||[]; }catch(e){ faultsData = faultsData||[]; }
   try{ const {data} = await supa.from('preventive_maintenance').select('*').order('scheduled_date'); preventiveTasks = data||[]; }catch(e){ preventiveTasks = preventiveTasks||[]; }
   try{ const {data} = await supa.from('room_needs').select('*'); roomNeedsData = data||[]; }catch(e){ roomNeedsData = roomNeedsData||[]; }
