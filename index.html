@@ -1410,6 +1410,7 @@ function renderDashboard(){
           <div style="flex:1">
             <div class="site-name" style="font-size:14px">${s.name}</div>
             <div class="site-meta">${s.camerasUp}/${s.camerasTotal} كاميرا تعمل ${s.screensDown>0?`· <span style="color:var(--danger)">${s.screensDown} شاشة منقطعة</span>`:''}</div>
+            ${(factoryTypeCountsMap[s.id]||[]).length ? `<div style="font-size:10px;color:var(--accent);margin-top:3px">📷 ${(factoryTypeCountsMap[s.id]||[]).map(c=>`${c.count} ${[c.brand,c.resolution,c.camera_type].filter(Boolean).join(' ')||'كاميرا'}`).join(' • ')}</div>` : ''}
           </div>
           <span class="pill ${s.camerasDown===0?'ok':'warn'}">${s.camerasDown===0?'سليم':(s.camerasDown+' منقطعة')}</span>
         </div>
