@@ -819,8 +819,14 @@ async function loadFactories(){
     console.error('فشل تحميل المصانع', e);
     if(!navigator.onLine) toast('لا يوجد اتصال — سيتم عرض آخر بيانات محفوظة محليًا');
   }
+  try{
+    const {data} = await supa.from('camera_type_counts').select('*');
+    factoryTypeCountsMap = {};
+    (data||[]).forEach(c=>{ if(!factoryTypeCountsMap[c.factory_id]) factoryTypeCountsMap[c.factory_id]=[]; factoryTypeCountsMap[c.factory_id].push(c); });
+  }catch(e){ factoryTypeCountsMap = {}; }
   if(['dashboard','factories'].includes(currentView)) renderCurrentView();
 }
+let factoryTypeCountsMap = {};
 let appSettings = { alert_threshold:10, alert_pct_threshold:90, fault_sla_hours:24 };
 async function loadSettings(){
   try{
@@ -1074,7 +1080,10 @@ function renderCurrentView(){
   else if(currentView==='users' && isAdmin()) { host.innerHTML = renderUsersPlaceholder(); loadUsers(); }
   else if(currentView==='settings') host.innerHTML = renderSettingsView();
   else if(currentView==='compare') { host.innerHTML = renderComparePlaceholder(); setTimeout(renderCompareResult, 30); }
-  else if(currentView==='maintenance') { host.innerHTML = renderPreventiveMaintenanceView(); loadPreventiveTasks(); }
+  else if(currentView==='maintenance') {
+    host.innerHTML = renderPreventiveMaintenanceView(currentViewCtx);
+    if(currentViewCtx) loadPreventiveTasks(currentViewCtx); else loadMaintFactoryPicker();
+  }
   else if(currentView==='cameras') { host.innerHTML = renderCamerasPlaceholder(currentViewCtx); loadCameras(currentViewCtx); }
   else if(currentView==='screens') { host.innerHTML = renderScreensPlaceholder(currentViewCtx); loadScreens(currentViewCtx); }
   else if(currentView==='layouts') { host.innerHTML = renderLayoutsPlaceholder(currentViewCtx); loadLayouts(currentViewCtx); }
@@ -1136,9 +1145,11 @@ function renderFactoriesListHTML(){
           <div class="mini"><div class="n" style="color:${s.screensDown>0?'var(--danger)':'inherit'}">${s.screensDown}</div><div class="t">شاشات منقطعة</div></div>
         </div>
         <div style="font-size:11.5px;color:var(--muted)">نسبة التشغيل: <b style="color:var(--text)">${fmtPct2(s.camUptime)}</b></div>
+        ${(factoryTypeCountsMap[s.id]||[]).length ? `<div style="font-size:11px;color:var(--accent);margin-top:4px">📷 ${(factoryTypeCountsMap[s.id]||[]).map(c=>`${c.count} ${[c.brand,c.resolution,c.camera_type].filter(Boolean).join(' ')||'كاميرا'}`).join(' • ')}</div>` : ''}
         ${s.root_causes ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)"><b style="color:var(--amber)">المشكلات الجذرية:</b> ${s.root_causes}</div>` : ''}
         <div class="btn-row">
           <button class="btn sm" onclick="goTo('cameras','${s.id}')">🎥 الكاميرات</button>
+          <button class="btn sm" onclick="openCameraTypeCountsManager('${s.id}')">📷 أنواع الكاميرات</button>
           <button class="btn sm" onclick="goTo('screens','${s.id}')">🖥️ الشاشات</button>
           <button class="btn sm" onclick="goTo('layouts','${s.id}')">🗺️ الخرائط</button>
           <button class="btn sm" onclick="goTo('network','${s.id}')">🗄️ الشبكة</button>
@@ -1359,6 +1370,7 @@ function renderDashboard(){
       <button class="qbtn" onclick="goTo('lighting')"><span class="qicon">💡</span> الإضاءة <span style="margin-right:auto;color:var(--muted-2);font-size:11px">${dashSummary.lighting.total}</span></button>
       <button class="qbtn" onclick="goTo('store')"><span class="qicon">📦</span> المخزن <span style="margin-right:auto;color:var(--muted-2);font-size:11px">${dashSummary.store.items}</span></button>
       <button class="qbtn" onclick="goTo('downcams')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات المنقطعة التي تم تشغيلها</button>
+      <button class="qbtn" onclick="cameraModsTab='تم التعديل'; goTo('cameramods')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات التي تم تعديلها</button>
       <button class="qbtn" onclick="goTo('roomneeds')" style="grid-column:1/-1"><span class="qicon">📋</span> احتياجات الغرفة <span style="margin-right:auto;color:${dashSummary.roomNeeds.notDone>0?'var(--danger)':'var(--muted-2)'};font-size:11px">${dashSummary.roomNeeds.total} (${dashSummary.roomNeeds.notDone} لم يُنفَّذ)</span></button>
     </div>
     ${dashSummary.roomNeeds.total>0 ? `
@@ -2500,23 +2512,60 @@ function renderCompareResult(){
 /* ============================================================
    شاشة: الصيانة الوقائية (Admin يجدول، الكل يشاهد)
    ============================================================ */
-let maintenanceFilter = { text:'', site:'' };
-function renderPreventiveMaintenanceView(){
+let maintenanceFilter = { text:'', status:'', priority:'' };
+function renderPreventiveMaintenanceView(factoryId){
+  if(!factoryId){
+    return `<div class="view active">
+      <div class="section-title" style="margin-top:0"><h2>🔧 الصيانة الوقائية</h2></div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض مهام صيانته فقط.</p>
+      <div id="maintFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
+    </div>`;
+  }
+  const f = factoriesData.find(x=>x.id===factoryId);
   return `<div class="view active">
-    <div class="section-title" style="margin-top:0"><h2>الصيانة الوقائية</h2>
-      ${isAdmin()? `<button class="btn primary sm" onclick="openMaintenanceForm()">+ جدولة صيانة</button>`:''}
+    <div class="section-title" style="margin-top:0"><h2>🔧 الصيانة: ${f?f.name:''}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openMaintenanceForm('${factoryId}')">+ جدولة صيانة</button>`:''}
     </div>
+    <button class="btn sm" onclick="goTo('maintenance')">→ رجوع لكل المصانع</button>
+    <div id="maintSummaryHost" style="margin-top:8px"></div>
     <div class="field"><input class="input" placeholder="🔍 بحث بنوع الصيانة أو الملاحظات..." value="${maintenanceFilter.text}" oninput="maintenanceFilter.text=this.value; renderMaintenanceList()"></div>
-    <div class="field"><select class="input" onchange="maintenanceFilter.site=this.value; renderMaintenanceList()">
-      <option value="">كل المواقع</option>${factoriesData.map(s=>`<option ${maintenanceFilter.site===s.name?'selected':''}>${s.name}</option>`).join('')}
-    </select></div>
+    <div class="row2">
+      <div class="field"><select class="input" onchange="maintenanceFilter.status=this.value; renderMaintenanceList()">
+        <option value="">كل الحالات</option><option>تحتاج صيانة</option><option>جاري التنفيذ</option><option>تم التنفيذ</option>
+      </select></div>
+      <div class="field"><select class="input" onchange="maintenanceFilter.priority=this.value; renderMaintenanceList()">
+        <option value="">كل الأولويات</option><option>منخفضة</option><option>متوسطة</option><option>عالية</option><option>عاجلة</option>
+      </select></div>
+    </div>
     <div id="maintListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
-let preventiveTasks = [];
-async function loadPreventiveTasks(){
+async function loadMaintFactoryPicker(){
+  const host = document.getElementById('maintFactoryPickerHost');
+  if(!host) return;
+  if(!factoriesData.length){ host.innerHTML = '<div class="empty">لا توجد مصانع مسجّلة بعد.</div>'; return; }
+  let counts = {};
   try{
-    const {data, error} = await supa.from('preventive_maintenance').select('*').order('scheduled_date');
+    const {data} = await supa.from('preventive_maintenance').select('factory_id, status');
+    (data||[]).forEach(r=>{ if(!counts[r.factory_id]) counts[r.factory_id]={total:0,open:0}; counts[r.factory_id].total++; if(r.status!=='تم التنفيذ') counts[r.factory_id].open++; });
+  }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تشغيل schema_part25.sql في Supabase.</div>`; return; }
+  host.innerHTML = factoriesData.map(f=>{
+    const c = counts[f.id] || {total:0, open:0};
+    return `<div class="site-card" style="cursor:pointer" onclick="goTo('maintenance','${f.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="site-name" style="font-size:14px">${f.name}</div>
+        <span class="pill ${c.open>0?'warn':'ok'}">${c.total} مهمة${c.open>0?' · '+c.open+' مفتوح':''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+let preventiveTasks = [];
+const MAINT_STATUS_COLOR = {'تحتاج صيانة':'bad','جاري التنفيذ':'warn','تم التنفيذ':'ok'};
+async function loadPreventiveTasks(factoryId){
+  try{
+    let q = supa.from('preventive_maintenance').select('*').order('scheduled_date');
+    if(factoryId) q = q.eq('factory_id', factoryId);
+    const {data, error} = await q;
     if(error) throw error;
     preventiveTasks = data||[];
   }catch(e){
@@ -2527,6 +2576,11 @@ async function loadPreventiveTasks(){
   }
   try{ const {data} = await supa.from('maintenance_images').select('*').order('sort_order'); maintenanceImagesData = data||[]; }
   catch(e){ maintenanceImagesData = []; }
+  const sumHost = document.getElementById('maintSummaryHost');
+  if(sumHost){
+    const open = preventiveTasks.filter(t=>t.status!=='تم التنفيذ').length;
+    sumHost.innerHTML = `<div class="mini-grid"><div class="mini"><div class="n">${preventiveTasks.length}</div><div class="t">الإجمالي</div></div><div class="mini"><div class="n" style="color:var(--danger)">${open}</div><div class="t">لسه مفتوح</div></div><div class="mini"><div class="n" style="color:var(--success)">${preventiveTasks.length-open}</div><div class="t">تم التنفيذ</div></div></div>`;
+  }
   renderMaintenanceList();
 }
 let maintenanceImagesData = [];
@@ -2537,37 +2591,88 @@ function renderMaintenanceList(){
   const f = maintenanceFilter;
   const list = preventiveTasks.filter(t=>
     (!f.text || t.maintenance_type.includes(f.text) || (t.notes||'').includes(f.text)) &&
-    (!f.site || t.target_name===f.site)
+    (!f.status || t.status===f.status) && (!f.priority || t.priority===f.priority)
   );
   if(!list.length){ host.innerHTML = '<div class="empty">لا توجد نتائج مطابقة.</div>'; return; }
   const today = new Date().toISOString().slice(0,10);
   host.innerHTML = list.map(t=>{
     const images = getMaintenanceImages(t.id);
     return `<div class="site-card">
-      <div style="display:flex;justify-content:space-between">
-        <div class="site-name" style="font-size:14px">${t.target_name}</div>
-        <span class="pill ${t.scheduled_date<today?'bad':'ok'}">${t.scheduled_date<today?'متأخرة':'مجدولة'}</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div><div class="site-name" style="font-size:14px">${t.maintenance_type}</div><div class="site-meta">${t.target_name} — ${fmtDateAr(t.scheduled_date)} — تتكرر: ${t.recurrence||'مرة واحدة'}</div></div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+          <span class="pill ${PRIORITY_COLOR[t.priority]||'warn'}">${t.priority||'متوسطة'}</span>
+          <span class="pill ${MAINT_STATUS_COLOR[t.status]||'bad'}">${t.status||'تحتاج صيانة'}</span>
+          ${t.scheduled_date<today && t.status!=='تم التنفيذ'? `<span class="pill bad" style="font-size:9px">متأخرة</span>`:''}
+        </div>
       </div>
-      <div class="site-meta">${t.maintenance_type} — ${fmtDateAr(t.scheduled_date)} — تتكرر: ${t.recurrence||'مرة واحدة'}</div>
-      ${t.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${t.notes}</p>`:''}
+      ${t.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>المشكلة:</b> ${t.problem_description}</p>`:''}
+      ${t.required_action? `<p style="font-size:12px;color:var(--muted)"><b>المطلوب:</b> ${t.required_action}</p>`:''}
+      ${t.notes? `<p style="font-size:12px;color:var(--muted)">${t.notes}</p>`:''}
+      <div class="row2" style="margin-top:8px">
+        <div>
+          <div style="font-size:10.5px;color:var(--muted-2);text-align:center;margin-bottom:4px">قبل</div>
+          ${t.photo_before_url? `<img src="${t.photo_before_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${t.photo_before_url}')">` : `<div style="height:100px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted-2)">لا توجد</div>`}
+          ${isAdmin()? `<label class="btn sm block" style="cursor:pointer;margin-top:4px">${t.photo_before_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadMaintBeforeAfter('${t.id}','before',this)"></label>${t.photo_before_url?`<button class="btn sm danger block" style="margin-top:2px" onclick="removeMaintBeforeAfter('${t.id}','before')">🗑</button>`:''}`:''}
+        </div>
+        <div>
+          <div style="font-size:10.5px;color:var(--muted-2);text-align:center;margin-bottom:4px">بعد</div>
+          ${t.photo_after_url? `<img src="${t.photo_after_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${t.photo_after_url}')">` : `<div style="height:100px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted-2)">لا توجد</div>`}
+          ${isAdmin()? `<label class="btn sm block" style="cursor:pointer;margin-top:4px">${t.photo_after_url?'استبدال':'رفع'}<input type="file" accept="image/*" style="display:none" onchange="uploadMaintBeforeAfter('${t.id}','after',this)"></label>${t.photo_after_url?`<button class="btn sm danger block" style="margin-top:2px" onclick="removeMaintBeforeAfter('${t.id}','after')">🗑</button>`:''}`:''}
+        </div>
+      </div>
       ${images.length ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
         ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
       </div>` : ''}
-      <div class="btn-row">
-        <button class="btn sm" onclick="openMaintenanceGallery('${t.id}')">🖼️ الصور (${images.length})</button>
-        ${isAdmin()? `<button class="btn sm" onclick="openMaintenanceForm('${t.id}')">✏️ تعديل</button>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn sm" onclick="openMaintenanceGallery('${t.id}')">🖼️ صور إضافية (${images.length})</button>
+        ${isAdmin()? `
+        <select class="input" style="width:auto;font-size:11px;padding:6px 8px" onchange="updateMaintStatus('${t.id}', this.value)">
+          ${['تحتاج صيانة','جاري التنفيذ','تم التنفيذ'].map(s=>`<option ${t.status===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <button class="btn sm" onclick="openMaintenanceForm('${t.factory_id}','${t.id}')">✏️ تعديل</button>
         <button class="btn sm danger" onclick="deleteMaintenanceTask('${t.id}')">🗑 حذف</button>`:''}
       </div>
     </div>`;
   }).join('');
 }
+async function updateMaintStatus(id, status){
+  try{
+    await supa.from('preventive_maintenance').update({status}).eq('id',id);
+    const t = preventiveTasks.find(x=>x.id===id);
+    await logAudit('تحديث حالة صيانة', `${t?t.maintenance_type:''}`, t?.status, status);
+    toast('✅ تم التحديث'); loadPreventiveTasks(currentViewCtx);
+  }catch(e){ toast('🚫 تعذّر التحديث'); }
+}
+async function uploadMaintBeforeAfter(taskId, which, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  toast('جاري رفع الصورة...');
+  try{
+    const compressed = await compressImageFile(file);
+    const path = `maintenance-ba/${taskId}-${which}-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+    if(upErr) throw upErr;
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    const col = which==='before' ? 'photo_before_url' : 'photo_after_url';
+    const {error} = await supa.from('preventive_maintenance').update({[col]: pub.publicUrl}).eq('id', taskId);
+    if(error) throw error;
+    toast('✅ تم رفع الصورة'); loadPreventiveTasks(currentViewCtx);
+  }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
+}
+async function removeMaintBeforeAfter(taskId, which){
+  try{
+    const col = which==='before' ? 'photo_before_url' : 'photo_after_url';
+    await supa.from('preventive_maintenance').update({[col]: null}).eq('id', taskId);
+    toast('✅ تم حذف الصورة'); loadPreventiveTasks(currentViewCtx);
+  }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
 function openMaintenanceGallery(taskId){
   const t = preventiveTasks.find(x=>x.id===taskId);
   const images = getMaintenanceImages(taskId);
   openModal(`
-    <div class="modal-head"><h3>🖼️ صور الصيانة: ${t.target_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🖼️ صور إضافية: ${t.maintenance_type}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     ${isAdmin() ? `<div style="border:2px dashed var(--border);border-radius:12px;padding:16px;text-align:center;margin-bottom:12px">
-      <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور (قبل/بعد)<input type="file" accept="image/*" multiple style="display:none" onchange="uploadMaintenanceImages('${taskId}', this)"></label>
+      <label class="btn primary sm" style="cursor:pointer">📷 إضافة صور<input type="file" accept="image/*" multiple style="display:none" onchange="uploadMaintenanceImages('${taskId}', this)"></label>
     </div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
       ${images.length===0 ? `<div class="empty" style="grid-column:1/-1">لا توجد صور بعد.</div>` :
@@ -2609,15 +2714,20 @@ async function deleteMaintenanceImage(imageId, taskId){
     toast('✅ تم الحذف'); openMaintenanceGallery(taskId); renderMaintenanceList();
   }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
-function openMaintenanceForm(id){
+function openMaintenanceForm(factoryId, id){
   const t = id ? preventiveTasks.find(x=>x.id===id) : null;
   const isNew = !t;
-  const d = t || {target_name:'', maintenance_type:'', scheduled_date:'', recurrence:'', notes:''};
-  const sites = factoriesData.map(computeFactory);
+  const d = t || {maintenance_type:'', scheduled_date:'', recurrence:'', notes:'', priority:'متوسطة', status:'تحتاج صيانة', problem_description:'', required_action:''};
   openModal(`
     <div class="modal-head"><h3>${isNew?'+ جدولة صيانة وقائية':'تعديل مهمة صيانة'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>الموقع</label><select class="input" id="mt_site">${sites.map(s=>`<option ${d.target_name===s.name?'selected':''}>${s.name}</option>`).join('')}</select></div>
+    <div class="field"><label>المصنع</label><select class="input" id="mt_factory">${factoriesData.map(s=>`<option value="${s.id}" ${factoryId===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div>
     <div class="field"><label>نوع الصيانة</label><input class="input" id="mt_type" value="${d.maintenance_type||''}" placeholder="مثال: تنظيف عدسات الكاميرات"></div>
+    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="mt_problem">${d.problem_description||''}</textarea></div>
+    <div class="field"><label>الإجراء المطلوب</label><textarea class="input" id="mt_required">${d.required_action||''}</textarea></div>
+    <div class="row2">
+      <div class="field"><label>الأولوية</label><select class="input" id="mt_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
+      <div class="field"><label>الحالة</label><select class="input" id="mt_status">${['تحتاج صيانة','جاري التنفيذ','تم التنفيذ'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
     <div class="field"><label>موعد الصيانة</label><input class="input" type="date" id="mt_date" value="${d.scheduled_date||''}"></div>
     <div class="field"><label>التكرار</label><select class="input" id="mt_recur">
       ${['','شهري','ربع سنوي','سنوي'].map(r=>`<option value="${r}" ${d.recurrence===r?'selected':''}>${r||'مرة واحدة'}</option>`).join('')}
@@ -2628,9 +2738,14 @@ function openMaintenanceForm(id){
 }
 async function saveMaintenanceTask(id){
   if(!isAdmin()) return;
+  const factoryId = document.getElementById('mt_factory').value;
+  const factory = factoriesData.find(f=>f.id===factoryId);
   const payload = {
-    target_name: document.getElementById('mt_site').value,
+    factory_id: factoryId, target_name: factory?factory.name:'',
     maintenance_type: document.getElementById('mt_type').value.trim(),
+    problem_description: document.getElementById('mt_problem').value.trim(),
+    required_action: document.getElementById('mt_required').value.trim(),
+    priority: document.getElementById('mt_priority').value, status: document.getElementById('mt_status').value,
     scheduled_date: document.getElementById('mt_date').value,
     recurrence: document.getElementById('mt_recur').value,
     notes: document.getElementById('mt_notes').value.trim()
@@ -2647,7 +2762,7 @@ async function saveMaintenanceTask(id){
       if(error) throw error;
       await logAudit('جدولة صيانة وقائية', `${payload.target_name} — ${payload.maintenance_type}`);
     }
-    closeModal(); toast('✅ تم الحفظ'); loadPreventiveTasks();
+    closeModal(); toast('✅ تم الحفظ'); loadPreventiveTasks(factoryId);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف')); }
 }
 function deleteMaintenanceTask(id){
@@ -2657,9 +2772,10 @@ function deleteMaintenanceTask(id){
 }
 async function confirmDeleteMaintenanceTask(id){
   try{
+    const t = preventiveTasks.find(x=>x.id===id);
     const {error} = await supa.from('preventive_maintenance').delete().eq('id', id);
     if(error) throw error;
-    await logAudit('حذف مهمة صيانة', id); closeModal(); toast('✅ تم الحذف'); loadPreventiveTasks();
+    await logAudit('حذف مهمة صيانة', id); closeModal(); toast('✅ تم الحذف'); loadPreventiveTasks(t?.factory_id||currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
 
@@ -2813,6 +2929,82 @@ async function addCameraResolution(factoryId){
 }
 async function deleteCameraResolution(id, factoryId){
   try{ await supa.from('camera_resolutions').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId); }catch(e){ toast('🚫 تعذّر الحذف'); }
+}
+
+/* ============================================================
+   تفصيل أنواع الكاميرات بالعدد (للنظام اليدوي — بدون سجلات فردية)
+   مثال: 10 كاميرا Mobotix دقة 4MP + 10 كاميرا نوع تاني + 7 كاميرا نوع تالت
+   يظهر في نفس بطاقة المصنع بالرئيسية بجانب باقي الأرقام
+   ============================================================ */
+let cameraTypeCountsData = [];
+async function openCameraTypeCountsManager(factoryId){
+  openModal(`<div class="modal-head"><h3>📷 أنواع الكاميرات بالعدد</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
+  await reloadCameraTypeCounts(factoryId);
+  renderCameraTypeCountsManager(factoryId);
+}
+async function reloadCameraTypeCounts(factoryId){
+  try{ const {data} = await supa.from('camera_type_counts').select('*').eq('factory_id',factoryId).order('created_at'); cameraTypeCountsData = data||[]; }
+  catch(e){ cameraTypeCountsData = []; }
+}
+async function renderCameraTypeCountsManager(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  let brands = [], resolutions = [];
+  try{ const {data} = await supa.from('camera_brands').select('*').eq('factory_id',factoryId).order('name'); brands = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('camera_resolutions').select('*').eq('factory_id',factoryId).order('name'); resolutions = data||[]; }catch(e){}
+  const sumCounts = cameraTypeCountsData.reduce((a,c)=>a+(c.count||0),0);
+  const manualTotal = f?.cameras_total || 0;
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>📷 أنواع الكاميرات بالعدد — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">قسّم إجمالي الكاميرات لمجموعات حسب النوع/الشركة/الدقة، من غير ما تسجّل كل كاميرا لوحدها.</p>
+    <div class="mini-grid" style="margin-bottom:10px">
+      <div class="mini"><div class="n">${manualTotal}</div><div class="t">إجمالي المصنع</div></div>
+      <div class="mini"><div class="n" style="color:${sumCounts===manualTotal?'var(--success)':'var(--amber)'}">${sumCounts}</div><div class="t">مجموع المُصنَّف</div></div>
+      <div class="mini"><div class="n" style="color:${manualTotal-sumCounts===0?'var(--success)':'var(--muted-2)'}">${Math.max(0,manualTotal-sumCounts)}</div><div class="t">غير مُصنَّف بعد</div></div>
+    </div>
+    ${cameraTypeCountsData.length? cameraTypeCountsData.map(c=>`
+      <div class="site-card" style="padding:10px 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:13px;font-weight:700">${c.count} كاميرا</div>
+            <div style="font-size:11px;color:var(--muted)">${[c.brand,c.resolution,c.camera_type].filter(Boolean).join(' — ')||'بدون تفاصيل'}</div>
+          </div>
+          ${isAdmin()? `<button class="btn sm danger" onclick="deleteCameraTypeCount('${c.id}','${factoryId}')">🗑</button>`:''}
+        </div>
+      </div>`).join('') : '<div class="empty">لا توجد مجموعات مُسجَّلة بعد.</div>'}
+
+    ${isAdmin()? `
+    <div class="section-title" style="margin-top:12px"><h2 style="font-size:12.5px">+ إضافة مجموعة جديدة</h2></div>
+    <div class="row2">
+      <div class="field"><label>العدد</label><input class="input" type="number" min="0" id="ctc_count" placeholder="مثال: 10"></div>
+      <div class="field"><label>الشركة المصنعة</label><select class="input" id="ctc_brand"><option value="">— بدون —</option>${brands.map(b=>`<option>${b.name}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الدقة</label><select class="input" id="ctc_res"><option value="">— بدون —</option>${resolutions.map(r=>`<option>${r.name}</option>`).join('')}</select></div>
+      <div class="field"><label>نوع الكاميرا</label><input class="input" id="ctc_type" placeholder="مثال: Dome / Bullet"></div>
+    </div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:-4px">مفيش شركات أو دقات ظاهرة؟ اضغط "📷 الشركات والدقات" من شاشة الكاميرات نفسها لإضافتها الأول.</p>
+    <button class="btn primary block" style="margin-top:8px" onclick="saveCameraTypeCount('${factoryId}')">💾 إضافة المجموعة</button>
+    `:''}
+  `;
+}
+async function saveCameraTypeCount(factoryId){
+  const count = parseInt(document.getElementById('ctc_count').value);
+  if(!count || count<=0){ toast('أدخل عددًا صحيحًا أكبر من صفر'); return; }
+  try{
+    const {error} = await supa.from('camera_type_counts').insert({
+      factory_id: factoryId, count, brand: document.getElementById('ctc_brand').value,
+      resolution: document.getElementById('ctc_res').value, camera_type: document.getElementById('ctc_type').value.trim(),
+      created_by: currentProfile.id
+    });
+    if(error) throw error;
+    const f = factoriesData.find(x=>x.id===factoryId);
+    await logAudit('إضافة مجموعة أنواع كاميرات', `${f?f.name:''} — ${count} كاميرا`);
+    toast('✅ تم الإضافة'); await reloadCameraTypeCounts(factoryId); renderCameraTypeCountsManager(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+async function deleteCameraTypeCount(id, factoryId){
+  try{ await supa.from('camera_type_counts').delete().eq('id',id); toast('تم الحذف'); await reloadCameraTypeCounts(factoryId); renderCameraTypeCountsManager(factoryId); }
+  catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 async function loadCameras(factoryId){
   try{
@@ -3436,6 +3628,9 @@ async function saveFaultForm(id){
     responsible: document.getElementById('ft_resp').value.trim()
   };
   if(!payload.device_name){ toast('أدخل اسم الجهاز'); return; }
+  if(payload.device_type==='camera'){
+    try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',payload.factory_id).eq('camera_name',payload.device_name).single(); payload.camera_id = data?data.id:null; }catch(e){ payload.camera_id = null; }
+  }
   try{
     if(id){
       const {error} = await supa.from('faults').update(payload).eq('id', id);
@@ -3908,6 +4103,10 @@ function renderCameraModsPlaceholder(factoryId){
     </div>
     <button class="btn sm" onclick="goTo('cameramods')">→ رجوع لكل المصانع</button>
     <div id="cameraModsSummaryHost" style="margin-top:8px"></div>
+    <div style="display:flex;gap:6px;margin:10px 0">
+      <button class="btn sm ${cameraModsTab==='قيد التعديل'?'primary':''}" onclick="setCameraModsTab('قيد التعديل')">🔧 تحتاج/قيد التعديل</button>
+      <button class="btn sm ${cameraModsTab==='تم التعديل'?'primary':''}" onclick="setCameraModsTab('تم التعديل')">✅ تم تعديلها</button>
+    </div>
     <div class="field"><input class="input" placeholder="🔍 بحث..." oninput="cameraModsFilter.text=this.value; renderCameraModsList()"></div>
     <div class="row2">
       <div class="field"><select class="input" onchange="cameraModsFilter.status=this.value; renderCameraModsList()">
@@ -3925,6 +4124,8 @@ function renderCameraModsPlaceholder(factoryId){
     <div id="cameraModsListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
+let cameraModsTab = 'الكل';
+function setCameraModsTab(tab){ cameraModsTab = tab; renderCameraModsList(); renderCurrentView(); }
 async function loadCameraModsFactoryPicker(){
   const host = document.getElementById('cameraModsFactoryPickerHost');
   if(!host) return;
@@ -3970,7 +4171,8 @@ function renderCameraModsList(){
   const f = cameraModsFilter;
   const list = cameraModsData.filter(c=>
     (!f.text || c.camera_name.includes(f.text) || c.factory_name.includes(f.text)) &&
-    (!f.status || c.status===f.status) && (!f.priority || c.priority===f.priority)
+    (!f.status || c.status===f.status) && (!f.priority || c.priority===f.priority) &&
+    (cameraModsTab==='الكل' || (cameraModsTab==='تم التعديل' ? c.status==='تم التعديل' : c.status!=='تم التعديل'))
   );
   if(!list.length){ host.innerHTML='<div class="empty">لا توجد نتائج.</div>'; return; }
   host.innerHTML = list.map(c=>`
@@ -4044,8 +4246,10 @@ async function saveCameraModForm(id){
   if(!name){ toast('أدخل اسم الكاميرا'); return; }
   const factoryId = document.getElementById('cm_factory').value;
   const factory = factoriesData.find(f=>f.id===factoryId);
+  let realCameraId = null;
+  try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',factoryId).eq('camera_name',name).single(); realCameraId = data?data.id:null; }catch(e){ realCameraId = null; }
   const payload = {
-    factory_id: factoryId||null, factory_name: factory?factory.name:'',
+    factory_id: factoryId||null, factory_name: factory?factory.name:'', camera_id: realCameraId,
     place_name: document.getElementById('cm_place').value.trim(), camera_number: document.getElementById('cm_number').value.trim(),
     camera_name: name, camera_type: document.getElementById('cm_type').value.trim(),
     problem_description: document.getElementById('cm_problem').value.trim(), modification_reason: document.getElementById('cm_reason').value.trim(),
