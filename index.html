@@ -365,8 +365,22 @@ function downloadBlob(blob, filename){
 }
 async function saveOrShareFile(blob, filename){
   window.__lastExport = {blob, filename};
-  downloadBlob(blob, filename);
-  toast(`✅ تم تنزيل ${filename}`);
+  // على الموبايل/PWA المثبّت، رابط التنزيل المباشر كتير بيفشل بصمت داخل الـWebView.
+  // المشاركة (Share Sheet) هي الطريقة الموثوقة فعليًا هناك — نجرّبها الأول.
+  try{
+    const file = new File([blob], filename, {type: blob.type || 'application/octet-stream'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title: filename});
+      toast(`✅ اختر "حفظ" أو "Save to Files" من قائمة المشاركة لحفظ: ${filename}`);
+      return;
+    }
+  }catch(e){
+    // المستخدم لغى المشاركة بنفسه، أو حصل خطأ — نكمل بالتنزيل المباشر كاحتياطي
+    if(e && e.name==='AbortError') return;
+  }
+  const ok = downloadBlob(blob, filename);
+  if(ok) toast(`✅ تم تنزيل ${filename}`);
+  else toast(`🚫 تعذّر تنزيل الملف — جرّب فتح التطبيق من متصفح Chrome مباشرة بدل النسخة المثبّتة`);
 }
 async function shareLastExport(){
   const ex = window.__lastExport; if(!ex) return;
@@ -4163,20 +4177,22 @@ async function saveFaultForm(id){
     responsible: document.getElementById('ft_resp').value.trim()
   };
   if(!payload.device_name){ toast('أدخل اسم الجهاز'); return; }
+  let cameraId = null;
   if(payload.device_type==='camera'){
-    try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',payload.factory_id).eq('camera_name',payload.device_name).single(); payload.camera_id = data?data.id:null; }catch(e){ payload.camera_id = null; }
+    try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',payload.factory_id).eq('camera_name',payload.device_name).maybeSingle(); cameraId = data?data.id:null; }catch(e){ cameraId = null; }
+  }
+  async function trySave(withCameraId){
+    const p = withCameraId ? {...payload, camera_id: cameraId} : payload;
+    if(id) return await supa.from('faults').update(p).eq('id', id);
+    else return await supa.from('faults').insert({...p, created_by: currentProfile.id});
   }
   try{
-    if(id){
-      const {error} = await supa.from('faults').update(payload).eq('id', id);
-      if(error) throw error;
-      await logAudit('تعديل بيانات عطل', payload.device_name);
-    } else {
-      payload.created_by = currentProfile.id;
-      const {error} = await supa.from('faults').insert(payload);
-      if(error) throw error;
-      await logAudit('تسجيل عطل جديد', `${payload.device_name} — ${payload.severity}`);
+    let {error} = await trySave(true);
+    if(error && /column|schema cache/i.test(error.message||'')){
+      ({error} = await trySave(false));
     }
+    if(error) throw error;
+    await logAudit(id?'تعديل بيانات عطل':'تسجيل عطل جديد', `${payload.device_name}${id?'':' — '+payload.severity}`);
     closeModal(); toast('✅ تم الحفظ'); loadFaults();
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف')); }
 }
@@ -4782,20 +4798,30 @@ async function saveCameraModForm(id){
   const factoryId = document.getElementById('cm_factory').value;
   const factory = factoriesData.find(f=>f.id===factoryId);
   let realCameraId = null;
-  try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',factoryId).eq('camera_name',name).single(); realCameraId = data?data.id:null; }catch(e){ realCameraId = null; }
-  const payload = {
-    factory_id: factoryId||null, factory_name: factory?factory.name:'', camera_id: realCameraId,
+  try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',factoryId).eq('camera_name',name).maybeSingle(); realCameraId = data?data.id:null; }catch(e){ realCameraId = null; }
+  const basePayload = {
+    factory_id: factoryId||null, factory_name: factory?factory.name:'',
     place_name: document.getElementById('cm_place').value.trim(), camera_number: document.getElementById('cm_number').value.trim(),
     camera_name: name, camera_type: document.getElementById('cm_type').value.trim(),
     problem_description: document.getElementById('cm_problem').value.trim(), modification_reason: document.getElementById('cm_reason').value.trim(),
     required_change: document.getElementById('cm_required').value.trim(), priority: document.getElementById('cm_priority').value,
     status: document.getElementById('cm_status').value, notes: document.getElementById('cm_notes').value.trim(), updated_by: currentProfile.id
   };
+  async function trySave(withCameraId){
+    const payload = withCameraId ? {...basePayload, camera_id: realCameraId} : basePayload;
+    if(id) return await supa.from('camera_modifications').update(payload).eq('id',id);
+    else { const p = {...payload, created_by:currentProfile.id}; return await supa.from('camera_modifications').insert(p); }
+  }
   try{
-    if(id){ const {error}=await supa.from('camera_modifications').update(payload).eq('id',id); if(error) throw error; await logAudit('تعديل سجل كاميرا للتعديل', name); }
-    else { payload.created_by=currentProfile.id; const {error}=await supa.from('camera_modifications').insert(payload); if(error) throw error; await logAudit('إضافة كاميرا للتعديل', name); }
+    let {error} = await trySave(true);
+    if(error && /column|schema cache/i.test(error.message||'')){
+      // عمود camera_id لسه مش موجود في قاعدة البيانات (schema_part23.sql لم يُشغَّل بعد) — نحفظ بدونه بدل ما نفشل بالكامل
+      ({error} = await trySave(false));
+    }
+    if(error) throw error;
+    await logAudit(id?'تعديل سجل كاميرا للتعديل':'إضافة كاميرا للتعديل', name);
     closeModal(); toast('✅ تم الحفظ'); loadCameraMods(factoryId);
-  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 async function updateModStatus(id, status){
   try{ await supa.from('camera_modifications').update({status}).eq('id',id); const c=cameraModsData.find(x=>x.id===id); await logAudit('تحديث حالة كاميرا للتعديل', c.camera_name,c.status,status); toast('✅ تم التحديث'); loadCameraMods(currentViewCtx); }
@@ -7761,9 +7787,15 @@ async function previewFactoryChart(factoryId){
   toast('جاري تجميع البيانات...');
   const d = await gatherFullFactoryData(factoryId);
   const cv = buildFactoryChartCanvas(d);
+  window.__lastChartCanvas = cv;
   openModal(`<div class="modal-head"><h3>📊 الرسم البياني — ${d.f?d.f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <img src="${cv.toDataURL('image/png')}" style="width:100%;border-radius:10px">
-    <button class="btn primary block" style="margin-top:10px" onclick="(function(){const a=document.createElement('a');a.href='${cv.toDataURL('image/png')}';a.download='رسم-بياني.png';a.click();})()">⬇️ تنزيل</button>`);
+    <button class="btn primary block" style="margin-top:10px" onclick="downloadLastChart()">⬇️ تنزيل</button>`);
+}
+function downloadLastChart(){
+  const cv = window.__lastChartCanvas;
+  if(!cv) return;
+  cv.toBlob(blob=> saveOrShareFile(blob, 'رسم-بياني.png'), 'image/png', 0.95);
 }
 
 /* ============================================================
