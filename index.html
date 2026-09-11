@@ -3088,11 +3088,26 @@ function renderCameraTypeStatsContent(rows, factoryId){
       ${entries.map(([k,v])=>`<div class="site-card" style="padding:8px 12px;display:flex;justify-content:space-between"><span>${k}</span><b>${v}</b></div>`).join('')}`;
   };
   window.__ctsChartData = {byBrand, byRes, byType};
+  // ترتيب المصنع لو "كل المصانع" عشان يوضّح المجموعات مين تبع مين
+  const groupedByFactory = {};
+  rows.forEach(r=>{ if(!groupedByFactory[r.factory_id]) groupedByFactory[r.factory_id]=[]; groupedByFactory[r.factory_id].push(r); });
+  const rawGroupsHtml = Object.entries(groupedByFactory).map(([fid, groupRows])=>{
+    const f = factoriesData.find(x=>x.id===fid);
+    return `${factoryId==='all' && f ? `<div style="font-size:11.5px;color:var(--accent);font-weight:700;margin-top:10px">${f.name}</div>`:''}
+      ${groupRows.map(r=>`<div class="site-card" style="padding:8px 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:700">${r.count} كاميرا</div>
+          <div style="font-size:12px;color:var(--muted)">${[r.brand,r.resolution,r.camera_type].filter(Boolean).join(' — ')||'بدون تفاصيل'}</div>
+        </div>
+      </div>`).join('')}`;
+  }).join('');
   host.innerHTML = `
     <div class="mini-grid" style="margin-bottom:8px"><div class="mini" style="grid-column:1/-1"><div class="n">${total}</div><div class="t">إجمالي الكاميرات المُصنَّفة</div></div></div>
-    ${section('🏭 حسب الشركة المصنعة', byBrand)}
-    ${section('🔍 حسب الدقة', byRes)}
-    ${section('📐 حسب النوع', byType)}
+    <div class="section-title" style="margin-top:6px"><h2 style="font-size:12.5px">📋 المجموعات المسجّلة كما هي</h2></div>
+    ${rawGroupsHtml}
+    ${section('🏭 إجمالي حسب الشركة المصنعة', byBrand)}
+    ${section('🔍 إجمالي حسب الدقة', byRes)}
+    ${section('📐 إجمالي حسب النوع', byType)}
     <button class="btn primary block" style="margin-top:14px" onclick="renderCameraTypeChart()">📊 عرض الرسم البياني</button>
     <div id="ctsChartHost" style="margin-top:10px"></div>
     <button class="btn block" style="margin-top:10px" onclick="printCameraTypeStats('${factoryId}')">🖨️ طباعة / تصدير PDF</button>
