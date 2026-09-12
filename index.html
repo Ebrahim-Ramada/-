@@ -8165,21 +8165,43 @@ async function exportSectionPicker(section){
   const configs = {
     faults: async()=>{
       const {data} = await supa.from('faults').select('*').order('reported_at',{ascending:false});
-      const rows=(data||[]); return { title:'الأعطال', headers:['المصنع','الجهاز','النوع','الخطورة','الحالة','التاريخ'],
-        data: rows.map(f=>[factoriesData.find(x=>x.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]), raw:rows };
+      const rows=(data||[]);
+      let faultImgs = [];
+      try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('fault_images').select('*').in('fault_id',ids); faultImgs=im||[]; } }catch(e){}
+      return { title:'الأعطال', headers:['المصنع','الجهاز','النوع','الخطورة','الحالة','التاريخ'],
+        data: rows.map(f=>[factoriesData.find(x=>x.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]), raw:rows,
+        getImageUrls: i=> faultImgs.filter(im=>im.fault_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
     },
     maintenance: async()=>{
       const {data} = await supa.from('preventive_maintenance').select('*').order('scheduled_date');
-      const rows=(data||[]); return { title:'الصيانة الوقائية', headers:['الهدف','نوع الصيانة','الأولوية','الحالة','الموعد'],
-        data: rows.map(m=>[m.target_name, m.maintenance_type, m.priority||'', m.status||'', fmtDateAr(m.scheduled_date)]), raw:rows };
+      const rows=(data||[]);
+      let maintImgs = [];
+      try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('maintenance_images').select('*').in('task_id',ids); maintImgs=im||[]; } }catch(e){}
+      return { title:'الصيانة الوقائية', headers:['الهدف','نوع الصيانة','الأولوية','الحالة','الموعد'],
+        data: rows.map(m=>[m.target_name, m.maintenance_type, m.priority||'', m.status||'', fmtDateAr(m.scheduled_date)]), raw:rows,
+        getImageUrls: i=>{
+          const t = rows[i]; const list = [];
+          if(t.photo_before_url) list.push({label:'قبل', url:t.photo_before_url});
+          if(t.photo_after_url) list.push({label:'بعد', url:t.photo_after_url});
+          maintImgs.filter(im=>im.task_id===t.id).forEach((im,k)=> list.push({label:`إضافية ${k+1}`, url:im.image_url}));
+          return list;
+        } };
     },
     store_room: async()=>{
       const {data} = await supa.from('store_items').select('*').eq('warehouse','الغرفة المركزية');
-      const rows=(data||[]); return { title:'مخزن الغرفة', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows };
+      const rows=(data||[]);
+      let itemImgs = [];
+      try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('store_item_images').select('*').in('item_id',ids); itemImgs=im||[]; } }catch(e){}
+      return { title:'مخزن الغرفة', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows,
+        getImageUrls: i=> itemImgs.filter(im=>im.item_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
     },
     store_container: async()=>{
       const {data} = await supa.from('store_items').select('*').eq('warehouse','الكونتينر');
-      const rows=(data||[]); return { title:'مخزن الكونتينر', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows };
+      const rows=(data||[]);
+      let itemImgs = [];
+      try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('store_item_images').select('*').in('item_id',ids); itemImgs=im||[]; } }catch(e){}
+      return { title:'مخزن الكونتينر', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows,
+        getImageUrls: i=> itemImgs.filter(im=>im.item_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
     },
     roomneeds: async()=>{
       const {data} = await supa.from('room_needs').select('*');
@@ -8187,7 +8209,13 @@ async function exportSectionPicker(section){
     },
     cameramods: async()=>{
       const {data} = await supa.from('camera_modifications').select('*');
-      const rows=(data||[]); return { title:'كاميرات للتعديل', headers:['المصنع','الكاميرا','الموقع','السبب','الحالة'], data: rows.map(c=>[c.factory_name||'', c.camera_name, c.place_name||'', c.problem_description||'', c.status]), raw:rows };
+      const rows=(data||[]); return { title:'كاميرات للتعديل', headers:['المصنع','الكاميرا','الموقع','السبب','الحالة'], data: rows.map(c=>[c.factory_name||'', c.camera_name, c.place_name||'', c.problem_description||'', c.status]), raw:rows,
+        getImageUrls: i=>{
+          const c = rows[i]; const list = [];
+          if(c.photo_before_url) list.push({label:'قبل', url:c.photo_before_url});
+          if(c.photo_after_url) list.push({label:'بعد', url:c.photo_after_url});
+          return list;
+        } };
     },
     lighting: async()=>{
       const {data} = await supa.from('lighting_needs').select('*');
@@ -8223,8 +8251,10 @@ async function exportSectionPicker(section){
   };
   try{
     const cfg = await configs[section]();
-    if(cfg.getImageUrl) await urlsToDataUris(cfg.data.map((_,i)=>cfg.getImageUrl(i)).filter(Boolean));
-    openUnifiedExportPicker(cfg.title, cfg.headers, cfg.data, { getImageUrl: cfg.getImageUrl, rawObjects: cfg.raw });
+    const opts = { getImageUrl: cfg.getImageUrl, getImageUrls: cfg.getImageUrls, rawObjects: cfg.raw };
+    const preloadUrls = unifiedAllImageUrls(cfg.data, opts);
+    if(preloadUrls.length) await urlsToDataUris(preloadUrls);
+    openUnifiedExportPicker(cfg.title, cfg.headers, cfg.data, opts);
   }catch(e){ console.error(e); toast('🚫 تعذّر تجميع البيانات: '+(e.message||'')); }
 }
 /* ============================================================
@@ -8267,45 +8297,65 @@ async function unifiedExport(format, title){
     await logAudit('تصدير قسم', `${title} — ${format.toUpperCase()} — ${rows.length} سجل`);
   }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
 }
+// يدعم صورة واحدة (getImageUrl) للتوافق القديم، أو صور متعددة مُسمّاة لكل سجل (getImageUrls)
+function unifiedRowImages(opts, i){
+  if(opts?.getImageUrls){ return (opts.getImageUrls(i)||[]).filter(x=>x && x.url); }
+  if(opts?.getImageUrl){ const u = opts.getImageUrl(i); return u ? [{label:'صورة', url:u}] : []; }
+  return [];
+}
+function unifiedAllImageUrls(rows, opts){
+  const urls = [];
+  rows.forEach((_,i)=> unifiedRowImages(opts,i).forEach(im=> urls.push(im.url)));
+  return [...new Set(urls)];
+}
 function unifiedBuildTableHtml(headers, rows, opts){
+  const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
   return `<table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
-    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}</tr>
+    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}${hasImgs?'<th>الصور</th>':''}</tr>
     ${rows.map((r,i)=>{
       const cells = r.map(c=>`<td>${c==null?'':c}</td>`).join('');
-      const imgCell = opts?.getImageUrl ? `<td>${opts.getImageUrl(i)&&__imgDataCache[opts.getImageUrl(i)]?`<img src="${__imgDataCache[opts.getImageUrl(i)]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px">`:''}</td>` : '';
+      let imgCell = '';
+      if(hasImgs){
+        const imgs = unifiedRowImages(opts,i);
+        imgCell = `<td>${imgs.map(im=> __imgDataCache[im.url] ? `<div style="display:inline-block;text-align:center;margin:2px"><img src="${__imgDataCache[im.url]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px;display:block"><span style="font-size:8px">${im.label}</span></div>` : (im.pending ? '<span style="font-size:9px;color:#c00">⚠️ تعذّر تحميل الصورة</span>' : '')).join('')}</td>`;
+      }
       return `<tr>${cells}${imgCell}</tr>`;
     }).join('')}
   </table>`;
 }
 async function unifiedExportPdf(title, headers, rows, opts){
   const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
-  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
-  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const allUrls = unifiedAllImageUrls(rows, opts);
+  if(allUrls.length) await urlsToDataUris(allUrls);
   const el = document.createElement('div');
   el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px;color:#0B1220">
     <h1 style="text-align:center">${title}</h1>
-    <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')} — ${rows.length} سجل</p>
-    ${unifiedBuildTableHtml(finalHeaders, rows, opts)}
+    <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')} — ${rows.length} سجل${allUrls.length?' — '+allUrls.length+' صورة':''}</p>
+    ${unifiedBuildTableHtml(headers, rows, opts)}
   </div>`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
   el.remove();
+  if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف PDF (الملف فارغ أو تالف)'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pdf`);
 }
 async function unifiedExportWord(title, headers, rows, opts){
-  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
-  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const allUrls = unifiedAllImageUrls(rows, opts);
+  if(allUrls.length) await urlsToDataUris(allUrls);
   const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
     <head><meta charset="utf-8"><style>body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:5px;font-size:10pt;} th{background:#0B1220;color:#fff;}</style></head>
-    <body><h1 style="text-align:center">${title}</h1><p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</body></html>`;
+    <body><h1 style="text-align:center">${title}</h1><p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>${unifiedBuildTableHtml(headers, rows, opts)}</body></html>`;
   const blob = new Blob(['\ufeff', html], {type:'application/msword'});
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.doc`);
 }
 async function unifiedExportExcel(title, headers, rows, opts){
   const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
-  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
+  const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
+  const allUrls = unifiedAllImageUrls(rows, opts);
+  if(allUrls.length) await urlsToDataUris(allUrls);
   const wb = new ExcelJS.Workbook();
-  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const maxImgsPerRow = hasImgs ? Math.max(1, ...rows.map((_,i)=>unifiedRowImages(opts,i).length)) : 0;
+  const finalHeaders = hasImgs ? [...headers, ...Array.from({length:maxImgsPerRow}, (_,k)=> maxImgsPerRow>1?`صورة ${k+1}`:'صورة')] : headers;
   const ws = wb.addWorksheet(title.slice(0,28), {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
   ws.columns = finalHeaders.map(()=>({width:18}));
   const hr = ws.getRow(1);
@@ -8314,10 +8364,11 @@ async function unifiedExportExcel(title, headers, rows, opts){
   rows.forEach((r,i)=>{
     const rowIdx = i+2;
     r.forEach((val,ci)=>{ ws.getCell(rowIdx, ci+1).value = val==null?'':val; });
-    if(opts?.getImageUrl){
+    if(hasImgs){
       ws.getRow(rowIdx).height = 60;
-      const url = opts.getImageUrl(i);
-      if(url && __imgDataCache[url]) addEmbeddedImage(wb, ws, __imgDataCache[url], headers.length, rowIdx-1, 75, 75);
+      unifiedRowImages(opts,i).forEach((im,k)=>{
+        if(__imgDataCache[im.url]) addEmbeddedImage(wb, ws, __imgDataCache[im.url], headers.length+k, rowIdx-1, 75, 75);
+      });
     }
   });
   const buf = await wb.xlsx.writeBuffer();
@@ -8325,17 +8376,40 @@ async function unifiedExportExcel(title, headers, rows, opts){
 }
 async function unifiedExportPptx(title, headers, rows, opts){
   const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
+  const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
+  const allUrls = unifiedAllImageUrls(rows, opts);
+  if(allUrls.length) await urlsToDataUris(allUrls);
   const pptx = new PptxGenJS();
   pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
   const cover = pptx.addSlide({masterName:'MASTER'});
   cover.addText(title, {x:0.5,y:2.3,w:9,h:1,fontSize:26,bold:true,color:'38D9C9',align:'center'});
-  cover.addText(`${rows.length} سجل — ${new Date().toLocaleDateString('ar-EG')}`, {x:0.5,y:3.2,w:9,h:0.5,fontSize:13,color:'8CA0C4',align:'center'});
-  const chunkSize = 15;
+  cover.addText(`${rows.length} سجل${allUrls.length?' — '+allUrls.length+' صورة':''} — ${new Date().toLocaleDateString('ar-EG')}`, {x:0.5,y:3.2,w:9,h:0.5,fontSize:13,color:'8CA0C4',align:'center'});
+  const chunkSize = hasImgs ? 8 : 15; // شرائح أقل كثافة لو فيها صور، عشان تفضل واضحة
   for(let i=0;i<rows.length;i+=chunkSize){
-    const chunk = rows.slice(i,i+chunkSize).map(r=>r.map(c=>String(c==null?'':c)));
+    const chunkRows = rows.slice(i,i+chunkSize);
+    const chunk = chunkRows.map(r=>r.map(c=>String(c==null?'':c)));
     const sl = pptx.addSlide({masterName:'MASTER'});
     sl.addText(title, {x:0.3,y:0.2,w:9.4,h:0.5,fontSize:16,bold:true,color:'38D9C9',align:'center'});
     sl.addTable([headers, ...chunk], {x:0.3,y:0.8,w:9.4,fontSize:9,color:'E9EEFB',fill:{color:'182446'}, autoPage:false});
+    if(hasImgs){
+      // شريحة صور منفصلة لكل مجموعة سجلات، عشان الصور تفضل واضحة وميتقصّش مكانها
+      const imgList = [];
+      chunkRows.forEach((_,ci)=> unifiedRowImages(opts, i+ci).forEach(im=> imgList.push({rowLabel:String(chunkRows[ci][0]||''), ...im})));
+      const validImgs = imgList.filter(im=> __imgDataCache[im.url]);
+      if(validImgs.length){
+        for(let g=0; g<validImgs.length; g+=6){
+          const group = validImgs.slice(g,g+6);
+          const imgSlide = pptx.addSlide({masterName:'MASTER'});
+          imgSlide.addText(`صور: ${title}`, {x:0.3,y:0.15,w:9.4,h:0.4,fontSize:14,bold:true,color:'38D9C9',align:'center'});
+          group.forEach((im,k)=>{
+            const col = k%3, row = Math.floor(k/3);
+            const x = 0.4+col*3.1, y = 0.7+row*2.3;
+            imgSlide.addImage({ data: __imgDataCache[im.url], x, y, w:2.9, h:1.8, sizing:{type:'contain', w:2.9, h:1.8} });
+            imgSlide.addText(`${im.rowLabel} — ${im.label}`, {x, y:y+1.85, w:2.9, h:0.3, fontSize:8, color:'8CA0C4', align:'center'});
+          });
+        }
+      }
+    }
   }
   const blob = await pptx.write('blob');
   if(!blob || blob.size < 1000){ toast('🚫 فشل إنشاء ملف PowerPoint (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
@@ -8380,18 +8454,33 @@ async function unifiedExportZip(title, headers, rows, opts){
   folder.file('البيانات.json', JSON.stringify(opts?.rawObjects||rows, null, 2));
   const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
   folder.file('البيانات.csv', '\ufeff'+[headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n'));
-  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
-  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
-  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body><h1>${title}</h1>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</body></html>`);
+  const allUrls = unifiedAllImageUrls(rows, opts);
+  if(allUrls.length) await urlsToDataUris(allUrls);
+  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body><h1>${title}</h1>${unifiedBuildTableHtml(headers, rows, opts)}</body></html>`);
   if(await ensurePdfLib()){
     const el = document.createElement('div');
-    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px"><h1 style="text-align:center">${title}</h1>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</div>`;
+    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px"><h1 style="text-align:center">${title}</h1>${unifiedBuildTableHtml(headers, rows, opts)}</div>`;
     document.body.appendChild(el);
     const pdfBlob = await html2pdf().set({margin:8, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
     el.remove();
     folder.file('التقرير.pdf', pdfBlob);
   }
+  // الصور الفعلية كملفات منفصلة داخل مجلد صور، بدل الاكتفاء بتضمينها جوّه المستندات بس
+  if(allUrls.length){
+    const imgsFolder = folder.folder('الصور');
+    let imgCounter = 0;
+    for(const [i] of rows.entries()){
+      for(const im of unifiedRowImages(opts, i)){
+        if(__imgDataCache[im.url]){
+          imgCounter++;
+          const base64 = __imgDataCache[im.url].split(',')[1];
+          imgsFolder.file(`${i+1}-${im.label}-${imgCounter}.jpg`, base64, {base64:true});
+        }
+      }
+    }
+  }
   const blob = await zip.generateAsync({type:'blob'});
+  if(!blob || blob.size < 100){ toast('🚫 فشل إنشاء ملف ZIP'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.zip`);
 }
 
