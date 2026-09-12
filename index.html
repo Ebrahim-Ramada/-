@@ -6390,9 +6390,15 @@ let layoutEditor = null;
 function openLayoutEditor(layoutId){
   const l = layoutsData.find(x=>x.id===layoutId);
   if(!l || l.file_type!=='image'){ toast('التعديل متاح فقط على الخرائط المصوَّرة'); return; }
-  layoutEditor = { layoutId, factoryId:l.factory_id, elements:[], history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1 };
+  let restoredElements = [];
+  try{ if(l.edit_state) restoredElements = typeof l.edit_state==='string' ? JSON.parse(l.edit_state) : l.edit_state; }catch(e){ restoredElements = []; }
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1 };
+  // الرسم دائمًا فوق الخلفية الأصلية الحقيقية (وليس فوق آخر صورة مُصدَّرة) — يمنع تراكم الجودة السيئة
+  // ويضمن إن العناصر المستعادة تتوضع بشكل صحيح فوق نفس الخلفية اللي اتحفظت بالنسبة ليها
+  const bgUrl = l.original_file_url || l.file_url;
   openModal(`
     <div class="modal-head"><h3>✏️ تعديل الخريطة: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${restoredElements.length ? `<p style="font-size:10.5px;color:var(--success);margin-top:-6px">✅ تم استرجاع ${restoredElements.length} عنصر من آخر تعديل محفوظ.</p>`:''}
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="layoutToolbar">
       ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص']].map(([t,l2])=>
         `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
@@ -6409,12 +6415,22 @@ function openLayoutEditor(layoutId){
       <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:top center;max-width:none"></canvas>
     </div>
     <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 الصورة الأصلية محفوظة دائمًا ويمكن استعادتها لاحقًا من زر "الأصل".</p>
-    <button class="btn primary block" style="margin-top:8px" onclick="saveLayoutEdit()">💾 حفظ التعديل (نسخة جديدة)</button>
+    <button class="btn primary block" style="margin-top:8px" onclick="saveLayoutEdit()">💾 حفظ التعديل</button>
+    <button class="btn block" style="margin-top:6px" onclick="downloadLayoutEditCanvas('${l.layout_name.replace(/'/g,"")}')">📥 تحميل صورة الخريطة</button>
   `);
-  setTimeout(()=> initLayoutCanvas(l.file_url), 60);
+  setTimeout(()=> initLayoutCanvas(bgUrl), 60);
 }
-function initLayoutCanvas(imgUrl){
+async function initLayoutCanvas(imgUrl){
   const canvas = document.getElementById('layoutEditCanvas');
+  let safeSrc = imgUrl;
+  // نجيب الصورة كـ Blob أولًا (بدل تحميلها مباشرة من الرابط) عشان نضمن إن الـ Canvas
+  // متسممش (Tainted) بسبب مشاكل CORS أو نسخة مخزَّنة قديمة في كاش المتصفح — ده كان
+  // بيمنع الحفظ من الشغل صامتًا في بعض الحالات
+  try{
+    const resp = await fetch(imgUrl, {cache:'no-store'});
+    const blob = await resp.blob();
+    safeSrc = URL.createObjectURL(blob);
+  }catch(e){ console.warn('تعذّر جلب الصورة كـ Blob، سيتم استخدام الرابط المباشر (قد يفشل الحفظ لاحقًا)', e); }
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = ()=>{
@@ -6425,8 +6441,8 @@ function initLayoutCanvas(imgUrl){
     redrawLayoutCanvas();
     attachLayoutCanvasEvents(canvas);
   };
-  img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل (قد تحتاج الصورة دعم CORS)');
-  img.src = imgUrl;
+  img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل');
+  img.src = safeSrc;
 }
 function redrawLayoutCanvas(){
   const canvas = document.getElementById('layoutEditCanvas'); if(!canvas) return;
@@ -6575,24 +6591,55 @@ function attachLayoutCanvasEvents(canvas){
   canvas.addEventListener('mousedown', down); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
   canvas.addEventListener('touchstart', down, {passive:false}); canvas.addEventListener('touchmove', move, {passive:false}); canvas.addEventListener('touchend', up);
 }
+function downloadLayoutEditCanvas(layoutName){
+  const canvas = document.getElementById('layoutEditCanvas');
+  if(!canvas){ toast('تعذّر إيجاد الخريطة'); return; }
+  canvas.toBlob(blob=>{
+    if(!blob || blob.size===0){ toast('🚫 تعذّر إنشاء الصورة'); return; }
+    const dateStr = new Date().toLocaleDateString('ar-EG').replace(/\//g,'-');
+    saveOrShareFile(blob, `${layoutName}-الخريطة-${dateStr}.png`);
+  }, 'image/png', 0.95);
+}
 async function saveLayoutEdit(){
   const canvas = document.getElementById('layoutEditCanvas');
   if(!canvas){ toast('تعذّر الحفظ'); return; }
+  const saveBtn = document.querySelector('button[onclick="saveLayoutEdit()"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري الحفظ...'; }
   toast('جاري حفظ التعديل...');
   try{
     const l = layoutsData.find(x=>x.id===layoutEditor.layoutId);
-    const blob = await new Promise(res=> canvas.toBlob(res, 'image/jpeg', 0.9));
+    const blob = await new Promise(res=> canvas.toBlob(res, 'image/jpeg', 0.92));
+    if(!blob || blob.size===0){
+      toast('🚫 تعذّر إنشاء صورة الخريطة المعدَّلة — جرّب تفتح الخريطة تاني وأعد التعديل');
+      if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; }
+      return;
+    }
     const path = `layouts/${layoutEditor.layoutId}-edited-${Date.now()}.jpg`;
     const {error: upErr} = await supa.storage.from('camera-photos').upload(path, blob, {contentType:'image/jpeg', upsert:true});
     if(upErr) throw upErr;
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
-    const payload = { file_url: pub.publicUrl };
-    if(!l.original_file_url) payload.original_file_url = l.file_url; // نحفظ الأصل أول مرة فقط
-    const {error} = await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
+    // نحفظ شيئين منفصلين: الصورة النهائية المُصدَّرة (للعرض/الطباعة/التقارير) + حالة العناصر
+    // الحقيقية (Interactive State) عشان تقدر تفتح وتكمل التعديل تاني من غير ما يضيع أي عنصر
+    const basePayload = { file_url: pub.publicUrl };
+    if(!l.original_file_url) basePayload.original_file_url = l.file_url; // نحفظ الأصل أول مرة فقط
+    async function trySave(withState){
+      const payload = withState ? {...basePayload, edit_state: layoutEditor.elements} : basePayload;
+      return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
+    }
+    let {error} = await trySave(true);
+    if(error && /column|schema cache/i.test(error.message||'')){
+      ({error} = await trySave(false));
+      if(!error) toast('⚠️ تم حفظ الصورة، لكن حفظ العناصر القابلة للتعديل لاحقًا يحتاج تشغيل schema_part29.sql');
+    }
     if(error) throw error;
-    await logAudit('تعديل خريطة (رسم/علامات)', l.layout_name);
-    toast('✅ تم حفظ النسخة المعدَّلة'); closeModal(); loadLayouts(layoutEditor.factoryId);
-  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+    await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر`);
+    toast('✅ تم حفظ التعديل بنجاح — كل العناصر محفوظة وقابلة للاستكمال لاحقًا');
+    closeModal(); loadLayouts(layoutEditor.factoryId);
+  }catch(e){
+    console.error('فشل حفظ تعديل الخريطة:', e);
+    toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف'));
+    if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; }
+  }
 }
 
 /* ============================================================
@@ -8279,7 +8326,7 @@ async function unifiedExportExcel(title, headers, rows, opts){
 async function unifiedExportPptx(title, headers, rows, opts){
   const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
   const pptx = new PptxGenJS();
-  pptx.defineSlideMaster({ name:'MASTER', background:{color:'0B1220'} });
+  pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
   const cover = pptx.addSlide({masterName:'MASTER'});
   cover.addText(title, {x:0.5,y:2.3,w:9,h:1,fontSize:26,bold:true,color:'38D9C9',align:'center'});
   cover.addText(`${rows.length} سجل — ${new Date().toLocaleDateString('ar-EG')}`, {x:0.5,y:3.2,w:9,h:0.5,fontSize:13,color:'8CA0C4',align:'center'});
@@ -8291,6 +8338,7 @@ async function unifiedExportPptx(title, headers, rows, opts){
     sl.addTable([headers, ...chunk], {x:0.3,y:0.8,w:9.4,fontSize:9,color:'E9EEFB',fill:{color:'182446'}, autoPage:false});
   }
   const blob = await pptx.write('blob');
+  if(!blob || blob.size < 1000){ toast('🚫 فشل إنشاء ملف PowerPoint (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pptx`);
 }
 function unifiedExportCsv(title, headers, rows){
@@ -8916,6 +8964,7 @@ async function generateFactoryPptxReport(factoryId){
     }
   }catch(e){ console.warn('تعذّر تضمين الخريطة التفاعلية في PowerPoint', e); }
   const blob = await pptx.write('blob');
+  if(!blob || blob.size < 1000){ toast('🚫 فشل إنشاء ملف PowerPoint (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
   await saveOrShareFile(blob, `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.pptx`);
   await logAudit('إنشاء تقرير مصنع شامل (PowerPoint)', f?f.name:factoryId);
 }
@@ -9532,6 +9581,7 @@ async function exportAllPptx(){
     closing.addText('إعداد وتشغيل النظام: إبراهيم رمضان', {x:0.5,y:3.9,w:9,h:0.5,fontSize:14,color:'38D9C9',align:'center'});
 
     const blob = await pptx.write('blob');
+    if(!blob || blob.size < 1000){ toast('🚫 فشل إنشاء ملف PowerPoint (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
     await saveOrShareFile(blob, exportCenterFilename('pptx'));
     await logAudit('تصدير شامل PowerPoint', `${d.sites.length} مصنع`);
   }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
