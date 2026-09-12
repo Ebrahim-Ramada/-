@@ -160,6 +160,28 @@ tbody td:first-child{text-align:right;font-weight:700;}
 
 .auth-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
 .auth-box{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:26px 22px;}
+
+/* ============================================================
+   استجابة الشاشات الكبيرة (لابتوب/كمبيوتر) — يملأ التطبيق العرض
+   المتاح بالكامل بدل ما يقعد في مربع ثابت 860px في منتصف الشاشة
+   تصميم الموبايل والتابلت (أقل من 1024px) يفضل زي ما هو تمامًا
+   ============================================================ */
+@media (min-width: 1024px){
+  .container, .topbar-inner, .bottomnav-inner{
+    max-width:100%;
+    padding-left:clamp(24px, 4vw, 80px);
+    padding-right:clamp(24px, 4vw, 80px);
+  }
+  /* الجداول والقوائم الشبكية تستفيد من العرض الإضافي بأعمدة أكتر بدل عمود واحد ممطوط */
+  .quickgrid{ grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); }
+  .mini-grid{ grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); }
+}
+@media (min-width: 1440px){
+  .container, .topbar-inner, .bottomnav-inner{
+    padding-left:clamp(40px, 8vw, 160px);
+    padding-right:clamp(40px, 8vw, 160px);
+  }
+}
 .offline-banner{background:linear-gradient(90deg, rgba(245,166,35,.15), rgba(245,166,35,.04));border:1px solid rgba(245,166,35,.4);color:#FFE3B0;border-radius:12px;padding:10px 12px;font-size:12.5px;margin:10px 0;display:none;}
 .empty{text-align:center;color:var(--muted-2);font-size:12.5px;padding:30px 10px;}
 </style>
@@ -352,6 +374,18 @@ async function ensureZipLib(){
     'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
   ]);
   return ZIP_LIB_READY;
+}
+let PDFJS_LIB_READY = false;
+async function ensurePdfJsLib(){
+  if(typeof pdfjsLib !== 'undefined'){ PDFJS_LIB_READY = true; return true; }
+  PDFJS_LIB_READY = await loadScriptWithFallback([
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+    'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js'
+  ]);
+  if(PDFJS_LIB_READY && typeof pdfjsLib!=='undefined'){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+  return PDFJS_LIB_READY;
 }
 
 /* ============================================================
@@ -1440,7 +1474,7 @@ function renderDashboard(){
     ${insight ? `<div class="offline-banner" style="display:block;border-color:rgba(56,217,201,.35);color:#CFF7F1;background:linear-gradient(90deg, rgba(56,217,201,.12), rgba(56,217,201,.03));margin-top:10px">💡 ${insight}</div>` : ''}
 
     <!-- تقييم الأداء: بطاقة مدمجة وأصغر -->
-    <div class="site-card" style="margin-top:12px;display:flex;align-items:center;gap:14px;background:linear-gradient(150deg,#16233F,#0F1A30);border-color:${perf.color}">
+    <div class="site-card" style="margin-top:12px;display:flex;align-items:center;gap:14px;background:linear-gradient(150deg,var(--panel-2),var(--panel));border-color:${perf.color}">
       <div>${ringSvg(perf.score, 56)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:10.5px;color:var(--muted)">تقييم الأداء العام</div>
@@ -3691,7 +3725,7 @@ async function renderLatestHandoverWidget(){
     const h = (data||[])[0];
     if(!h){ host.innerHTML=''; return; }
     const factory = factoriesData.find(x=>x.id===h.factory_id);
-    host.innerHTML = `<div class="site-card" style="border-color:var(--amber);background:linear-gradient(150deg,#2A1F0E,#1a1610)">
+    host.innerHTML = `<div class="site-card" style="border-color:var(--amber);background:linear-gradient(150deg,var(--panel-2),var(--panel))">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div class="site-name" style="font-size:13px">🔄 آخر تسليم شيفت — ${h.shift_name||''} ${factory?'('+factory.name+')':''}</div>
         <span class="pill ${HANDOVER_STATUS_COLOR[h.status]}" style="font-size:9px">${h.status}</span>
@@ -5838,11 +5872,12 @@ async function loadLayouts(factoryId){
   host.innerHTML = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px">${layoutsData.map(l=>`
     <div class="site-card" style="padding:10px">
       ${l.file_type==='pdf'
-        ? `<div style="height:110px;background:var(--bg-2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer" onclick="window.open('${l.file_url}','_blank')">📄</div>`
+        ? `<div style="height:110px;background:var(--bg-2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer" onclick="openPdfLayoutViewer('${l.id}')">📄</div>`
         : `<img src="${l.file_url}" style="width:100%;height:110px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${l.file_url}')">`}
       <div style="font-size:12.5px;font-weight:700;margin-top:6px">${l.layout_name}</div>
       ${l.notes? `<div style="font-size:10.5px;color:var(--muted)">${l.notes}</div>`:''}
       ${l.original_file_url? `<div style="font-size:9.5px;color:var(--amber);margin-top:2px">✏️ مُعدَّلة</div>`:''}
+      ${l.file_type==='pdf' ? `<button class="btn sm block" style="margin-top:6px" onclick="openPdfLayoutViewer('${l.id}')">🗺️ فتح كخريطة مرئية</button>`:''}
       ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">🧩 العناصر التفاعلية على الخريطة</button>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
         ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
@@ -5850,6 +5885,74 @@ async function loadLayouts(factoryId){
         <button class="btn sm danger" onclick="deleteLayout('${l.id}','${l.factory_id}')">🗑 حذف</button>
       </div>`:''}
     </div>`).join('')}</div>`;
+}
+/* ============================================================
+   عارض خرائط PDF — يحوّل صفحات الـPDF لصور مرئية فعلية داخل
+   التطبيق (وليس مجرد رابط أو ملف فارغ)، مع تنقل بين الصفحات وزوم
+   ============================================================ */
+let pdfLayoutDoc = null, pdfLayoutPage = 1, pdfLayoutTotalPages = 1;
+let pdfLayoutZoom = 1;
+async function openPdfLayoutViewer(layoutId){
+  const l = layoutsData.find(x=>x.id===layoutId);
+  if(!l){ toast('تعذّر إيجاد الخريطة'); return; }
+  openModal(`<div class="modal-head"><h3>🗺️ ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="empty">جاري تحميل عارض PDF...</div>`);
+  const ok = await ensurePdfJsLib();
+  if(!ok){ document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>🗺️ ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">⚠️ تعذّر تحميل مكتبة عرض PDF — تحقّق من الاتصال بالإنترنت.</div>`; return; }
+  try{
+    pdfLayoutDoc = await pdfjsLib.getDocument(l.file_url).promise;
+    pdfLayoutTotalPages = pdfLayoutDoc.numPages;
+    pdfLayoutPage = 1; pdfLayoutZoom = 1;
+    window.__currentPdfLayout = l;
+    await renderPdfLayoutPage();
+  }catch(e){
+    console.error(e);
+    document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>🗺️ ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <div class="empty">⚠️ تعذّر فتح ملف PDF: ${e.message||''}</div>`;
+  }
+}
+async function renderPdfLayoutPage(){
+  const l = window.__currentPdfLayout;
+  const page = await pdfLayoutDoc.getPage(pdfLayoutPage);
+  const viewport = page.getViewport({scale: 1.5 * pdfLayoutZoom});
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({canvasContext: ctx, viewport}).promise;
+  const dataUri = canvas.toDataURL('image/png');
+  document.getElementById('modalHost').innerHTML = `
+    <div class="modal-head"><h3>🗺️ ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="btn-row" style="margin-bottom:8px">
+      <button class="btn sm" onclick="adjustPdfLayoutZoom(-0.25)">➖</button>
+      <span style="font-size:12px;min-width:44px;text-align:center">${Math.round(pdfLayoutZoom*100)}%</span>
+      <button class="btn sm" onclick="adjustPdfLayoutZoom(0.25)">➕</button>
+      ${pdfLayoutTotalPages>1 ? `<span style="font-size:11px;color:var(--muted-2);margin-right:8px">صفحة ${pdfLayoutPage} من ${pdfLayoutTotalPages}</span>`:''}
+    </div>
+    <div id="pdfLayoutViewport" style="width:100%;height:400px;overflow:auto;border-radius:10px;background:#000;touch-action:pinch-zoom pan-x pan-y">
+      <img src="${dataUri}" style="display:block;margin:auto">
+    </div>
+    ${pdfLayoutTotalPages>1 ? `<div class="btn-row" style="margin-top:8px">
+      <button class="btn sm" ${pdfLayoutPage<=1?'disabled':''} onclick="changePdfLayoutPage(-1)">◀ السابقة</button>
+      <button class="btn sm" ${pdfLayoutPage>=pdfLayoutTotalPages?'disabled':''} onclick="changePdfLayoutPage(1)">التالية ▶</button>
+    </div>`:''}
+    <button class="btn primary block" style="margin-top:8px" onclick="downloadPdfLayoutPageImage()">⬇️ تنزيل هذه الصفحة كصورة</button>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:8px">💡 استخدم إصبعين للتكبير/التصغير والتحريك، أو أزرار الزوم فوق.</p>
+  `;
+}
+function adjustPdfLayoutZoom(delta){
+  pdfLayoutZoom = Math.max(0.5, Math.min(3, +(pdfLayoutZoom+delta).toFixed(2)));
+  renderPdfLayoutPage();
+}
+function changePdfLayoutPage(delta){
+  const next = pdfLayoutPage + delta;
+  if(next<1 || next>pdfLayoutTotalPages) return;
+  pdfLayoutPage = next;
+  renderPdfLayoutPage();
+}
+function downloadPdfLayoutPageImage(){
+  const img = document.querySelector('#pdfLayoutViewport img');
+  if(!img) return;
+  fetch(img.src).then(r=>r.blob()).then(blob=> saveOrShareFile(blob, `${window.__currentPdfLayout?.layout_name||'خريطة'}-صفحة${pdfLayoutPage}.png`));
 }
 function openLayoutForm(factoryId){
   openModal(`
@@ -5918,7 +6021,17 @@ async function openLayoutServerMarkers(layoutId, factoryId){
   currentLayoutMarkers = markers;
   pendingMarkerCoords = null; layoutMarkerSearch = '';
   window.__currentMarkerLayout = { layoutId, factoryId, imageUrl: l.file_url };
+  // استرجاع آخر حالة زوم/تمركز محفوظة لهذه الخريطة بالذات
+  try{
+    const saved = JSON.parse(localStorage.getItem('rc_layout_view_'+layoutId) || 'null');
+    layoutZoom = saved?.zoom || 1; layoutPanX = saved?.panX || 0; layoutPanY = saved?.panY || 0;
+  }catch(e){ layoutZoom = 1; layoutPanX = 0; layoutPanY = 0; }
   renderLayoutMarkersModal();
+}
+function saveLayoutViewState(){
+  const ctx = window.__currentMarkerLayout;
+  if(!ctx) return;
+  try{ localStorage.setItem('rc_layout_view_'+ctx.layoutId, JSON.stringify({zoom:layoutZoom, panX:layoutPanX, panY:layoutPanY})); }catch(e){}
 }
 function markerVisualStatus(m){
   const list = layoutMarkerData[m.marker_type+'s'] || layoutMarkerData[{camera:'cameras',screen:'screens',rack:'racks',switch:'switches',server:'servers',ups:'ups',tower:'towers'}[m.marker_type]];
@@ -6010,6 +6123,7 @@ function applyLayoutTransform(){
   if(wrap) wrap.style.transform = `translate(${layoutPanX}px,${layoutPanY}px) scale(${layoutZoom})`;
   const label = document.getElementById('zoomLevelLabel');
   if(label) label.textContent = Math.round(layoutZoom*100)+'%';
+  saveLayoutViewState();
 }
 function changeMarkerSize(size){
   layoutMarkerSize = size;
@@ -7977,20 +8091,262 @@ function renderReportsCenterView(){
       <button class="qbtn" onclick="generatePeriodReport('monthly')"><span class="qicon">🗓️</span> تقرير شهري</button>
       <button class="qbtn" onclick="generatePeriodReport('yearly')"><span class="qicon">📊</span> تقرير سنوي</button>
     </div>
-    <div class="section-title"><h2 style="font-size:13px">حسب القسم</h2></div>
+    <div class="section-title"><h2 style="font-size:13px">حسب القسم (كل الصيغ متاحة لكل قسم)</h2></div>
     <div class="quickgrid">
       <button class="qbtn" onclick="openFactoryReportPicker()"><span class="qicon">🏭</span> تقرير مصنع محدد</button>
       <button class="qbtn" onclick="openNetworkReportPicker()"><span class="qicon">🗄️</span> تقرير البنية التحتية للشبكة</button>
-      <button class="qbtn" onclick="goTo('faults')"><span class="qicon">📋</span> تقرير الأعطال</button>
-      <button class="qbtn" onclick="goTo('maintenance')"><span class="qicon">🛠️</span> تقرير الصيانة</button>
-      <button class="qbtn" onclick="goTo('store')"><span class="qicon">📦</span> تقرير المخزن</button>
-      <button class="qbtn" onclick="goTo('roomneeds')"><span class="qicon">📋</span> تقرير الاحتياجات</button>
-      <button class="qbtn" onclick="goTo('cameramods')"><span class="qicon">🎥</span> تقرير الكاميرات</button>
+      <button class="qbtn" onclick="exportSectionPicker('faults')"><span class="qicon">📋</span> الأعطال</button>
+      <button class="qbtn" onclick="exportSectionPicker('maintenance')"><span class="qicon">🛠️</span> الصيانة</button>
+      <button class="qbtn" onclick="exportSectionPicker('store_room')"><span class="qicon">🏠</span> مخزن الغرفة</button>
+      <button class="qbtn" onclick="exportSectionPicker('store_container')"><span class="qicon">🚛</span> مخزن الكونتينر</button>
+      <button class="qbtn" onclick="exportSectionPicker('roomneeds')"><span class="qicon">📋</span> احتياجات الغرفة</button>
+      <button class="qbtn" onclick="exportSectionPicker('cameramods')"><span class="qicon">🎥</span> كاميرات التعديل</button>
+      <button class="qbtn" onclick="exportSectionPicker('lighting')"><span class="qicon">💡</span> الإضاءة</button>
+      <button class="qbtn" onclick="exportSectionPicker('cameras_added')"><span class="qicon">📷</span> الكاميرات المُضافة</button>
+      <button class="qbtn" onclick="exportSectionPicker('screens')"><span class="qicon">🖥️</span> الشاشات</button>
+      <button class="qbtn" onclick="exportSectionPicker('racks')"><span class="qicon">🗄️</span> الراكات</button>
+      <button class="qbtn" onclick="exportSectionPicker('switches')"><span class="qicon">🔌</span> السويتشات</button>
+      <button class="qbtn" onclick="exportSectionPicker('servers')"><span class="qicon">🖥️</span> السيرفرات</button>
+      <button class="qbtn" onclick="exportSectionPicker('ups')"><span class="qicon">🔋</span> UPS</button>
     </div>
     <div class="section-title"><h2 style="font-size:13px">تصدير شامل لكل التطبيق</h2></div>
     <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
   </div>`;
 }
+async function exportSectionPicker(section){
+  toast('جاري تجميع البيانات...');
+  const configs = {
+    faults: async()=>{
+      const {data} = await supa.from('faults').select('*').order('reported_at',{ascending:false});
+      const rows=(data||[]); return { title:'الأعطال', headers:['المصنع','الجهاز','النوع','الخطورة','الحالة','التاريخ'],
+        data: rows.map(f=>[factoriesData.find(x=>x.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]), raw:rows };
+    },
+    maintenance: async()=>{
+      const {data} = await supa.from('preventive_maintenance').select('*').order('scheduled_date');
+      const rows=(data||[]); return { title:'الصيانة الوقائية', headers:['الهدف','نوع الصيانة','الأولوية','الحالة','الموعد'],
+        data: rows.map(m=>[m.target_name, m.maintenance_type, m.priority||'', m.status||'', fmtDateAr(m.scheduled_date)]), raw:rows };
+    },
+    store_room: async()=>{
+      const {data} = await supa.from('store_items').select('*').eq('warehouse','الغرفة المركزية');
+      const rows=(data||[]); return { title:'مخزن الغرفة', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows };
+    },
+    store_container: async()=>{
+      const {data} = await supa.from('store_items').select('*').eq('warehouse','الكونتينر');
+      const rows=(data||[]); return { title:'مخزن الكونتينر', headers:['الصنف','النوع','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', it.notes||'']), raw:rows };
+    },
+    roomneeds: async()=>{
+      const {data} = await supa.from('room_needs').select('*');
+      const rows=(data||[]); return { title:'احتياجات الغرفة', headers:['العنوان','الوصف','الأولوية','الحالة'], data: rows.map(n=>[n.title||'', n.description||'', n.priority||'', n.status||'']), raw:rows };
+    },
+    cameramods: async()=>{
+      const {data} = await supa.from('camera_modifications').select('*');
+      const rows=(data||[]); return { title:'كاميرات للتعديل', headers:['المصنع','الكاميرا','الموقع','السبب','الحالة'], data: rows.map(c=>[c.factory_name||'', c.camera_name, c.place_name||'', c.problem_description||'', c.status]), raw:rows };
+    },
+    lighting: async()=>{
+      const {data} = await supa.from('lighting_needs').select('*');
+      const rows=(data||[]); return { title:'الإضاءة', headers:['المصنع','المكان','المشكلة','الحالة'], data: rows.map(l=>[l.factory_name||'', l.place_name||'', l.problem_description||'', l.status]), raw:rows,
+        getImageUrl: i=> rows[i].photo_before_url || rows[i].photo_url };
+    },
+    cameras_added: async()=>{
+      const {data} = await supa.from('cameras').select('*');
+      const rows=(data||[]); return { title:'الكاميرات المُضافة', headers:['المصنع','الاسم','الكود','الشركة','الدقة','الحالة'],
+        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, c.camera_number||'', c.brand||'', c.resolution||'', c.status]), raw:rows,
+        getImageUrl: i=> rows[i].photo_url };
+    },
+    screens: async()=>{
+      const {data} = await supa.from('screens').select('*');
+      const rows=(data||[]); return { title:'الشاشات', headers:['المصنع','الرقم','الاسم','الحالة'], data: rows.map(s=>[factoriesData.find(x=>x.id===s.factory_id)?.name||'', s.screen_number||'', s.screen_name, s.status]), raw:rows };
+    },
+    racks: async()=>{
+      const {data} = await supa.from('factory_racks').select('*');
+      const rows=(data||[]); return { title:'الراكات', headers:['المصنع','الاسم','الموقع'], data: rows.map(r=>[factoriesData.find(x=>x.id===r.factory_id)?.name||'', r.rack_name, r.location||'']), raw:rows, getImageUrl: i=>rows[i].photo_url };
+    },
+    switches: async()=>{
+      const {data} = await supa.from('factory_switches').select('*');
+      const rows=(data||[]); return { title:'السويتشات', headers:['المصنع','الاسم','إجمالي Ports','مستخدمة'], data: rows.map(sw=>[factoriesData.find(x=>x.id===sw.factory_id)?.name||'', sw.switch_name, sw.total_ports||0, sw.used_ports||0]), raw:rows, getImageUrl: i=>rows[i].photo_url };
+    },
+    servers: async()=>{
+      const {data} = await supa.from('factory_servers').select('*');
+      const rows=(data||[]); return { title:'السيرفرات', headers:['المصنع','الاسم','الحالة','IP'], data: rows.map(sv=>[factoriesData.find(x=>x.id===sv.factory_id)?.name||'', sv.server_name, sv.status, sv.ip_address||'']), raw:rows };
+    },
+    ups: async()=>{
+      const {data} = await supa.from('factory_ups').select('*');
+      const rows=(data||[]); return { title:'UPS', headers:['المصنع','الاسم','الموقع','الحالة'], data: rows.map(u=>[factoriesData.find(x=>x.id===u.factory_id)?.name||'', u.ups_name, u.location||'', u.status]), raw:rows, getImageUrl: i=>rows[i].photo_url };
+    }
+  };
+  try{
+    const cfg = await configs[section]();
+    if(cfg.getImageUrl) await urlsToDataUris(cfg.data.map((_,i)=>cfg.getImageUrl(i)).filter(Boolean));
+    openUnifiedExportPicker(cfg.title, cfg.headers, cfg.data, { getImageUrl: cfg.getImageUrl, rawObjects: cfg.raw });
+  }catch(e){ console.error(e); toast('🚫 تعذّر تجميع البيانات: '+(e.message||'')); }
+}
+/* ============================================================
+   نظام تصدير موحّد عام — يشتغل بكل الصيغ الثمانية لأي قسم
+   بدون تكرار كود تصدير منفصل لكل قسم جديد يُضاف مستقبلًا
+   ============================================================ */
+function openUnifiedExportPicker(title, headers, rows, opts={}){
+  const hasImages = !!opts.getImageUrl;
+  openModal(`
+    <div class="modal-head"><h3>📤 تصدير: ${title}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">${rows.length} سجل جاهز للتصدير بأي صيغة.</p>
+    <div class="btn-row">
+      <button class="btn primary" onclick="unifiedExport('pdf','${escapeJsStr(title)}')">🧾 PDF</button>
+      <button class="btn" onclick="unifiedExport('word','${escapeJsStr(title)}')">📝 Word</button>
+      <button class="btn" onclick="unifiedExport('excel','${escapeJsStr(title)}')">📊 Excel</button>
+      <button class="btn" onclick="unifiedExport('pptx','${escapeJsStr(title)}')">📽️ PowerPoint</button>
+      <button class="btn" onclick="unifiedExport('csv','${escapeJsStr(title)}')">📃 CSV</button>
+      <button class="btn" onclick="unifiedExport('json','${escapeJsStr(title)}')">🗂️ JSON</button>
+      <button class="btn" onclick="unifiedExport('image','${escapeJsStr(title)}')">🖼️ صورة</button>
+      <button class="btn" onclick="unifiedExport('zip','${escapeJsStr(title)}')">📦 ZIP (الكل)</button>
+    </div>
+  `);
+  window.__unifiedExportData = { title, headers, rows, opts };
+}
+function escapeJsStr(s){ return String(s).replace(/'/g,"\\'"); }
+async function unifiedExport(format, title){
+  const { headers, rows, opts } = window.__unifiedExportData || {};
+  if(!rows){ toast('تعذّر إيجاد بيانات التصدير'); return; }
+  toast('جاري التجهيز...');
+  try{
+    if(format==='pdf') await unifiedExportPdf(title, headers, rows, opts);
+    else if(format==='word') await unifiedExportWord(title, headers, rows, opts);
+    else if(format==='excel') await unifiedExportExcel(title, headers, rows, opts);
+    else if(format==='pptx') await unifiedExportPptx(title, headers, rows, opts);
+    else if(format==='csv') unifiedExportCsv(title, headers, rows);
+    else if(format==='json') unifiedExportJson(title, rows, opts);
+    else if(format==='image') await unifiedExportImage(title, headers, rows, opts);
+    else if(format==='zip') await unifiedExportZip(title, headers, rows, opts);
+    closeModal();
+    await logAudit('تصدير قسم', `${title} — ${format.toUpperCase()} — ${rows.length} سجل`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
+}
+function unifiedBuildTableHtml(headers, rows, opts){
+  return `<table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
+    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}</tr>
+    ${rows.map((r,i)=>{
+      const cells = r.map(c=>`<td>${c==null?'':c}</td>`).join('');
+      const imgCell = opts?.getImageUrl ? `<td>${opts.getImageUrl(i)&&__imgDataCache[opts.getImageUrl(i)]?`<img src="${__imgDataCache[opts.getImageUrl(i)]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px">`:''}</td>` : '';
+      return `<tr>${cells}${imgCell}</tr>`;
+    }).join('')}
+  </table>`;
+}
+async function unifiedExportPdf(title, headers, rows, opts){
+  const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
+  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
+  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const el = document.createElement('div');
+  el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px;color:#0B1220">
+    <h1 style="text-align:center">${title}</h1>
+    <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')} — ${rows.length} سجل</p>
+    ${unifiedBuildTableHtml(finalHeaders, rows, opts)}
+  </div>`;
+  document.body.appendChild(el);
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  el.remove();
+  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pdf`);
+}
+async function unifiedExportWord(title, headers, rows, opts){
+  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
+  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+    <head><meta charset="utf-8"><style>body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:5px;font-size:10pt;} th{background:#0B1220;color:#fff;}</style></head>
+    <body><h1 style="text-align:center">${title}</h1><p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</body></html>`;
+  const blob = new Blob(['\ufeff', html], {type:'application/msword'});
+  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.doc`);
+}
+async function unifiedExportExcel(title, headers, rows, opts){
+  const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
+  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
+  const wb = new ExcelJS.Workbook();
+  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  const ws = wb.addWorksheet(title.slice(0,28), {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
+  ws.columns = finalHeaders.map(()=>({width:18}));
+  const hr = ws.getRow(1);
+  finalHeaders.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF12716A'}}; c.alignment={horizontal:'center'}; });
+  hr.height = 24;
+  rows.forEach((r,i)=>{
+    const rowIdx = i+2;
+    r.forEach((val,ci)=>{ ws.getCell(rowIdx, ci+1).value = val==null?'':val; });
+    if(opts?.getImageUrl){
+      ws.getRow(rowIdx).height = 60;
+      const url = opts.getImageUrl(i);
+      if(url && __imgDataCache[url]) addEmbeddedImage(wb, ws, __imgDataCache[url], headers.length, rowIdx-1, 75, 75);
+    }
+  });
+  const buf = await wb.xlsx.writeBuffer();
+  await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `${title}-${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+async function unifiedExportPptx(title, headers, rows, opts){
+  const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
+  const pptx = new PptxGenJS();
+  pptx.defineSlideMaster({ name:'MASTER', background:{color:'0B1220'} });
+  const cover = pptx.addSlide({masterName:'MASTER'});
+  cover.addText(title, {x:0.5,y:2.3,w:9,h:1,fontSize:26,bold:true,color:'38D9C9',align:'center'});
+  cover.addText(`${rows.length} سجل — ${new Date().toLocaleDateString('ar-EG')}`, {x:0.5,y:3.2,w:9,h:0.5,fontSize:13,color:'8CA0C4',align:'center'});
+  const chunkSize = 15;
+  for(let i=0;i<rows.length;i+=chunkSize){
+    const chunk = rows.slice(i,i+chunkSize).map(r=>r.map(c=>String(c==null?'':c)));
+    const sl = pptx.addSlide({masterName:'MASTER'});
+    sl.addText(title, {x:0.3,y:0.2,w:9.4,h:0.5,fontSize:16,bold:true,color:'38D9C9',align:'center'});
+    sl.addTable([headers, ...chunk], {x:0.3,y:0.8,w:9.4,fontSize:9,color:'E9EEFB',fill:{color:'182446'}, autoPage:false});
+  }
+  const blob = await pptx.write('blob');
+  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pptx`);
+}
+function unifiedExportCsv(title, headers, rows){
+  const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  const lines = ['\ufeff'+headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))];
+  const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8'});
+  saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.csv`);
+}
+function unifiedExportJson(title, rows, opts){
+  const data = opts?.rawObjects || rows;
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.json`);
+}
+async function unifiedExportImage(title, headers, rows, opts){
+  const W = 1000, rowH = 34, headH = 50, padTop = 90;
+  const H = padTop + headH + rows.length*rowH + 40;
+  const cv = document.createElement('canvas'); cv.width=W; cv.height=Math.max(H,300);
+  const ctx = cv.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,cv.height); grad.addColorStop(0,'#0B1220'); grad.addColorStop(1,'#0E1830');
+  ctx.fillStyle = grad; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.textAlign='center'; ctx.fillStyle='#38D9C9'; ctx.font='bold 22px Arial'; ctx.fillText(title, W/2, 40);
+  ctx.fillStyle='#8CA0C4'; ctx.font='12px Arial'; ctx.fillText(`${rows.length} سجل — ${new Date().toLocaleDateString('ar-EG')}`, W/2, 65);
+  const colW = W/headers.length;
+  ctx.fillStyle='#182446'; ctx.fillRect(20, padTop, W-40, headH);
+  ctx.font='bold 12px Arial'; ctx.fillStyle='#38D9C9';
+  headers.forEach((h,i)=> ctx.fillText(String(h), 20+colW*i+colW/2, padTop+headH/2+4));
+  rows.slice(0,40).forEach((r,ri)=>{
+    const y = padTop+headH+ri*rowH;
+    if(ri%2===1){ ctx.fillStyle='rgba(255,255,255,.04)'; ctx.fillRect(20,y,W-40,rowH); }
+    ctx.fillStyle='#E9EEFB'; ctx.font='11px Arial';
+    r.forEach((c,ci)=> ctx.fillText(String(c==null?'':c).slice(0,18), 20+colW*ci+colW/2, y+rowH/2+4));
+  });
+  cv.toBlob(blob=> saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.png`), 'image/png', 0.95);
+}
+async function unifiedExportZip(title, headers, rows, opts){
+  const ok = await ensureZipLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة ZIP'); return; }
+  const zip = new JSZip();
+  const folder = zip.folder(`${title}-${new Date().toISOString().slice(0,10)}`);
+  folder.file('البيانات.json', JSON.stringify(opts?.rawObjects||rows, null, 2));
+  const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  folder.file('البيانات.csv', '\ufeff'+[headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n'));
+  if(opts?.getImageUrl){ await urlsToDataUris(rows.map((_,i)=>opts.getImageUrl(i)).filter(Boolean)); }
+  const finalHeaders = opts?.getImageUrl ? [...headers,'صورة'] : headers;
+  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body><h1>${title}</h1>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</body></html>`);
+  if(await ensurePdfLib()){
+    const el = document.createElement('div');
+    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px"><h1 style="text-align:center">${title}</h1>${unifiedBuildTableHtml(finalHeaders, rows, opts)}</div>`;
+    document.body.appendChild(el);
+    const pdfBlob = await html2pdf().set({margin:8, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+    el.remove();
+    folder.file('التقرير.pdf', pdfBlob);
+  }
+  const blob = await zip.generateAsync({type:'blob'});
+  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.zip`);
+}
+
 function openNetworkReportPicker(){
   openModal(`
     <div class="modal-head"><h3>🗄️ تقرير البنية التحتية للشبكة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
@@ -8548,6 +8904,17 @@ async function generateFactoryPptxReport(factoryId){
     sl.addText('البنية التحتية للشبكة', {x:0.4,y:0.3,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
     sl.addTable([['Switch','Ports','مستخدمة'], ...switches.slice(0,12).map(sw=>[sw.switch_name,String(sw.total_ports||0),String(sw.used_ports||0)])], {x:0.5,y:1,w:9,fontSize:11,color:'E9EEFB',fill:{color:'182446'}});
   }
+  try{
+    const imgLayouts = (d.layouts||[]).filter(l=>l.file_type==='image');
+    for(const l of imgLayouts){
+      const dataUri = await composeLayoutImageWithMarkers(l, d).catch(()=>null);
+      if(dataUri){
+        const sl = pptx.addSlide({masterName:'MASTER'});
+        sl.addText(`🗺️ ${l.layout_name}`, {x:0.4,y:0.2,w:9,h:0.5,fontSize:18,bold:true,color:'38D9C9',align:'center'});
+        sl.addImage({ data: dataUri, x:0.7, y:0.8, w:8.6, h:5, sizing:{type:'contain', w:8.6, h:5} });
+      }
+    }
+  }catch(e){ console.warn('تعذّر تضمين الخريطة التفاعلية في PowerPoint', e); }
   const blob = await pptx.write('blob');
   await saveOrShareFile(blob, `تقرير-شامل-${f?f.name:''}-${new Date().toISOString().slice(0,10)}.pptx`);
   await logAudit('إنشاء تقرير مصنع شامل (PowerPoint)', f?f.name:factoryId);
@@ -9432,7 +9799,7 @@ async function loadOnCallCard(){
   try{
     const {data, error} = await supa.from('oncall_schedule').select('*').eq('duty_date', today).limit(1).single();
     if(error) throw error;
-    host.innerHTML = `<div class="site-card" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(150deg,#16233F,#0F1A30);margin-top:12px">
+    host.innerHTML = `<div class="site-card" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(150deg,var(--panel-2),var(--panel));margin-top:12px">
       <div><div style="font-size:10.5px;color:var(--muted)">👤 المناوب اليوم</div><div style="font-weight:800;font-family:'Tajawal';font-size:15px;color:var(--accent)">${data.display_name}</div>${data.notes?`<div style="font-size:10.5px;color:var(--muted-2)">${data.notes}</div>`:''}</div>
       ${isAdmin()?`<button class="btn sm" onclick="openOnCallManager()">📅 إدارة</button>`:''}
     </div>`;
