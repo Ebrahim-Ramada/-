@@ -174,6 +174,9 @@ tbody td:first-child{text-align:right;font-weight:700;}
       <button id="backBtn" class="topbtn" onclick="goBack()" title="رجوع" style="display:none">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
       </button>
+      <button id="forwardBtn" class="topbtn" onclick="goForward()" title="عودة" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
       <div class="brand">
         <div class="brand-mark"><div class="dot online" id="connDot"></div>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="11" r="6.2" stroke="#38D9C9" stroke-width="1.8"/><circle cx="12" cy="11" r="1.8" fill="#38D9C9"/><rect x="9" y="18.5" width="6" height="1.8" rx="0.9" fill="#38D9C9"/></svg>
@@ -743,14 +746,18 @@ function enterApp(){
   document.getElementById('appShell').style.display = 'block';
   const roleLabels = { admin:'👑 Admin', manager:'مدير', supervisor:'مشرف', colleague:'زميل' };
   document.getElementById('userBadge').innerHTML = `${currentProfile.display_name} · <span class="pill ${isAdmin()?'role-admin':''}" style="padding:1px 7px;font-size:9.5px">${roleLabels[currentProfile.role]||currentProfile.role}</span>`;
-  document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view==='dashboard'));
+  const lastLocation = loadLastLocation();
+  currentView = lastLocation ? lastLocation.view : 'dashboard';
+  currentViewCtx = lastLocation ? lastLocation.ctx : null;
+  navStack = [{view:currentView, ctx:currentViewCtx}]; navIndex = 0;
+  document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view===currentView));
   const reportNavBtn = document.querySelector('.navbtn[data-view="report"]');
   if(reportNavBtn) reportNavBtn.style.display = hasPerm('view_report') ? 'flex' : 'none';
-  currentView = 'dashboard';
   updateQuickLockBtn();
-  try{ history.replaceState({rcView:'dashboard'}, '', '#dashboard'); }catch(e){}
+  try{ history.replaceState({rcView:currentView, rcCtx:currentViewCtx}, '', '#'+currentView); }catch(e){}
   if(isAppLocked()){ showLockScreen(); }
   else { resetIdleTimer(); }
+  renderCurrentView();
   loadAllData();
 }
 
@@ -1040,6 +1047,25 @@ function computeTotals(list){
 function fmtPct2(v){ return v.toFixed(2)+'%'; }
 
 /* ============================================================
+   مزامنة تلقائية: أي إضافة/حذف/تغيير حالة لكاميرا فردية
+   يعدّل تلقائيًا الرقم الإجمالي اليدوي (cameras_total/cameras_down)
+   الظاهر في كارت المصنع بالرئيسية — بدون تدخل يدوي من المستخدم
+   ============================================================ */
+async function syncFactoryCameraCounts(factoryId, deltaTotal, deltaDown){
+  if(!deltaTotal && !deltaDown) return;
+  try{
+    const f = factoriesData.find(x=>x.id===factoryId);
+    const curTotal = f ? (f.cameras_total||0) : 0;
+    const curDown = f ? (f.cameras_down||0) : 0;
+    const newTotal = Math.max(0, curTotal + (deltaTotal||0));
+    const newDown = Math.max(0, Math.min(newTotal, curDown + (deltaDown||0)));
+    const {error} = await supa.from('factories').update({cameras_total:newTotal, cameras_down:newDown}).eq('id', factoryId);
+    if(error) throw error;
+    if(f){ f.cameras_total = newTotal; f.cameras_down = newDown; }
+  }catch(e){ console.warn('تعذّرت مزامنة عدد الكاميرات الإجمالي للمصنع', e); }
+}
+
+/* ============================================================
    سجل التدقيق: تسجيل أي عملية إدارية (Admin فقط ينفّذ عمليات الكتابة)
    ============================================================ */
 async function logAudit(action, details, oldValue, newValue){
@@ -1060,35 +1086,77 @@ async function logAudit(action, details, oldValue, newValue){
 let currentView = 'dashboard';
 let currentViewCtx = null; // معرّف المصنع عند الدخول لشاشات الكاميرات/الشاشات
 document.querySelectorAll('.navbtn').forEach(btn=> btn.addEventListener('click', ()=> goTo(btn.dataset.view)));
-let navHistory = ['dashboard'];
-let isNavigatingBack = false;
+
+/* ============================================================
+   نظام التنقل الكامل (Navigation History) — رجوع/عودة زي المتصفح
+   بيحفظ الشاشة + المصنع/السياق معًا، وبيحفظ آخر مكان بشكل دائم
+   ============================================================ */
+let navStack = [{view:'dashboard', ctx:null}];
+let navIndex = 0;
+let __isNavigatingHistory = false;
 function goTo(view, ctx){
   currentView = view;
   currentViewCtx = ctx || null;
-  if(!isNavigatingBack){
-    if(navHistory[navHistory.length-1] !== view){
-      navHistory.push(view);
-      try{ history.pushState({rcView:view}, '', '#'+view); }catch(e){}
+  if(!__isNavigatingHistory){
+    const last = navStack[navIndex];
+    if(!last || last.view!==view || last.ctx!==currentViewCtx){
+      // أي تنقل جديد بعد استخدام "رجوع" يمسح فرع "العودة" القديم — زي سلوك المتصفح بالظبط
+      navStack = navStack.slice(0, navIndex+1);
+      navStack.push({view, ctx:currentViewCtx});
+      navIndex = navStack.length-1;
+      try{ history.pushState({rcView:view, rcCtx:currentViewCtx}, '', '#'+view); }catch(e){}
     }
   }
-  isNavigatingBack = false;
+  __isNavigatingHistory = false;
+  saveLastLocation();
   document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view===view));
   updateBackBtn();
   renderCurrentView();
   window.scrollTo({top:0, behavior:'smooth'});
 }
 function updateBackBtn(){
-  const btn = document.getElementById('backBtn');
-  if(btn) btn.style.display = navHistory.length>1 ? 'flex' : 'none';
+  const back = document.getElementById('backBtn'), fwd = document.getElementById('forwardBtn');
+  if(back) back.style.display = navIndex>0 ? 'flex' : 'none';
+  if(fwd) fwd.style.display = navIndex < navStack.length-1 ? 'flex' : 'none';
 }
 function goBack(){
-  if(navHistory.length<=1) return;
-  try{ history.back(); }
-  catch(e){ navHistory.pop(); isNavigatingBack=true; goTo(navHistory[navHistory.length-1]); }
+  if(navIndex<=0) return;
+  navIndex--;
+  const entry = navStack[navIndex];
+  __isNavigatingHistory = true;
+  try{ history.back(); }catch(e){ goTo(entry.view, entry.ctx); }
 }
-window.addEventListener('popstate', ()=>{
-  if(navHistory.length>1){ navHistory.pop(); isNavigatingBack=true; goTo(navHistory[navHistory.length-1]); }
+function goForward(){
+  if(navIndex>=navStack.length-1) return;
+  navIndex++;
+  const entry = navStack[navIndex];
+  __isNavigatingHistory = true;
+  try{ history.forward(); }catch(e){ goTo(entry.view, entry.ctx); }
+}
+window.addEventListener('popstate', (e)=>{
+  // المستخدم دوس زرار رجوع/تقديم الجهاز أو المتصفح نفسه — نزامن مع سجلنا الداخلي
+  if(e.state && e.state.rcView){
+    const idx = navStack.findIndex(n=> n.view===e.state.rcView && n.ctx===e.state.rcCtx);
+    if(idx>=0) navIndex = idx;
+  } else if(navIndex>0){ navIndex--; }
+  const entry = navStack[navIndex] || navStack[0];
+  __isNavigatingHistory = true;
+  goTo(entry.view, entry.ctx);
 });
+function saveLastLocation(){
+  try{ localStorage.setItem('rc_last_location', JSON.stringify({view:currentView, ctx:currentViewCtx})); }catch(e){}
+}
+function loadLastLocation(){
+  try{
+    const raw = localStorage.getItem('rc_last_location');
+    if(!raw) return null;
+    const parsed = JSON.parse(raw);
+    // بعض الشاشات لازم دايمًا تبدأ من الرئيسية (لا معنى لاستعادتها منفردة)
+    const skipViews = ['login'];
+    if(!parsed || !parsed.view || skipViews.includes(parsed.view)) return null;
+    return parsed;
+  }catch(e){ return null; }
+}
 function renderCurrentView(){
   const host = document.getElementById('viewsHost');
   if(currentView==='dashboard') { host.innerHTML = renderDashboard(); loadOnCallCard(); renderLatestHandoverWidget(); }
@@ -3834,6 +3902,17 @@ async function saveCameraForm(factoryId, camId){
       if(!error) toast('⚠️ تم الحفظ الأساسي، لكن يُنصَح بتشغيل schema_part20.sql لحفظ باقي التفاصيل الفنية');
     }
     if(error) throw error;
+    if(camId){
+      // تعديل كاميرا موجودة: عدّل عدد المنقطعة فقط لو الحالة اتغيّرت (تعمل↔غير تعمل)
+      const old = camerasData.find(x=>x.id===camId);
+      if(old){
+        const wasDown = old.status!=='تعمل', isDown = newStatus!=='تعمل';
+        if(wasDown!==isDown) await syncFactoryCameraCounts(factoryId, 0, isDown?1:-1);
+      }
+    } else {
+      // كاميرا جديدة: زد الإجمالي دايمًا، وزد المنقطعة كمان لو الحالة المبدئية مش "تعمل"
+      await syncFactoryCameraCounts(factoryId, 1, newStatus!=='تعمل' ? 1 : 0);
+    }
     await logAudit(camId?'تعديل كاميرا':'إضافة كاميرا', camId?`${name} — الحالة: ${newStatus}`:name);
     closeModal(); toast('✅ تم الحفظ'); loadCameras(factoryId); loadFactories();
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
@@ -3848,6 +3927,8 @@ async function quickUpdateCameraStatus(camId, newStatus){
     if(newStatus==='تعمل' && old.status==='عطل') payload.repair_date = new Date().toISOString();
     const {error} = await supa.from('cameras').update(payload).eq('id', camId);
     if(error) throw error;
+    const wasDown = old.status!=='تعمل', isDown = newStatus!=='تعمل';
+    if(wasDown!==isDown) await syncFactoryCameraCounts(old.factory_id, 0, isDown?1:-1);
     await logAudit('تغيير حالة كاميرا', old.camera_name, old.status, newStatus);
     toast('✅ تم التحديث'); loadCameras(old.factory_id); loadFactories();
   }catch(e){ toast('🚫 تعذّر التحديث'); }
@@ -3869,6 +3950,7 @@ async function confirmDeleteCamera(camId, factoryId){
   try{
     const c = camerasData.find(x=>x.id===camId);
     await supa.from('cameras').delete().eq('id', camId);
+    await syncFactoryCameraCounts(factoryId, -1, (c && c.status!=='تعمل') ? -1 : 0);
     await logAudit('حذف كاميرا', c?c.camera_name:camId);
     closeModal(); toast('تم الحذف'); loadCameras(factoryId); loadFactories();
   }catch(e){ toast('🚫 تعذّر الحذف'); }
