@@ -8313,11 +8313,19 @@ function unifiedBuildTableHtml(headers, rows, opts){
   return `<table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
     <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}${hasImgs?'<th>الصور</th>':''}</tr>
     ${rows.map((r,i)=>{
-      const cells = r.map(c=>`<td>${c==null?'':c}</td>`).join('');
+      const cells = r.map(c=>{
+        const val = c==null?'':c;
+        const sc = detectStatusColor(val);
+        return `<td${sc?` style="color:#${sc};font-weight:bold"`:''}>${val}</td>`;
+      }).join('');
       let imgCell = '';
       if(hasImgs){
         const imgs = unifiedRowImages(opts,i);
-        imgCell = `<td>${imgs.map(im=> __imgDataCache[im.url] ? `<div style="display:inline-block;text-align:center;margin:2px"><img src="${__imgDataCache[im.url]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px;display:block"><span style="font-size:8px">${im.label}</span></div>` : (im.pending ? '<span style="font-size:9px;color:#c00">⚠️ تعذّر تحميل الصورة</span>' : '')).join('')}</td>`;
+        if(!imgs.length){
+          imgCell = `<td style="color:#999;font-style:italic;font-size:9.5px">لا توجد صورة مسجلة</td>`;
+        } else {
+          imgCell = `<td>${imgs.map(im=> __imgDataCache[im.url] ? `<div style="display:inline-block;text-align:center;margin:2px"><img src="${__imgDataCache[im.url]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px;display:block"><span style="font-size:8px">${im.label}</span></div>` : `<span style="font-size:9px;color:#c00">⚠️ تعذّر تحميل الصورة</span>`).join('')}</td>`;
+        }
       }
       return `<tr>${cells}${imgCell}</tr>`;
     }).join('')}
@@ -8374,6 +8382,17 @@ async function unifiedExportExcel(title, headers, rows, opts){
   const buf = await wb.xlsx.writeBuffer();
   await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `${title}-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
+const STATUS_COLOR_MAP = [
+  [/^(تعمل|يعمل|تم الإصلاح|تم التعديل|مغلق|تمت المتابعة|تم التنفيذ)$/, '4ADE80'],
+  [/^(عطل|منقطع|لا تعمل|خارج الخدمة|مفتوح)$/, 'FF6B6B'],
+  [/(يحتاج متابعة|تحتاج|قيد التنفيذ|قيد الانتظار|جاري)/, 'F5A623'],
+  [/^(عالية|عاجلة)$/, 'FF9F5A'],
+];
+function detectStatusColor(val){
+  const s = String(val||'').trim();
+  for(const [re,color] of STATUS_COLOR_MAP) if(re.test(s)) return color;
+  return null;
+}
 async function unifiedExportPptx(title, headers, rows, opts){
   const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
   const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
@@ -8382,35 +8401,61 @@ async function unifiedExportPptx(title, headers, rows, opts){
   const pptx = new PptxGenJS();
   pptx.defineSlideMaster({ title:'MASTER', background:{color:'0B1220'} });
   const cover = pptx.addSlide({masterName:'MASTER'});
-  cover.addText(title, {x:0.5,y:2.3,w:9,h:1,fontSize:26,bold:true,color:'38D9C9',align:'center'});
+  cover.addShape('rect', {x:0,y:0,w:10,h:0.12,fill:{color:'38D9C9'}});
+  cover.addText(title, {x:0.5,y:2.3,w:9,h:1,fontSize:28,bold:true,color:'38D9C9',align:'center'});
   cover.addText(`${rows.length} سجل${allUrls.length?' — '+allUrls.length+' صورة':''} — ${new Date().toLocaleDateString('ar-EG')}`, {x:0.5,y:3.2,w:9,h:0.5,fontSize:13,color:'8CA0C4',align:'center'});
-  const chunkSize = hasImgs ? 8 : 15; // شرائح أقل كثافة لو فيها صور، عشان تفضل واضحة
-  for(let i=0;i<rows.length;i+=chunkSize){
-    const chunkRows = rows.slice(i,i+chunkSize);
-    const chunk = chunkRows.map(r=>r.map(c=>String(c==null?'':c)));
-    const sl = pptx.addSlide({masterName:'MASTER'});
-    sl.addText(title, {x:0.3,y:0.2,w:9.4,h:0.5,fontSize:16,bold:true,color:'38D9C9',align:'center'});
-    sl.addTable([headers, ...chunk], {x:0.3,y:0.8,w:9.4,fontSize:9,color:'E9EEFB',fill:{color:'182446'}, autoPage:false});
-    if(hasImgs){
-      // شريحة صور منفصلة لكل مجموعة سجلات، عشان الصور تفضل واضحة وميتقصّش مكانها
-      const imgList = [];
-      chunkRows.forEach((_,ci)=> unifiedRowImages(opts, i+ci).forEach(im=> imgList.push({rowLabel:String(chunkRows[ci][0]||''), ...im})));
-      const validImgs = imgList.filter(im=> __imgDataCache[im.url]);
-      if(validImgs.length){
-        for(let g=0; g<validImgs.length; g+=6){
-          const group = validImgs.slice(g,g+6);
-          const imgSlide = pptx.addSlide({masterName:'MASTER'});
-          imgSlide.addText(`صور: ${title}`, {x:0.3,y:0.15,w:9.4,h:0.4,fontSize:14,bold:true,color:'38D9C9',align:'center'});
-          group.forEach((im,k)=>{
-            const col = k%3, row = Math.floor(k/3);
-            const x = 0.4+col*3.1, y = 0.7+row*2.3;
-            imgSlide.addImage({ data: __imgDataCache[im.url], x, y, w:2.9, h:1.8, sizing:{type:'contain', w:2.9, h:1.8} });
-            imgSlide.addText(`${im.rowLabel} — ${im.label}`, {x, y:y+1.85, w:2.9, h:0.3, fontSize:8, color:'8CA0C4', align:'center'});
+  cover.addText('إعداد وتشغيل النظام: إبراهيم رمضان', {x:0.5,y:5.2,w:9,h:0.4,fontSize:10,color:'5E6E92',align:'center'});
+
+  if(!hasImgs){
+    // مفيش صور في القسم ده أصلًا — جدول مباشر بدون داعٍ لبطاقات منفصلة
+    const chunkSize = 15;
+    for(let i=0;i<rows.length;i+=chunkSize){
+      const chunk = rows.slice(i,i+chunkSize).map(r=>r.map(c=>String(c==null?'':c)));
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText(title, {x:0.3,y:0.2,w:9.4,h:0.5,fontSize:16,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([headers, ...chunk], {x:0.3,y:0.8,w:9.4,fontSize:9,color:'E9EEFB',fill:{color:'182446'}, autoPage:false});
+    }
+  } else {
+    // كل سجل = بطاقة واحدة متكاملة: بياناته + صوره مع بعض في نفس الشريحة (2 سجل كحد أقصى لكل شريحة لو الصور موجودة)
+    for(let i=0;i<rows.length;i+=2){
+      const pair = rows.slice(i, i+2);
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText(title, {x:0.3,y:0.15,w:9.4,h:0.4,fontSize:14,bold:true,color:'38D9C9',align:'center'});
+      pair.forEach((r, pIdx)=>{
+        const rowIndex = i+pIdx;
+        const cardY = 0.65 + pIdx*2.55;
+        // بطاقة السجل (خلفية مميّزة لتجميع البيانات والصورة بصريًا كوحدة واحدة)
+        sl.addShape('roundRect', {x:0.3, y:cardY, w:9.4, h:2.35, fill:{color:'131B2E'}, line:{color:'243055', width:1}});
+        // عمود البيانات (يمين الشريحة لواجهة RTL)
+        const fieldsText = headers.map((h,ci)=> ({ text:`${h}: `, options:{bold:true, color:'38D9C9', fontSize:10} , text2: String(r[ci]==null?'—':r[ci]) })) ;
+        let ty = cardY+0.15;
+        headers.forEach((h,ci)=>{
+          const val = r[ci]==null?'—':String(r[ci]);
+          const statusColor = detectStatusColor(val);
+          sl.addText([
+            {text:`${h}: `, options:{bold:true, color:'8CA0C4', fontSize:10.5}},
+            {text:val, options:{color: statusColor?statusColor:'E9EEFB', bold:!!statusColor, fontSize:10.5}}
+          ], {x:4.7, y:ty, w:4.8, h:0.32});
+          ty += 0.32;
+          if(ty > cardY+2.1) return; // حماية من تجاوز حدود البطاقة لو الحقول كتير
+        });
+        // صورة/صور نفس السجل بالظبط — جوّه نفس البطاقة، مش في مكان منفصل
+        const imgs = unifiedRowImages(opts, rowIndex).filter(im=> __imgDataCache[im.url]);
+        if(imgs.length){
+          const imgW = imgs.length>1 ? 1.9 : 3.9, imgH = 2.0;
+          imgs.slice(0,2).forEach((im,k)=>{
+            sl.addImage({ data: __imgDataCache[im.url], x:0.45+k*(imgW+0.1), y:cardY+0.18, w:imgW, h:imgH, sizing:{type:'contain', w:imgW, h:imgH} });
+            sl.addText(im.label, {x:0.45+k*(imgW+0.1), y:cardY+imgH+0.18, w:imgW, h:0.25, fontSize:8, color:'8CA0C4', align:'center'});
           });
+        } else {
+          sl.addShape('roundRect', {x:0.45, y:cardY+0.4, w:3.9, h:1.5, fill:{color:'0E1830'}, line:{color:'243055', width:1, dashType:'dash'}});
+          sl.addText('لا توجد صورة مسجلة', {x:0.45, y:cardY+0.4, w:3.9, h:1.5, fontSize:11, color:'5E6E92', align:'center', valign:'middle'});
         }
-      }
+      });
     }
   }
+  const closing = pptx.addSlide({masterName:'MASTER'});
+  closing.addText('تم إعداد هذا التقرير تلقائيًا من نظام غرفة المراقبة المركزية', {x:0.5,y:3.2,w:9,h:0.6,fontSize:16,color:'E9EEFB',align:'center'});
   const blob = await pptx.write('blob');
   if(!blob || blob.size < 1000){ toast('🚫 فشل إنشاء ملف PowerPoint (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pptx`);
