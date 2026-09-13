@@ -6138,7 +6138,8 @@ async function loadLayouts(factoryId){
       ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">🧩 العناصر التفاعلية على الخريطة</button>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
         ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
-        ${l.original_file_url? `<button class="btn sm" onclick="restoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
+        ${l.original_file_url? `<button class="btn sm" onclick="confirmRestoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
+        ${l.pre_restore_file_url? `<button class="btn sm" style="background:var(--success);color:#fff" onclick="undoRestoreOriginal('${l.id}')">↩️ تراجع عن آخر استعادة</button>`:''}
         <button class="btn sm danger" onclick="deleteLayout('${l.id}','${l.factory_id}')">🗑 حذف</button>
       </div>`:''}
     </div>`).join('')}</div>`;
@@ -6627,15 +6628,51 @@ async function deleteLayout(id, factoryId){
     toast('✅ تم الحذف'); loadLayouts(fid);
   }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
+function confirmRestoreOriginalLayout(id){
+  const l = layoutsData.find(x=>x.id===id);
+  if(!l || !l.original_file_url) return;
+  openModal(`<div class="modal-head"><h3>⚠️ تأكيد استعادة الأصل</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">هيتم استبدال النسخة المُعدَّلة الحالية (بكل الأسهم والعلامات اللي فوقها) بالصورة الأصلية قبل أي تعديل.</p>
+    <p style="font-size:11.5px;color:var(--success);margin-top:8px">💡 لو دوست بالغلط، هيظهرلك زرار "تراجع عن الاستعادة" فورًا بعدها تقدر تلغي القرار وترجّع تعديلك زي ما كان.</p>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn danger sm" onclick="restoreOriginalLayout('${id}')">نعم، استعادة الأصل</button>
+      <button class="btn sm" onclick="closeModal()">إلغاء</button>
+    </div>`);
+}
 async function restoreOriginalLayout(id){
   const l = layoutsData.find(x=>x.id===id);
   if(!l || !l.original_file_url) return;
   try{
-    const {error} = await supa.from('factory_layouts').update({file_url: l.original_file_url}).eq('id', id);
+    // نحفظ النسخة الحالية (المُعدَّلة) كنسخة احتياطية مؤقتة قبل الاستبدال — عشان لو دوس بالغلط يقدر يتراجع
+    const backupPayload = { file_url: l.original_file_url, pre_restore_file_url: l.file_url, pre_restore_edit_state: l.edit_state||null };
+    let {error} = await supa.from('factory_layouts').update(backupPayload).eq('id', id);
+    if(error && /column|schema cache/i.test(error.message||'')){
+      ({error} = await supa.from('factory_layouts').update({file_url: l.original_file_url}).eq('id', id));
+    }
     if(error) throw error;
     await logAudit('استعادة الخريطة الأصلية', l.layout_name);
-    toast('✅ تم استعادة النسخة الأصلية'); loadLayouts(l.factory_id);
+    closeModal();
+    openModal(`<div class="modal-head"><h3>✅ تم استعادة الأصل</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <p style="font-size:13px;color:var(--muted)">تم استبدال الخريطة بالنسخة الأصلية بنجاح.</p>
+      <button class="btn primary block" style="margin-top:10px" onclick="undoRestoreOriginal('${id}')">↩️ تراجع عن الاستعادة (استرجاع تعديلي)</button>
+      <button class="btn block" style="margin-top:8px" onclick="closeModal()">تمام، إغلاق</button>`);
+    loadLayouts(l.factory_id);
   }catch(e){ console.error(e); toast('🚫 تعذّر الاستعادة: '+(e.message||'')); }
+}
+async function undoRestoreOriginal(id){
+  try{
+    const {data: fresh, error: readErr} = await supa.from('factory_layouts').select('*').eq('id', id).single();
+    if(readErr) throw readErr;
+    if(!fresh || !fresh.pre_restore_file_url){ toast('🚫 لا توجد نسخة محفوظة للتراجع إليها'); closeModal(); return; }
+    const {error} = await supa.from('factory_layouts').update({
+      file_url: fresh.pre_restore_file_url, edit_state: fresh.pre_restore_edit_state,
+      pre_restore_file_url: null, pre_restore_edit_state: null
+    }).eq('id', id);
+    if(error) throw error;
+    await logAudit('تراجع عن استعادة الأصل', fresh.layout_name);
+    toast('✅ تم التراجع — رجع تعديلك زي ما كان');
+    closeModal(); loadLayouts(fresh.factory_id);
+  }catch(e){ console.error(e); toast('🚫 تعذّر التراجع: '+(e.message||'')); }
 }
 
 /* ============================================================
@@ -6945,7 +6982,8 @@ function getCanvasPos(canvas, evt){
   return { x:(p.clientX-rect.left)*(canvas.width/rect.width), y:(p.clientY-rect.top)*(canvas.height/rect.height) };
 }
 function attachLayoutCanvasEvents(canvas){
-  let dragging=false, start=null, dragOffset=null, mode=null; // mode: 'move' | 'resize' | 'rotate'
+  let dragging=false, start=null, dragOffset=null, mode=null, panStart=null; // mode: 'move' | 'resize' | 'rotate' | 'pan'
+  function getClientXY(evt){ const p = evt.touches ? evt.touches[0] : evt; return {x:p.clientX, y:p.clientY}; }
   function down(evt){
     evt.preventDefault();
     const pos = getCanvasPos(canvas, evt);
@@ -6964,6 +7002,11 @@ function attachLayoutCanvasEvents(canvas){
       for(let i=layoutEditor.elements.length-1;i>=0;i--){ if(pointInBBox(pos.x,pos.y,layoutElementBBox(layoutEditor.elements[i]))){ found=i; break; } }
       layoutEditor.selectedIndex = found;
       if(found>=0){ dragging=true; mode='move'; dragOffset=pos; pushLayoutHistory(); }
+      else {
+        // دوسة على مكان فاضي (مفيش عنصر تحتها) — نحرّك الخريطة كلها (Pan) بدل ما نعمل حاجة
+        dragging=true; mode='pan';
+        panStart = { ...getClientXY(evt), panX:layoutEditor.panX, panY:layoutEditor.panY };
+      }
       redrawLayoutCanvas();
       return;
     }
@@ -6984,6 +7027,13 @@ function attachLayoutCanvasEvents(canvas){
   function move(evt){
     if(!dragging) return;
     evt.preventDefault();
+    if(mode==='pan'){
+      const c = getClientXY(evt);
+      layoutEditor.panX = panStart.panX + (c.x - panStart.x);
+      layoutEditor.panY = panStart.panY + (c.y - panStart.y);
+      applyLayoutEditorTransform();
+      return;
+    }
     const pos = getCanvasPos(canvas, evt);
     const tool = layoutEditor.tool;
     if(tool==='select' && layoutEditor.selectedIndex>=0){
