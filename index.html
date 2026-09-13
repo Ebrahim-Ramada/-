@@ -6392,7 +6392,7 @@ function openLayoutEditor(layoutId){
   if(!l || l.file_type!=='image'){ toast('التعديل متاح فقط على الخرائط المصوَّرة'); return; }
   let restoredElements = [];
   try{ if(l.edit_state) restoredElements = typeof l.edit_state==='string' ? JSON.parse(l.edit_state) : l.edit_state; }catch(e){ restoredElements = []; }
-  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1 };
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1, hadElementsOnOpen: restoredElements.length>0 };
   // الرسم دائمًا فوق الخلفية الأصلية الحقيقية (وليس فوق آخر صورة مُصدَّرة) — يمنع تراكم الجودة السيئة
   // ويضمن إن العناصر المستعادة تتوضع بشكل صحيح فوق نفس الخلفية اللي اتحفظت بالنسبة ليها
   const bgUrl = l.original_file_url || l.file_url;
@@ -6405,6 +6405,9 @@ function openLayoutEditor(layoutId){
       <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
+      <button class="btn sm" onclick="addLayoutDeviceIcon('camera')">📷 كاميرا</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('rack')">🗄️ Rack</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('switch')">🔀 Switch</button>
       <label class="btn sm" style="cursor:pointer">📷 صورة كاميرا<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'كاميرا')"></label>
       <label class="btn sm" style="cursor:pointer">🗄️ صورة Rack<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Rack')"></label>
       <label class="btn sm" style="cursor:pointer">🔀 صورة Switch<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Switch')"></label>
@@ -6527,6 +6530,36 @@ function layoutElementBBox(el){
 }
 function pointInBBox(x,y,box){ return x>=box.x && x<=box.x+box.w && y>=box.y && y<=box.y+box.h; }
 function pointNearHandle(x,y,hx,hy){ return Math.hypot(x-hx,y-hy) <= 14; }
+// أيقونات جاهزة مرسومة برمجيًا لكل نوع جهاز (SVG مضمَّن) — بدون فتح معرض الصور إطلاقًا
+const LAYOUT_DEVICE_ICONS = {
+  camera: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="30" width="80" height="50" rx="8" fill="#182446" stroke="#38D9C9" stroke-width="4"/><rect x="35" y="15" width="30" height="20" rx="4" fill="#182446" stroke="#38D9C9" stroke-width="4"/><circle cx="50" cy="55" r="18" fill="#0B1220" stroke="#38D9C9" stroke-width="4"/><circle cx="50" cy="55" r="9" fill="#38D9C9"/><circle cx="75" cy="40" r="4" fill="#FF6B6B"/></svg>`,
+  rack: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="8" width="70" height="84" rx="4" fill="#182446" stroke="#38D9C9" stroke-width="4"/>${[18,34,50,66,82].map(y=>`<rect x="22" y="${y}" width="56" height="10" rx="2" fill="#0B1220" stroke="#38D9C9" stroke-width="2"/><circle cx="70" cy="${y+5}" r="2" fill="#4ADE80"/>`).join('')}</svg>`,
+  switch: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><rect x="5" y="10" width="90" height="40" rx="6" fill="#182446" stroke="#38D9C9" stroke-width="4"/>${Array.from({length:8},(_,i)=>`<rect x="${12+i*10}" y="20" width="6" height="20" rx="1" fill="#0B1220" stroke="#38D9C9" stroke-width="1.5"/>`).join('')}</svg>`
+};
+const LAYOUT_DEVICE_LABELS = { camera:'كاميرا', rack:'Rack', switch:'Switch' };
+function addLayoutDeviceIcon(deviceType){
+  const svg = LAYOUT_DEVICE_ICONS[deviceType];
+  const dataUri = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+  const img = new Image();
+  img.onload = ()=>{
+    const canvas = document.getElementById('layoutEditCanvas');
+    const isWide = deviceType==='switch';
+    const defaultW = 90, defaultH = isWide ? 54 : 90;
+    pushLayoutHistory();
+    layoutEditor.elements.push({
+      type:'image', src:dataUri, img, label:LAYOUT_DEVICE_LABELS[deviceType], deviceType,
+      x: canvas.width/2 - defaultW/2, y: canvas.height/2 - defaultH/2,
+      w: defaultW, h: defaultH, rotation: 0, color:'#38D9C9'
+    });
+    layoutEditor.selectedIndex = layoutEditor.elements.length-1;
+    layoutEditor.tool = 'select';
+    document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
+    const btn = document.getElementById('tool_select'); if(btn) btn.classList.add('primary');
+    redrawLayoutCanvas();
+    toast(`✅ تمت إضافة ${LAYOUT_DEVICE_LABELS[deviceType]} — اسحب المقابض حواليها للتحكم في الحجم والدوران`);
+  };
+  img.src = dataUri;
+}
 async function pickLayoutDeviceImage(inputEl, deviceLabel){
   const file = inputEl.files[0]; if(!file) return;
   try{
@@ -6699,6 +6732,11 @@ function downloadLayoutEditCanvas(layoutName){
 async function saveLayoutEdit(){
   const canvas = document.getElementById('layoutEditCanvas');
   if(!canvas){ toast('تعذّر الحفظ — الكانفاس غير موجود'); return; }
+  // حماية: لو الخريطة كان فيها عناصر محفوظة قبل كده وبقت فاضية دلوقتي، اتأكد إن ده مقصود فعلًا
+  if(layoutEditor.elements.length===0 && layoutEditor.hadElementsOnOpen){
+    const confirmed = confirm('الخريطة كانت فيها عناصر محفوظة قبل كده، ودلوقتي فاضية تمامًا. هل تقصد فعلًا حذف كل العناصر والحفظ فاضية؟');
+    if(!confirmed) return;
+  }
   const saveBtn = document.querySelector('button[onclick="saveLayoutEdit()"]');
   if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري الحفظ...'; }
   const statusHost = document.getElementById('layoutSaveStatus');
@@ -6732,10 +6770,32 @@ async function saveLayoutEdit(){
       stateSaved = false;
     }
     if(error){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل تحديث قاعدة البيانات:<br>${error.message||JSON.stringify(error)}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
-    await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر`);
+    // خطوة تحقق إلزامية: نقرا السجل من القاعدة تاني (مش من الذاكرة) ونتأكد إنه فعلًا اتحفظ
+    // صح، قبل ما نقول للمستخدم "تم بنجاح" — بدل ما نصدّق العملية بمجرد عدم وجود خطأ
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ جاري التحقق من الحفظ فعليًا (قراءة من القاعدة)...</p>`);
+    const expectedCount = layoutEditor.elements.length;
+    let verifyOk = false, verifiedCount = 0, verifyNote = '';
+    try{
+      const {data: fresh, error: readErr} = await supa.from('factory_layouts').select('file_url, edit_state').eq('id', layoutEditor.layoutId).single();
+      if(readErr) throw readErr;
+      if(!fresh || fresh.file_url !== pub.publicUrl){ verifyNote = 'رابط الصورة في القاعدة لا يطابق ما تم رفعه للتو'; }
+      else if(stateSaved){
+        const freshState = typeof fresh.edit_state==='string' ? JSON.parse(fresh.edit_state||'[]') : (fresh.edit_state||[]);
+        verifiedCount = freshState.length;
+        if(verifiedCount === expectedCount){ verifyOk = true; }
+        else { verifyNote = `عدد العناصر بعد القراءة (${verifiedCount}) لا يطابق ما تم إرساله (${expectedCount})`; }
+      } else { verifyOk = true; } // مفيش عمود edit_state أصلًا (وضع احتياطي) — الصورة بس هي المتاحة للتحقق
+    }catch(verifyErr){ verifyNote = 'فشلت قراءة التحقق: '+(verifyErr.message||JSON.stringify(verifyErr)); }
+    if(!verifyOk){
+      setStatus(`<p style="font-size:12px;color:var(--danger)">⚠️ الحفظ الأولي نجح، لكن التحقق الفعلي من القاعدة فشل:<br>${verifyNote}<br>الحالة القديمة الصحيحة لم تُستبدل احتياطًا. جرّب "💾 حفظ التعديل" تاني.</p>
+        <button class="btn sm block" style="margin-top:8px" onclick="saveLayoutEdit()">إعادة المحاولة</button>`);
+      if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; saveBtn.style.display=''; }
+      return;
+    }
+    await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر — تم التحقق من الحفظ`);
     // نحدّث نسخة الخريطة في الذاكرة فورًا (بدل انتظار إعادة تحميل كاملة) عشان تقدر تتأكد بعينك
     l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = layoutElementsForHistory();
-    setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ بنجاح فعليًا في قاعدة البيانات (${layoutEditor.elements.length} عنصر${stateSaved?', حالة قابلة للاستكمال محفوظة':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
+    setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ والتحقق الفعلي من القاعدة بنجاح (${verifiedCount||layoutEditor.elements.length} عنصر مؤكَّد من قاعدة البيانات نفسها${stateSaved?'':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
       <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
     if(saveBtn){ saveBtn.style.display='none'; }
   }catch(e){
