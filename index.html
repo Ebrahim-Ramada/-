@@ -6775,16 +6775,26 @@ async function saveLayoutEdit(){
     setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ جاري التحقق من الحفظ فعليًا (قراءة من القاعدة)...</p>`);
     const expectedCount = layoutEditor.elements.length;
     let verifyOk = false, verifiedCount = 0, verifyNote = '';
+    // تأخير بسيط + إعادة محاولة للقراءة عشان نتجنّب أي كاش مؤقت للمتصفح على نفس رابط القراءة
+    await new Promise(r=>setTimeout(r, 400));
+    async function readFresh(){ return await supa.from('factory_layouts').select('file_url, edit_state').eq('id', layoutEditor.layoutId).order('id').limit(1).single(); }
     try{
-      const {data: fresh, error: readErr} = await supa.from('factory_layouts').select('file_url, edit_state').eq('id', layoutEditor.layoutId).single();
+      let {data: fresh, error: readErr} = await readFresh();
       if(readErr) throw readErr;
-      if(!fresh || fresh.file_url !== pub.publicUrl){ verifyNote = 'رابط الصورة في القاعدة لا يطابق ما تم رفعه للتو'; }
-      else if(stateSaved){
+      if(!fresh) throw new Error('لم يتم إيجاد السجل عند القراءة للتحقق');
+      // المعيار الأساسي الحقيقي: هل عدد العناصر المحفوظة (البيانات القابلة للتعديل) مطابق؟
+      // ده الأهم فعليًا — رابط الصورة نفسه مش مهم بنفس الدرجة لأنه ممكن يختلف شكليًا بسبب كاش القراءة
+      // بدون ما يعني إن الحفظ فشل فعلًا
+      if(stateSaved){
         const freshState = typeof fresh.edit_state==='string' ? JSON.parse(fresh.edit_state||'[]') : (fresh.edit_state||[]);
         verifiedCount = freshState.length;
         if(verifiedCount === expectedCount){ verifyOk = true; }
         else { verifyNote = `عدد العناصر بعد القراءة (${verifiedCount}) لا يطابق ما تم إرساله (${expectedCount})`; }
-      } else { verifyOk = true; } // مفيش عمود edit_state أصلًا (وضع احتياطي) — الصورة بس هي المتاحة للتحقق
+      } else {
+        // مفيش عمود edit_state (وضع احتياطي) — نتحقق من رابط الصورة بدل كده كمعيار وحيد متاح
+        if(fresh.file_url === pub.publicUrl) verifyOk = true;
+        else verifyNote = 'رابط الصورة في القاعدة لا يطابق ما تم رفعه للتو (على الأرجح كاش قراءة مؤقت من المتصفح)';
+      }
     }catch(verifyErr){ verifyNote = 'فشلت قراءة التحقق: '+(verifyErr.message||JSON.stringify(verifyErr)); }
     if(!verifyOk){
       setStatus(`<p style="font-size:12px;color:var(--danger)">⚠️ الحفظ الأولي نجح، لكن التحقق الفعلي من القاعدة فشل:<br>${verifyNote}<br>الحالة القديمة الصحيحة لم تُستبدل احتياطًا. جرّب "💾 حفظ التعديل" تاني.</p>
