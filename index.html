@@ -6593,7 +6593,14 @@ function setLayoutTool(t){
   redrawLayoutCanvas();
 }
 function layoutElementsForHistory(){
-  return layoutEditor.elements.map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
+  const cleaned = layoutEditor.elements
+    .filter(el=> el != null) // إزالة أي فجوة/عنصر فارغ في المصفوفة (سبب محتمل لفقد البيانات)
+    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
+  // ضمان نهائي: نمرّر البيانات عبر JSON فعليًا (تسلسل ثم فك تسلسل) عشان نتأكد 100% إنها
+  // بيانات JSON نظيفة قابلة للتخزين فعلًا، وليست تحتوي على أي مرجع كائن غير قابل للتسلسل
+  // بصمت (زي عنصر DOM أو Circular Reference) كان ممكن يسبب فقد البيانات عند الحفظ الفعلي
+  try{ return JSON.parse(JSON.stringify(cleaned)); }
+  catch(e){ console.error('فشل تسلسل عناصر الخريطة إلى JSON:', e, cleaned); return cleaned; }
 }
 function reloadImageElementsAfterHistoryChange(){
   layoutEditor.elements.filter(el=>el.type==='image' && el.src && !el.img).forEach(el=>{
@@ -6759,8 +6766,17 @@ async function saveLayoutEdit(){
     setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ تم الرفع — جاري تحديث السجل...</p>`);
     const basePayload = { file_url: pub.publicUrl };
     if(!l.original_file_url) basePayload.original_file_url = l.file_url;
+    // تحقق فوري قبل الإرسال: نجهّز البيانات ونتأكد إن عددها صحيح قبل حتى محاولة الإرسال لقاعدة البيانات
+    const preparedElements = layoutElementsForHistory();
+    if(preparedElements.length !== layoutEditor.elements.length){
+      setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 خطأ داخلي أثناء تجهيز البيانات: العدد بعد التجهيز (${preparedElements.length}) لا يطابق العدد الأصلي (${layoutEditor.elements.length}) — تم إيقاف الحفظ لمنع فقد البيانات. جرّب تحفظ تاني، ولو المشكلة استمرت أرسل هذه الرسالة.</p>
+        <button class="btn sm block" style="margin-top:8px" onclick="saveLayoutEdit()">إعادة المحاولة</button>`);
+      if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; saveBtn.style.display=''; }
+      return;
+    }
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ تم تجهيز ${preparedElements.length} عنصر بنجاح (حجم البيانات: ${JSON.stringify(preparedElements).length} حرف) — جاري الإرسال...</p>`);
     async function trySave(withState){
-      const payload = withState ? {...basePayload, edit_state: layoutElementsForHistory()} : basePayload;
+      const payload = withState ? {...basePayload, edit_state: preparedElements} : basePayload;
       return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
     }
     let {error} = await trySave(true);
@@ -6804,7 +6820,7 @@ async function saveLayoutEdit(){
     }
     await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر — تم التحقق من الحفظ`);
     // نحدّث نسخة الخريطة في الذاكرة فورًا (بدل انتظار إعادة تحميل كاملة) عشان تقدر تتأكد بعينك
-    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = layoutElementsForHistory();
+    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = preparedElements;
     setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ والتحقق الفعلي من القاعدة بنجاح (${verifiedCount||layoutEditor.elements.length} عنصر مؤكَّد من قاعدة البيانات نفسها${stateSaved?'':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
       <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
     if(saveBtn){ saveBtn.style.display='none'; }
