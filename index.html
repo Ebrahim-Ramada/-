@@ -6404,6 +6404,11 @@ function openLayoutEditor(layoutId){
         `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
       <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
     </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
+      <label class="btn sm" style="cursor:pointer">📷 صورة كاميرا<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'كاميرا')"></label>
+      <label class="btn sm" style="cursor:pointer">🗄️ صورة Rack<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Rack')"></label>
+      <label class="btn sm" style="cursor:pointer">🔀 صورة Switch<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Switch')"></label>
+    </div>
     <div style="display:flex;gap:5px;margin-bottom:8px">
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
@@ -6439,6 +6444,13 @@ async function initLayoutCanvas(imgUrl){
     const scale = img.width > maxW ? maxW/img.width : 1;
     canvas.width = Math.round(img.width*scale); canvas.height = Math.round(img.height*scale);
     layoutEditor.bgImage = img;
+    // تحميل صور الأجهزة المستعادة (كاميرا/راك/سويتش) من عناصر تم استرجاعها من حفظ سابق
+    layoutEditor.elements.filter(el=>el.type==='image' && el.src && !el.img).forEach(el=>{
+      const dImg = new Image();
+      dImg.onload = ()=> redrawLayoutCanvas();
+      dImg.src = el.src;
+      el.img = dImg;
+    });
     redrawLayoutCanvas();
     attachLayoutCanvasEvents(canvas);
   };
@@ -6471,11 +6483,37 @@ function drawLayoutElement(ctx, el, selected){
     if(el.label){ ctx.fillStyle=el.color; ctx.font='bold 14px Arial'; ctx.textAlign='right'; ctx.fillText(el.label, el.x-14, el.y+5); }
   }
   else if(el.type==='text'){ ctx.font='bold 18px Arial'; ctx.textAlign='left'; ctx.fillText(el.text, el.x, el.y); }
+  else if(el.type==='image' && el.img){
+    ctx.save();
+    ctx.translate(el.x+el.w/2, el.y+el.h/2);
+    ctx.rotate((el.rotation||0)*Math.PI/180);
+    ctx.drawImage(el.img, -el.w/2, -el.h/2, el.w, el.h);
+    if(el.label){
+      ctx.font='bold 12px Arial'; ctx.textAlign='center'; ctx.fillStyle='#fff';
+      ctx.fillText(el.label, 0, el.h/2+16);
+    }
+    ctx.restore();
+  }
   if(selected){
     const box = layoutElementBBox(el);
     ctx.strokeStyle='#38D9C9'; ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
     ctx.strokeRect(box.x-6, box.y-6, box.w+12, box.h+12); ctx.setLineDash([]);
+    if(el.type==='image'){
+      // مقبض تكبير/تصغير (الزاوية) + مقبض تدوير (فوق العنصر) — تحكم كامل زي المطلوب
+      const rH = layoutImageHandles(el);
+      ctx.fillStyle='#38D9C9';
+      ctx.beginPath(); ctx.arc(rH.resize.x, rH.resize.y, 8, 0, 2*Math.PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(rH.rotate.x, rH.rotate.y, 8, 0, 2*Math.PI); ctx.fill();
+      ctx.strokeStyle='#38D9C9'; ctx.setLineDash([]); ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(box.x+box.w/2, box.y); ctx.lineTo(rH.rotate.x, rH.rotate.y); ctx.stroke();
+    }
   }
+}
+// مقابض التحكم لعنصر الصورة: مقبض تكبير في الزاوية، ومقبض تدوير فوق العنصر (بيتحركوا مع دوران العنصر نفسه)
+function layoutImageHandles(el){
+  const cx = el.x+el.w/2, cy = el.y+el.h/2, rad = (el.rotation||0)*Math.PI/180;
+  const rot = (px,py)=>{ const dx=px-cx, dy=py-cy; return { x: cx+dx*Math.cos(rad)-dy*Math.sin(rad), y: cy+dx*Math.sin(rad)+dy*Math.cos(rad) }; };
+  return { resize: rot(el.x+el.w, el.y+el.h), rotate: rot(cx, el.y-28) };
 }
 function layoutElementBBox(el){
   if(el.type==='pen'){ const xs=el.points.map(p=>p.x), ys=el.points.map(p=>p.y); return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)}; }
@@ -6484,31 +6522,67 @@ function layoutElementBBox(el){
   if(el.type==='circle'){ return {x:el.cx-el.rx,y:el.cy-el.ry,w:el.rx*2,h:el.ry*2}; }
   if(el.type==='pin'){ return {x:el.x-9,y:el.y-9,w:18,h:18}; }
   if(el.type==='text'){ return {x:el.x,y:el.y-18,w:(el.text.length*10),h:22}; }
+  if(el.type==='image'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
   return {x:0,y:0,w:0,h:0};
 }
 function pointInBBox(x,y,box){ return x>=box.x && x<=box.x+box.w && y>=box.y && y<=box.y+box.h; }
+function pointNearHandle(x,y,hx,hy){ return Math.hypot(x-hx,y-hy) <= 14; }
+async function pickLayoutDeviceImage(inputEl, deviceLabel){
+  const file = inputEl.files[0]; if(!file) return;
+  try{
+    const compressed = await compressImageFile(file);
+    const dataUri = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(compressed); });
+    const img = new Image();
+    img.onload = ()=>{
+      const canvas = document.getElementById('layoutEditCanvas');
+      const defaultW = 90, defaultH = defaultW*(img.height/img.width || 1);
+      pushLayoutHistory();
+      layoutEditor.elements.push({
+        type:'image', src:dataUri, img, label:deviceLabel,
+        x: canvas.width/2 - defaultW/2, y: canvas.height/2 - defaultH/2,
+        w: defaultW, h: defaultH, rotation: 0, color:'#38D9C9'
+      });
+      layoutEditor.selectedIndex = layoutEditor.elements.length-1;
+      layoutEditor.tool = 'select';
+      document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
+      const btn = document.getElementById('tool_select'); if(btn) btn.classList.add('primary');
+      redrawLayoutCanvas();
+      toast(`✅ تم إضافة صورة ${deviceLabel} — دوس عليها واسحب المقابض للتحكم في الحجم والدوران`);
+    };
+    img.src = dataUri;
+  }catch(e){ console.error(e); toast('🚫 تعذّر إضافة الصورة'); }
+  inputEl.value = '';
+}
 function setLayoutTool(t){
   layoutEditor.tool = t; layoutEditor.selectedIndex = -1;
   document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
   const btn = document.getElementById('tool_'+t); if(btn) btn.classList.add('primary');
   redrawLayoutCanvas();
 }
+function layoutElementsForHistory(){
+  return layoutEditor.elements.map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
+}
+function reloadImageElementsAfterHistoryChange(){
+  layoutEditor.elements.filter(el=>el.type==='image' && el.src && !el.img).forEach(el=>{
+    const dImg = new Image(); dImg.onload = ()=> redrawLayoutCanvas(); dImg.src = el.src; el.img = dImg;
+  });
+}
 function pushLayoutHistory(){
-  layoutEditor.history.push(JSON.stringify(layoutEditor.elements));
+  layoutEditor.history.push(JSON.stringify(layoutElementsForHistory()));
   if(layoutEditor.history.length>50) layoutEditor.history.shift();
   layoutEditor.redoStack = [];
 }
 function layoutEditorUndo(){
   if(!layoutEditor.history.length) return;
-  layoutEditor.redoStack.push(JSON.stringify(layoutEditor.elements));
+  layoutEditor.redoStack.push(JSON.stringify(layoutElementsForHistory()));
   layoutEditor.elements = JSON.parse(layoutEditor.history.pop());
-  layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
+  layoutEditor.selectedIndex=-1; reloadImageElementsAfterHistoryChange(); redrawLayoutCanvas();
 }
 function layoutEditorRedo(){
   if(!layoutEditor.redoStack.length) return;
-  layoutEditor.history.push(JSON.stringify(layoutEditor.elements));
+  layoutEditor.history.push(JSON.stringify(layoutElementsForHistory()));
   layoutEditor.elements = JSON.parse(layoutEditor.redoStack.pop());
-  layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
+  layoutEditor.selectedIndex=-1; reloadImageElementsAfterHistoryChange(); redrawLayoutCanvas();
 }
 function deleteSelectedLayoutElement(){
   if(layoutEditor.selectedIndex<0) { toast('حدّد عنصرًا أولًا (أداة تحديد)'); return; }
@@ -6526,16 +6600,25 @@ function getCanvasPos(canvas, evt){
   return { x:(p.clientX-rect.left)*(canvas.width/rect.width), y:(p.clientY-rect.top)*(canvas.height/rect.height) };
 }
 function attachLayoutCanvasEvents(canvas){
-  let dragging=false, start=null, dragOffset=null;
+  let dragging=false, start=null, dragOffset=null, mode=null; // mode: 'move' | 'resize' | 'rotate'
   function down(evt){
     evt.preventDefault();
     const pos = getCanvasPos(canvas, evt);
     const tool = layoutEditor.tool;
     if(tool==='select'){
+      // لو فيه عنصر صورة محدَّد بالفعل، افحص الأول لو الضغطة على مقبض تكبير أو تدوير بتاعه
+      if(layoutEditor.selectedIndex>=0){
+        const sel = layoutEditor.elements[layoutEditor.selectedIndex];
+        if(sel.type==='image'){
+          const h = layoutImageHandles(sel);
+          if(pointNearHandle(pos.x,pos.y,h.resize.x,h.resize.y)){ dragging=true; mode='resize'; start=pos; pushLayoutHistory(); return; }
+          if(pointNearHandle(pos.x,pos.y,h.rotate.x,h.rotate.y)){ dragging=true; mode='rotate'; start=pos; pushLayoutHistory(); return; }
+        }
+      }
       let found=-1;
       for(let i=layoutEditor.elements.length-1;i>=0;i--){ if(pointInBBox(pos.x,pos.y,layoutElementBBox(layoutEditor.elements[i]))){ found=i; break; } }
       layoutEditor.selectedIndex = found;
-      if(found>=0){ dragging=true; dragOffset=pos; pushLayoutHistory(); }
+      if(found>=0){ dragging=true; mode='move'; dragOffset=pos; pushLayoutHistory(); }
       redrawLayoutCanvas();
       return;
     }
@@ -6550,7 +6633,7 @@ function attachLayoutCanvasEvents(canvas){
       if(text){ pushLayoutHistory(); layoutEditor.elements.push({type:'text', x:pos.x, y:pos.y, text, color:layoutEditor.color}); redrawLayoutCanvas(); }
       return;
     }
-    dragging=true; start=pos;
+    dragging=true; start=pos; mode='draw';
     if(tool==='pen'){ pushLayoutHistory(); layoutEditor.elements.push({type:'pen', points:[pos], color:layoutEditor.color}); }
   }
   function move(evt){
@@ -6560,12 +6643,24 @@ function attachLayoutCanvasEvents(canvas){
     const tool = layoutEditor.tool;
     if(tool==='select' && layoutEditor.selectedIndex>=0){
       const el = layoutEditor.elements[layoutEditor.selectedIndex];
+      if(mode==='resize' && el.type==='image'){
+        // تكبير/تصغير مع الحفاظ على تناسب الأبعاد الأصلية
+        const ratio = el.h/el.w;
+        const newW = Math.max(20, pos.x - el.x);
+        el.w = newW; el.h = newW*ratio;
+        redrawLayoutCanvas(); return;
+      }
+      if(mode==='rotate' && el.type==='image'){
+        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+        el.rotation = Math.atan2(pos.y-cy, pos.x-cx)*180/Math.PI + 90;
+        redrawLayoutCanvas(); return;
+      }
       const dx = pos.x-dragOffset.x, dy = pos.y-dragOffset.y; dragOffset=pos;
       if(el.type==='pen') el.points.forEach(p=>{p.x+=dx;p.y+=dy;});
       else if(el.type==='arrow'){ el.x1+=dx;el.y1+=dy;el.x2+=dx;el.y2+=dy; }
       else if(el.type==='rect'){ el.x+=dx;el.y+=dy; }
       else if(el.type==='circle'){ el.cx+=dx;el.cy+=dy; }
-      else if(el.type==='pin'||el.type==='text'){ el.x+=dx;el.y+=dy; }
+      else if(el.type==='pin'||el.type==='text'||el.type==='image'){ el.x+=dx;el.y+=dy; }
       redrawLayoutCanvas(); return;
     }
     if(tool==='pen'){ layoutEditor.elements[layoutEditor.elements.length-1].points.push(pos); redrawLayoutCanvas(); return; }
@@ -6578,7 +6673,7 @@ function attachLayoutCanvasEvents(canvas){
   }
   function up(evt){
     if(!dragging) return;
-    dragging=false;
+    dragging=false; mode=null;
     const tool = layoutEditor.tool;
     if(['arrow','rect','circle'].includes(tool)){
       const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
@@ -6627,7 +6722,7 @@ async function saveLayoutEdit(){
     const basePayload = { file_url: pub.publicUrl };
     if(!l.original_file_url) basePayload.original_file_url = l.file_url;
     async function trySave(withState){
-      const payload = withState ? {...basePayload, edit_state: layoutEditor.elements} : basePayload;
+      const payload = withState ? {...basePayload, edit_state: layoutElementsForHistory()} : basePayload;
       return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
     }
     let {error} = await trySave(true);
@@ -6639,7 +6734,7 @@ async function saveLayoutEdit(){
     if(error){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل تحديث قاعدة البيانات:<br>${error.message||JSON.stringify(error)}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
     await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر`);
     // نحدّث نسخة الخريطة في الذاكرة فورًا (بدل انتظار إعادة تحميل كاملة) عشان تقدر تتأكد بعينك
-    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = layoutEditor.elements;
+    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = layoutElementsForHistory();
     setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ بنجاح فعليًا في قاعدة البيانات (${layoutEditor.elements.length} عنصر${stateSaved?', حالة قابلة للاستكمال محفوظة':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
       <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
     if(saveBtn){ saveBtn.style.display='none'; }
