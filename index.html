@@ -6777,13 +6777,21 @@ async function saveLayoutEdit(){
     setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ تم تجهيز ${preparedElements.length} عنصر بنجاح (حجم البيانات: ${JSON.stringify(preparedElements).length} حرف) — جاري الإرسال...</p>`);
     async function trySave(withState){
       const payload = withState ? {...basePayload, edit_state: preparedElements} : basePayload;
-      return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
+      return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId).select('id');
     }
-    let {error} = await trySave(true);
+    let {error, data: updatedRows} = await trySave(true);
     let stateSaved = !error;
     if(error && /column|schema cache/i.test(error.message||'')){
-      ({error} = await trySave(false));
+      ({error, data: updatedRows} = await trySave(false));
       stateSaved = false;
+    }
+    // كشف "التحديث الصامت": مفيش خطأ ظاهر، لكن صفر صفوف اتحدّثت فعليًا — غالبًا بسبب
+    // صلاحيات RLS في Supabase بتمنع التحديث بصمت من غير ما ترمي خطأ صريح
+    if(!error && (!updatedRows || updatedRows.length===0)){
+      setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 لم يتم تحديث أي صف فعليًا رغم عدم وجود خطأ ظاهر — هذا يدل غالبًا على أن صلاحيات RLS في Supabase تمنع هذا المستخدم من تعديل هذا السجل بصمت.<br>راجع RLS Policy لجدول factory_layouts (خاصة شرط WITH CHECK)، أو تأكد أن حسابك له دور "admin" فعليًا في جدول profiles.</p>
+        <button class="btn sm block" style="margin-top:8px" onclick="saveLayoutEdit()">إعادة المحاولة</button>`);
+      if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; saveBtn.style.display=''; }
+      return;
     }
     if(error){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل تحديث قاعدة البيانات:<br>${error.message||JSON.stringify(error)}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
     // خطوة تحقق إلزامية: نقرا السجل من القاعدة تاني (مش من الذاكرة) ونتأكد إنه فعلًا اتحفظ
