@@ -6416,6 +6416,7 @@ function openLayoutEditor(layoutId){
     </div>
     <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 الصورة الأصلية محفوظة دائمًا ويمكن استعادتها لاحقًا من زر "الأصل".</p>
     <button class="btn primary block" style="margin-top:8px" onclick="saveLayoutEdit()">💾 حفظ التعديل</button>
+    <div id="layoutSaveStatus" style="margin-top:8px"></div>
     <button class="btn block" style="margin-top:6px" onclick="downloadLayoutEditCanvas('${l.layout_name.replace(/'/g,"")}')">📥 تحميل صورة الخريطة</button>
   `);
   setTimeout(()=> initLayoutCanvas(bgUrl), 60);
@@ -6602,42 +6603,49 @@ function downloadLayoutEditCanvas(layoutName){
 }
 async function saveLayoutEdit(){
   const canvas = document.getElementById('layoutEditCanvas');
-  if(!canvas){ toast('تعذّر الحفظ'); return; }
+  if(!canvas){ toast('تعذّر الحفظ — الكانفاس غير موجود'); return; }
   const saveBtn = document.querySelector('button[onclick="saveLayoutEdit()"]');
   if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري الحفظ...'; }
-  toast('جاري حفظ التعديل...');
+  const statusHost = document.getElementById('layoutSaveStatus');
+  const setStatus = (html) => { if(statusHost) statusHost.innerHTML = html; };
+  setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ جاري الحفظ... (${layoutEditor.elements.length} عنصر مرسوم)</p>`);
   try{
     const l = layoutsData.find(x=>x.id===layoutEditor.layoutId);
+    if(!l){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 تعذّر إيجاد سجل الخريطة في الذاكرة (layoutId: ${layoutEditor.layoutId})</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
     const blob = await new Promise(res=> canvas.toBlob(res, 'image/jpeg', 0.92));
     if(!blob || blob.size===0){
-      toast('🚫 تعذّر إنشاء صورة الخريطة المعدَّلة — جرّب تفتح الخريطة تاني وأعد التعديل');
+      setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 تعذّر إنشاء صورة من الكانفاس (blob فارغ) — جرّب تفتح الخريطة تاني</p>`);
       if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; }
       return;
     }
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ الصورة اتكوّنت (${Math.round(blob.size/1024)}KB) — جاري الرفع...</p>`);
     const path = `layouts/${layoutEditor.layoutId}-edited-${Date.now()}.jpg`;
     const {error: upErr} = await supa.storage.from('camera-photos').upload(path, blob, {contentType:'image/jpeg', upsert:true});
-    if(upErr) throw upErr;
+    if(upErr){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل رفع الصورة للتخزين:<br>${upErr.message||JSON.stringify(upErr)}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
-    // نحفظ شيئين منفصلين: الصورة النهائية المُصدَّرة (للعرض/الطباعة/التقارير) + حالة العناصر
-    // الحقيقية (Interactive State) عشان تقدر تفتح وتكمل التعديل تاني من غير ما يضيع أي عنصر
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ تم الرفع — جاري تحديث السجل...</p>`);
     const basePayload = { file_url: pub.publicUrl };
-    if(!l.original_file_url) basePayload.original_file_url = l.file_url; // نحفظ الأصل أول مرة فقط
+    if(!l.original_file_url) basePayload.original_file_url = l.file_url;
     async function trySave(withState){
       const payload = withState ? {...basePayload, edit_state: layoutEditor.elements} : basePayload;
       return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
     }
     let {error} = await trySave(true);
+    let stateSaved = !error;
     if(error && /column|schema cache/i.test(error.message||'')){
       ({error} = await trySave(false));
-      if(!error) toast('⚠️ تم حفظ الصورة، لكن حفظ العناصر القابلة للتعديل لاحقًا يحتاج تشغيل schema_part29.sql');
+      stateSaved = false;
     }
-    if(error) throw error;
+    if(error){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل تحديث قاعدة البيانات:<br>${error.message||JSON.stringify(error)}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل';} return; }
     await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر`);
-    toast('✅ تم حفظ التعديل بنجاح — كل العناصر محفوظة وقابلة للاستكمال لاحقًا');
-    closeModal(); loadLayouts(layoutEditor.factoryId);
+    // نحدّث نسخة الخريطة في الذاكرة فورًا (بدل انتظار إعادة تحميل كاملة) عشان تقدر تتأكد بعينك
+    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = layoutEditor.elements;
+    setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ بنجاح فعليًا في قاعدة البيانات (${layoutEditor.elements.length} عنصر${stateSaved?', حالة قابلة للاستكمال محفوظة':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
+      <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
+    if(saveBtn){ saveBtn.style.display='none'; }
   }catch(e){
     console.error('فشل حفظ تعديل الخريطة:', e);
-    toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف'));
+    setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 خطأ غير متوقع أثناء الحفظ:<br>${e && e.message ? e.message : JSON.stringify(e)}</p>`);
     if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ التعديل'; }
   }
 }
