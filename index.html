@@ -6519,7 +6519,9 @@ function openLayoutEditor(layoutId){
   if(!l || l.file_type!=='image'){ toast('التعديل متاح فقط على الخرائط المصوَّرة'); return; }
   let restoredElements = [];
   try{ if(l.edit_state) restoredElements = typeof l.edit_state==='string' ? JSON.parse(l.edit_state) : l.edit_state; }catch(e){ restoredElements = []; }
-  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, selectedIndex:-1, hadElementsOnOpen: restoredElements.length>0 };
+  let savedView = {zoom:1, panX:0, panY:0};
+  try{ const raw = localStorage.getItem('rc_manualmap_view_'+layoutId); if(raw) savedView = JSON.parse(raw); }catch(e){}
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:savedView.zoom||1, panX:savedView.panX||0, panY:savedView.panY||0, selectedIndex:-1, hadElementsOnOpen: restoredElements.length>0 };
   // الرسم دائمًا فوق الخلفية الأصلية الحقيقية (وليس فوق آخر صورة مُصدَّرة) — يمنع تراكم الجودة السيئة
   // ويضمن إن العناصر المستعادة تتوضع بشكل صحيح فوق نفس الخلفية اللي اتحفظت بالنسبة ليها
   const bgUrl = l.original_file_url || l.file_url;
@@ -6539,17 +6541,20 @@ function openLayoutEditor(layoutId){
       <label class="btn sm" style="cursor:pointer">🗄️ صورة Rack<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Rack')"></label>
       <label class="btn sm" style="cursor:pointer">🔀 صورة Switch<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Switch')"></label>
     </div>
-    <div style="display:flex;gap:5px;margin-bottom:8px">
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
       <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
       <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
+      <span style="font-size:11px;align-self:center;min-width:40px;text-align:center" id="layoutZoomLabel">100%</span>
       <button class="btn sm" onclick="zoomLayoutEditor(1.25)">➕</button>
+      <button class="btn sm" onclick="fitLayoutEditorToScreen()">⛶ ملاءمة</button>
+      <button class="btn sm" onclick="resetLayoutEditorView()">↺ إعادة ضبط</button>
     </div>
-    <div style="overflow:auto;max-height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;text-align:center">
-      <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:top center;max-width:none"></canvas>
+    <div id="layoutEditViewport" style="overflow:hidden;height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;position:relative;touch-action:none">
+      <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:0 0;position:absolute;top:0;left:0"></canvas>
     </div>
-    <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 الصورة الأصلية محفوظة دائمًا ويمكن استعادتها لاحقًا من زر "الأصل".</p>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 استخدم إصبعين للتكبير والتحريك، أو الأزرار فوق. الصورة الأصلية محفوظة دائمًا ويمكن استعادتها لاحقًا من زر "الأصل".</p>
     <button class="btn primary block" style="margin-top:8px" onclick="saveLayoutEdit()">💾 حفظ التعديل</button>
     <div id="layoutSaveStatus" style="margin-top:8px"></div>
     <button class="btn block" style="margin-top:6px" onclick="downloadLayoutEditCanvas('${l.layout_name.replace(/'/g,"")}')">📥 تحميل صورة الخريطة</button>
@@ -6583,6 +6588,8 @@ async function initLayoutCanvas(imgUrl){
     });
     redrawLayoutCanvas();
     attachLayoutCanvasEvents(canvas);
+    applyLayoutEditorTransform();
+    attachLayoutEditorPinchPan();
   };
   img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل');
   img.src = safeSrc;
@@ -6757,9 +6764,50 @@ function deleteSelectedLayoutElement(){
   layoutEditor.elements.splice(layoutEditor.selectedIndex,1);
   layoutEditor.selectedIndex=-1; redrawLayoutCanvas();
 }
+function applyLayoutEditorTransform(){
+  const canvas = document.getElementById('layoutEditCanvas');
+  if(!canvas) return;
+  canvas.style.transform = `translate(${layoutEditor.panX}px,${layoutEditor.panY}px) scale(${layoutEditor.zoom})`;
+  const label = document.getElementById('layoutZoomLabel');
+  if(label) label.textContent = Math.round(layoutEditor.zoom*100)+'%';
+  try{ localStorage.setItem('rc_manualmap_view_'+layoutEditor.layoutId, JSON.stringify({zoom:layoutEditor.zoom, panX:layoutEditor.panX, panY:layoutEditor.panY})); }catch(e){}
+}
 function zoomLayoutEditor(factor){
-  layoutEditor.zoom = Math.max(0.5, Math.min(3, layoutEditor.zoom*factor));
-  document.getElementById('layoutEditCanvas').style.transform = `scale(${layoutEditor.zoom})`;
+  layoutEditor.zoom = Math.max(0.5, Math.min(4, layoutEditor.zoom*factor));
+  applyLayoutEditorTransform();
+}
+function fitLayoutEditorToScreen(){
+  const canvas = document.getElementById('layoutEditCanvas'), viewport = document.getElementById('layoutEditViewport');
+  if(!canvas || !viewport) return;
+  const scaleX = viewport.clientWidth / canvas.width, scaleY = viewport.clientHeight / canvas.height;
+  layoutEditor.zoom = Math.max(0.5, Math.min(4, Math.min(scaleX, scaleY)));
+  layoutEditor.panX = (viewport.clientWidth - canvas.width*layoutEditor.zoom)/2;
+  layoutEditor.panY = (viewport.clientHeight - canvas.height*layoutEditor.zoom)/2;
+  applyLayoutEditorTransform();
+}
+function resetLayoutEditorView(){
+  layoutEditor.zoom = 1; layoutEditor.panX = 0; layoutEditor.panY = 0;
+  applyLayoutEditorTransform();
+}
+function attachLayoutEditorPinchPan(){
+  const viewport = document.getElementById('layoutEditViewport');
+  if(!viewport) return;
+  let startDist=0, startZoom=1, startMid={x:0,y:0}, startPan={x:0,y:0};
+  const dist = t=> Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+  const mid = t=> ({x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2});
+  viewport.addEventListener('touchstart', (e)=>{
+    if(e.touches.length===2){ startDist=dist(e.touches); startZoom=layoutEditor.zoom; startMid=mid(e.touches); startPan={x:layoutEditor.panX,y:layoutEditor.panY}; }
+  }, {passive:true});
+  viewport.addEventListener('touchmove', (e)=>{
+    if(e.touches.length===2){
+      e.preventDefault();
+      const newDist = dist(e.touches), newMid = mid(e.touches);
+      layoutEditor.zoom = Math.max(0.5, Math.min(4, +(startZoom*(newDist/(startDist||1))).toFixed(2)));
+      layoutEditor.panX = startPan.x + (newMid.x-startMid.x);
+      layoutEditor.panY = startPan.y + (newMid.y-startMid.y);
+      applyLayoutEditorTransform();
+    }
+  }, {passive:false});
 }
 function getCanvasPos(canvas, evt){
   const rect = canvas.getBoundingClientRect();
@@ -7727,7 +7775,7 @@ function renderCentralNetworkMap(){
   });
 
   const N = Math.max(1, chains.length);
-  const COL_W = 148, GAP = 20, NODE_H = 42;
+  const COL_W = 148, GAP = 20, NODE_H = 50;
   const svgW = Math.max(420, N*(COL_W+GAP)+GAP);
   const yFactory = 40, yOwnTower = 120, yHubTower = 220, yServer = 310;
   const svgH = yServer + 60;
@@ -7737,10 +7785,12 @@ function renderCentralNetworkMap(){
 
   chains.forEach((c,i)=>{
     const cx = GAP + i*(COL_W+GAP) + COL_W/2;
+    const fc = computeFactory(c.factory);
     // 1) صندوق المصنع نفسه
     svg += `<g onclick="showCentralFactoryDetails('${c.factory.id}')" style="cursor:pointer">
       <rect x="${cx-COL_W/2+8}" y="${yFactory-NODE_H/2}" width="${COL_W-16}" height="${NODE_H}" rx="8" fill="${pal.facF}" stroke="${pal.facS}" stroke-width="1.5"/>
-      <text x="${cx}" y="${yFactory+4}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">${escapeXml(c.factory.name)}</text>
+      <text x="${cx}" y="${yFactory-2}" text-anchor="middle" fill="${pal.text}" font-size="10.5" font-weight="bold" font-family="Arial">${escapeXml(c.factory.name)}</text>
+      <text x="${cx}" y="${yFactory+12}" text-anchor="middle" fill="${fc.camerasDown>0?pal.bad:pal.ok}" font-size="8" font-family="Arial">📷 ${fc.camerasUp}/${fc.camerasTotal} · 🖥️ ${fc.screensUp}/${fc.screens}</text>
     </g>`;
     if(!c.ownTower){
       svg += `<text x="${cx}" y="${yOwnTower}" text-anchor="middle" fill="${pal.sub}" font-size="9" font-family="Arial">⚠️ لا يوجد برج مسجّل</text>`;
