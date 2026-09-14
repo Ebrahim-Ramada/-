@@ -10103,7 +10103,8 @@ async function gatherAllAppData(){
    data.storeItems, data.storeTransactions, data.storeItemImages,
    data.layouts, data.racks, data.switches, data.ups, data.auditLog,
    data.cameraMods, data.lighting, data.preventiveTasks, data.faultImages, data.maintenanceImagesAll, data.roomNeeds, data.oncall,
-   data.servers, data.serverDrives, data.serverImages] = await Promise.all([
+   data.servers, data.serverDrives, data.serverImages,
+   data.tasks, data.shiftHandovers, data.cameraTypeCounts, data.lightingRepairs, data.layoutMarkers, data.towers, data.wirelessLinks] = await Promise.all([
     safe('cameras'), safe('screens'), safe('faults'), safe('maintenance_log'),
     safe('reports_archive', q=>q.order('report_date',{ascending:false}).limit(200)),
     safe('store_items'), safe('store_transactions'), safe('store_item_images'),
@@ -10112,7 +10113,10 @@ async function gatherAllAppData(){
     safe('camera_modifications'), safe('lighting_needs'), safe('preventive_maintenance'),
     safe('fault_images'), safe('maintenance_images'), safe('room_needs'),
     safe('oncall_schedule', q=>q.order('duty_date',{ascending:false}).limit(90)),
-    safe('factory_servers'), safe('server_drives'), safe('server_images')
+    safe('factory_servers'), safe('server_drives'), safe('server_images'),
+    safe('tasks'), safe('shift_handovers', q=>q.order('created_at',{ascending:false}).limit(100)),
+    safe('camera_type_counts'), safe('lighting_repairs'), safe('layout_markers'),
+    safe('antenna_towers'), safe('wireless_links')
   ]);
   return data;
 }
@@ -10200,6 +10204,21 @@ async function buildAllExcelWorkbook(d){
   if(containerItems.length) sheetFromRows('🚛 مخزن الكونتينر', ['الصنف','النوع','الرصيد الحالي','عدد الصور','ملاحظات'], storeItemsRows(containerItems));
   if(d.storeTransactions.length) sheetFromRows('حركة المخزن', ['التاريخ','الصنف','القسم','وارد','صادر','السبب','الجهة'],
     d.storeTransactions.map(t=>{ const it=d.storeItems.find(x=>x.id===t.item_id); return [fmtDateAr(t.transaction_date), it?it.item_name:'', it?(it.warehouse||'الغرفة المركزية'):'', t.in_qty||0, t.out_qty||0, t.reason||'', t.destination||'']; }));
+  // الأقسام السبعة الإضافية — عشان التصدير الشامل يبقى شامل فعليًا بدون استثناء أي قسم
+  if(d.tasks?.length) sheetFromRows('المهام', ['العنوان','المصنع','المسؤول','الأولوية','الحالة','تاريخ الاستحقاق','تاريخ الإكمال','ملاحظات'],
+    d.tasks.map(t=>[t.title, d.sites.find(s=>s.id===t.factory_id)?.name||'', t.assigned_to_name||'', t.priority||'', t.status||'', fmtDateAr(t.due_date), t.completed_at?fmtDateAr(t.completed_at):'', t.notes||'']));
+  if(d.shiftHandovers?.length) sheetFromRows('تسليم واستلام الشيفت', ['التاريخ','أهم ما حدث','أعطال مكتشفة','أمور مفتوحة','تعليمات للشيفت التالي','الحالة'],
+    d.shiftHandovers.map(h=>[fmtDateAr(h.created_at), h.summary||'', h.discovered_faults||'', h.open_items||'', h.instructions||'', h.status||'']));
+  if(d.cameraTypeCounts?.length) sheetFromRows('أنواع الكاميرات بالمصانع', ['المصنع','الشركة المصنعة','الدقة','النوع','العدد'],
+    d.cameraTypeCounts.map(c=>[d.sites.find(s=>s.id===c.factory_id)?.name||'', c.brand||'', c.resolution||'', c.camera_type||'', c.count||0]));
+  if(d.lightingRepairs?.length) sheetFromRows('سجل إصلاحات الإضاءة', ['التاريخ','نوع العملية','المشكلة','الإجراء','الحالة قبل','الحالة بعد','بواسطة'],
+    d.lightingRepairs.map(r=>[fmtDateAr(r.created_at), r.repair_type||'', r.problem_description||'', r.action_taken||'', r.status_before||'', r.status_after||'', r.created_by_name||'']));
+  if(d.towers?.length) sheetFromRows('أبراج الأنتينات', ['المصنع','اسم البرج','النوع','الحالة','الموقع','التردد'],
+    d.towers.map(t=>[d.sites.find(s=>s.id===t.factory_id)?.name||'', t.tower_name, t.tower_type||'', t.status||'', t.location||'', t.frequency||'']));
+  if(d.wirelessLinks?.length) sheetFromRows('الروابط اللاسلكية', ['من برج','إلى','الحالة','قوة الإشارة','الملاحظات'],
+    d.wirelessLinks.map(l=>[d.towers.find(t=>t.id===l.from_tower_id)?.tower_name||'', l.to_tower_id?(d.towers.find(t=>t.id===l.to_tower_id)?.tower_name||'الغرفة المركزية'):'الغرفة المركزية', l.status||'', l.signal_strength||'', l.notes||'']));
+  if(d.layoutMarkers?.length) sheetFromRows('علامات الخريطة التفاعلية', ['نوع العنصر','اسم العنصر','X%','Y%'],
+    d.layoutMarkers.map(m=>[m.marker_type, m.ref_label||'', m.x_pct, m.y_pct]));
   // صور الأصناف — مُضمَّنة فعليًا داخل الخلايا
   if(d.storeItemImages.length){
     const ws = wb.addWorksheet('صور الأصناف', {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
@@ -10347,10 +10366,18 @@ async function exportAllExcel(){
   toast('جاري تجميع كل بيانات التطبيق...');
   try{
     const d = await gatherAllAppData();
+    // خطوة تحقّق أساسية: لو التطبيق فيه مصانع لكن كل الأقسام رجعت فاضية تمامًا، غالبًا فشل الاتصال
+    // بقاعدة البيانات — منعرضش "تم بنجاح" في الحالة دي
+    const totalRecords = ['cameras','screens','faults','storeItems','racks','switches','ups','layouts','tasks'].reduce((a,k)=>a+(d[k]?.length||0),0);
+    if(d.sites.length>0 && totalRecords===0){
+      toast('🚫 تعذّر جلب بيانات الأقسام من قاعدة البيانات — تحقّق من الاتصال بالإنترنت وحاول تاني');
+      return;
+    }
     const wb = await buildAllExcelWorkbook(d);
     const buf = await wb.xlsx.writeBuffer();
+    if(!buf || buf.byteLength < 2000){ toast('🚫 فشل إنشاء ملف Excel (الملف فارغ أو تالف)'); return; }
     await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), exportCenterFilename('xlsx'));
-    await logAudit('تصدير شامل Excel', `${d.sites.length} مصنع`);
+    await logAudit('تصدير شامل Excel', `${d.sites.length} مصنع — ${totalRecords} سجل`);
   }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
 }
 
@@ -10399,6 +10426,17 @@ async function buildAllReportHtml(d){
     ${d.racks.length? table(['المصنع','الراك','المكان','صورة'], d.racks.map(r=>[d.sites.find(s=>s.id===r.factory_id)?.name||'',r.rack_name,r.location||'',imgTag(r.photo_url,70)])) : ''}
     ${d.switches.length? table(['المصنع','السويتش','النوع','المنافذ','مستخدمة','كاميرات','صورة'], d.switches.map(sw=>[d.sites.find(s=>s.id===sw.factory_id)?.name||'',sw.switch_name,sw.switch_type||'',sw.total_ports||0,sw.used_ports||0,getSwitchCameraCount(sw),imgTag(sw.photo_url,70)])) : ''}`);
   if(d.ups.length) html += section('UPS ومصادر الطاقة', table(['المصنع','UPS','المكان','الحالة','صورة'], d.ups.map(u=>[d.sites.find(s=>s.id===u.factory_id)?.name||'',u.ups_name,u.location||'',u.status,imgTag(u.photo_url,70)])));
+  if(d.tasks?.length) html += section('المهام', table(['العنوان','المصنع','المسؤول','الأولوية','الحالة','الاستحقاق'],
+    d.tasks.map(t=>[t.title, d.sites.find(s=>s.id===t.factory_id)?.name||'', t.assigned_to_name||'', t.priority||'', t.status||'', fmtDateAr(t.due_date)])));
+  if(d.shiftHandovers?.length) html += section('تسليم واستلام الشيفت', table(['التاريخ','أهم ما حدث','أعطال مكتشفة','الحالة'],
+    d.shiftHandovers.map(h=>[fmtDateAr(h.created_at), h.summary||'', h.discovered_faults||'', h.status||''])));
+  if(d.cameraTypeCounts?.length) html += section('أنواع الكاميرات بالمصانع', table(['المصنع','الشركة المصنعة','الدقة','النوع','العدد'],
+    d.cameraTypeCounts.map(c=>[d.sites.find(s=>s.id===c.factory_id)?.name||'', c.brand||'', c.resolution||'', c.camera_type||'', c.count||0])));
+  if(d.lightingRepairs?.length) html += section('سجل إصلاحات الإضاءة', table(['التاريخ','المشكلة','الإجراء','الحالة بعد'],
+    d.lightingRepairs.map(r=>[fmtDateAr(r.created_at), r.problem_description||'', r.action_taken||'', r.status_after||''])));
+  if(d.towers?.length) html += section('أبراج الأنتينات والروابط اللاسلكية', `
+    ${table(['المصنع','البرج','النوع','الحالة'], d.towers.map(t=>[d.sites.find(s=>s.id===t.factory_id)?.name||'', t.tower_name, t.tower_type||'', t.status||'']))}
+    ${d.wirelessLinks?.length? table(['من','إلى','الحالة'], d.wirelessLinks.map(l=>[d.towers.find(t=>t.id===l.from_tower_id)?.tower_name||'', l.to_tower_id?(d.towers.find(t=>t.id===l.to_tower_id)?.tower_name||'الغرفة المركزية'):'الغرفة المركزية', l.status||''])):''}`);
   if(d.storeItems.length){
     const rowsFor = items => items.map(it=>{
       const bal=d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0);
@@ -10535,6 +10573,47 @@ async function exportAllPptx(){
       sl.addText('المخزن', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
       sl.addTable([['الصنف','النوع','الرصيد'], ...d.storeItems.slice(0,12).map(it=>{ const bal=d.storeTransactions.filter(t=>t.item_id===it.id).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0); return [it.item_name,it.item_type||'',String(bal)]; })],
         {x:0.4,y:1.0,w:9.2,fontSize:12,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.tasks?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('المهام', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['العنوان','المسؤول','الأولوية','الحالة'], ...d.tasks.slice(0,12).map(t=>[t.title,t.assigned_to_name||'',t.priority||'',t.status||''])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.shiftHandovers?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('تسليم واستلام الشيفت', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['التاريخ','أهم ما حدث','الحالة'], ...d.shiftHandovers.slice(0,10).map(h=>[fmtDateAr(h.created_at),(h.summary||'').slice(0,60),h.status||''])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.cameraTypeCounts?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('أنواع الكاميرات بالمصانع', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['المصنع','الشركة','الدقة','النوع','العدد'], ...d.cameraTypeCounts.slice(0,12).map(c=>[d.sites.find(s=>s.id===c.factory_id)?.name||'',c.brand||'',c.resolution||'',c.camera_type||'',String(c.count||0)])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.lightingRepairs?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('سجل إصلاحات الإضاءة', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['التاريخ','المشكلة','الإجراء','الحالة بعد'], ...d.lightingRepairs.slice(0,10).map(r=>[fmtDateAr(r.created_at),(r.problem_description||'').slice(0,40),(r.action_taken||'').slice(0,40),r.status_after||''])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+    }
+    if(d.towers?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('أبراج الأنتينات والروابط اللاسلكية', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['البرج','النوع','الحالة'], ...d.towers.slice(0,10).map(t=>[t.tower_name,t.tower_type||'',t.status||''])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+      if(d.wirelessLinks?.length){
+        sl.addText('الروابط اللاسلكية:', {x:0.4,y:4.2,w:9,h:0.3,fontSize:12,bold:true,color:'8CA0C4'});
+        sl.addTable([['من','إلى','الحالة'], ...d.wirelessLinks.slice(0,6).map(l=>[d.towers.find(t=>t.id===l.from_tower_id)?.tower_name||'', l.to_tower_id?(d.towers.find(t=>t.id===l.to_tower_id)?.tower_name||'الغرفة المركزية'):'الغرفة المركزية', l.status||''])],
+          {x:0.4,y:4.5,w:9.2,fontSize:10,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
+      }
+    }
+    if(d.layoutMarkers?.length){
+      const sl = pptx.addSlide({masterName:'MASTER'});
+      sl.addText('علامات الخريطة التفاعلية', {x:0.4,y:0.3,w:9,h:0.5,fontSize:20,bold:true,color:'38D9C9',align:'center'});
+      sl.addTable([['النوع','العنصر'], ...d.layoutMarkers.slice(0,15).map(m=>[m.marker_type||'',m.ref_label||''])],
+        {x:0.4,y:1.0,w:9.2,fontSize:11,color:'E9EEFB',fill:{color:'182446'},border:{color:'243055',pt:1}});
     }
     const closing = pptx.addSlide({masterName:'MASTER'});
     closing.addText('تم إعداد هذا العرض تلقائيًا', {x:0.5,y:3.2,w:9,h:0.6,fontSize:20,color:'E9EEFB',align:'center'});
