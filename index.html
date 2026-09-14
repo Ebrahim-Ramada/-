@@ -890,6 +890,75 @@ async function loadSettings(){
     if(data) appSettings = data;
   }catch(e){ console.warn('تعذّر تحميل الإعدادات، سيُستخدم الافتراضي', e); }
 }
+/* ============================================================
+   🎓 نظام حماية قسم "شرح التطبيق والتدريب" — مغلق افتراضيًا
+   الأدمن دايمًا له صلاحية كاملة، وباقي المستخدمين لازم يتمنحوا
+   الصلاحية صراحة من الأدمن + القسم نفسه لازم يكون مفعّل عمومًا
+   ============================================================ */
+let trainingAccessList = [];
+async function loadTrainingAccess(){
+  try{ const {data} = await supa.from('training_section_access').select('user_id'); trainingAccessList = (data||[]).map(r=>r.user_id); }
+  catch(e){ trainingAccessList = []; }
+}
+function canAccessTrainingSection(){
+  if(!currentProfile) return false;
+  if(isAdmin()) return true; // الأدمن له وصول دائم بغض النظر عن حالة التفعيل العامة
+  return !!appSettings.training_section_enabled && trainingAccessList.includes(currentProfile.id);
+}
+async function toggleTrainingSection(enabled){
+  if(!isAdmin()) return;
+  try{
+    const {error} = await supa.from('settings').update({training_section_enabled: enabled}).eq('id',1);
+    if(error) throw error;
+    appSettings.training_section_enabled = enabled;
+    await logAudit('تغيير حالة قسم التدريب', enabled?'تم فتح القسم عمومًا':'تم إغلاق القسم عمومًا');
+    toast(enabled? '✅ تم تفعيل القسم' : '✅ تم إغلاق القسم');
+    renderCurrentView();
+  }catch(e){ toast('🚫 تعذّر تغيير الحالة: '+(e.message||'')); }
+}
+async function renderTrainingAccessPanel(){
+  const listHost = document.getElementById('trainingAccessListHost');
+  const selectHost = document.getElementById('trainingGrantUserSelect');
+  if(!listHost) return;
+  let users = [];
+  try{ const {data} = await supa.from('profiles').select('id, display_name').eq('status','active').order('display_name'); users = data||[]; }catch(e){}
+  let accessRows = [];
+  try{ const {data} = await supa.from('training_section_access').select('*'); accessRows = data||[]; }catch(e){}
+  const grantedUsers = accessRows.map(r=>({...r, name: users.find(u=>u.id===r.user_id)?.display_name || 'مستخدم محذوف'}));
+  listHost.innerHTML = grantedUsers.length ? grantedUsers.map(g=>`
+    <div class="site-card" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px">
+      <span style="font-size:13px">👤 ${g.name}</span>
+      <button class="btn sm danger" onclick="revokeTrainingAccess('${g.user_id}','${g.name.replace(/'/g,"")}')">🗑 سحب الصلاحية</button>
+    </div>`).join('') : '<div class="empty">مفيش حد ممنوح الصلاحية دي غيرك حاليًا.</div>';
+  if(selectHost){
+    const eligible = users.filter(u=> u.id!==currentProfile.id && !accessRows.some(r=>r.user_id===u.id));
+    selectHost.innerHTML = eligible.length ? eligible.map(u=>`<option value="${u.id}">${u.display_name}</option>`).join('') : '<option value="">لا يوجد مستخدمين آخرين متاحين</option>';
+  }
+}
+async function grantTrainingAccess(){
+  if(!isAdmin()) return;
+  const sel = document.getElementById('trainingGrantUserSelect');
+  const userId = sel?.value;
+  if(!userId){ toast('اختر مستخدم أولًا'); return; }
+  const userName = sel.options[sel.selectedIndex].text;
+  try{
+    const {error} = await supa.from('training_section_access').insert({user_id:userId, granted_by:currentProfile.id});
+    if(error) throw error;
+    await logAudit('منح صلاحية قسم التدريب', userName);
+    toast(`✅ تم منح ${userName} صلاحية الوصول`);
+    await loadTrainingAccess(); renderTrainingAccessPanel();
+  }catch(e){ toast('🚫 تعذّر المنح: '+(e.message||'')); }
+}
+async function revokeTrainingAccess(userId, userName){
+  if(!isAdmin()) return;
+  try{
+    const {error} = await supa.from('training_section_access').delete().eq('user_id', userId);
+    if(error) throw error;
+    await logAudit('سحب صلاحية قسم التدريب', userName);
+    toast(`✅ تم سحب الصلاحية من ${userName}`);
+    await loadTrainingAccess(); renderTrainingAccessPanel();
+  }catch(e){ toast('🚫 تعذّر السحب: '+(e.message||'')); }
+}
 let dashSummary = { lighting:{total:0,open:0}, store:{items:0}, roomNeeds:{total:0,done:0,inProgress:0,notDone:0} };
 async function loadDashboardSummaries(){
   try{
@@ -916,6 +985,7 @@ async function loadAllData(){
   updateOfflineBanner();
   await loadSettings();
   await loadFactories();
+  await loadTrainingAccess();
   await loadMaintenanceLog();
   await loadDashboardSummaries();
   if(['dashboard'].includes(currentView)) renderCurrentView();
@@ -1199,7 +1269,7 @@ function renderCurrentView(){
   else if(currentView==='archive') { host.innerHTML = renderArchivePlaceholder(); loadArchive(); }
   else if(currentView==='audit') { host.innerHTML = renderAuditPlaceholder(); loadAuditLog(); }
   else if(currentView==='users' && isAdmin()) { host.innerHTML = renderUsersPlaceholder(); loadUsers(); }
-  else if(currentView==='settings') host.innerHTML = renderSettingsView();
+  else if(currentView==='settings') { host.innerHTML = renderSettingsView(); if(isAdmin()) renderTrainingAccessPanel(); }
   else if(currentView==='compare') { host.innerHTML = renderComparePlaceholder(); setTimeout(renderCompareResult, 30); }
   else if(currentView==='maintenance') {
     host.innerHTML = renderPreventiveMaintenanceView(currentViewCtx);
@@ -1238,6 +1308,17 @@ function renderCurrentView(){
     const cfg = DEVICE_STATS_CONFIG[currentView];
     host.innerHTML = renderDeviceStatsPlaceholder(currentView, cfg, currentViewCtx);
     if(currentViewCtx) loadDeviceStatsForFactory(currentView, cfg, currentViewCtx); else loadDeviceStatsFactoryPicker(currentView, cfg);
+  }
+  else if(currentView==='training') {
+    // حماية حقيقية على مستوى الرسم نفسه — مش بس إخفاء الزر، حتى لو حاول حد يوصل للشاشة مباشرة
+    if(!canAccessTrainingSection()){
+      host.innerHTML = `<div class="view active"><div class="empty">🔒 القسم ده مش متاح لحسابك حاليًا. لو محتاج توصله، اطلب من الأدمن يمنحك الصلاحية.</div></div>`;
+      currentView='dashboard'; // منع بقاء الحالة على شاشة محظورة
+    } else {
+      host.innerHTML = renderTrainingView();
+      trainingLessonIndex = 0; trainingMode = 'lessons';
+      renderTrainingContent();
+    }
   }
   else if(currentView==='recurringfaults') { host.innerHTML = renderRecurringFaultsView(); loadRecurringFaults(); }
   else if(currentView==='mytasks') { host.innerHTML = renderMyTasksView(); loadMyTasks(); }
@@ -1515,6 +1596,7 @@ function renderDashboard(){
       <button class="qbtn" onclick="goTo('mytasks')" style="grid-column:1/-1"><span class="qicon">📋</span> مهامي</button>
       <button class="qbtn" onclick="cameraModsTab='تم التعديل'; goTo('cameramods')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات التي تم تعديلها</button>
       <button class="qbtn" onclick="goTo('cameratypestats')" style="grid-column:1/-1"><span class="qicon">📊</span> أنواع الكاميرات بالمصانع</button>
+      ${canAccessTrainingSection() ? `<button class="qbtn" onclick="goTo('training')" style="grid-column:1/-1;border-color:var(--accent)"><span class="qicon">🎓</span> شرح التطبيق وطريقة العمل</button>`:''}
       <button class="qbtn" onclick="goTo('upsstats')"><span class="qicon">🔋</span> UPS</button>
       <button class="qbtn" onclick="goTo('switchesstats')"><span class="qicon">🔀</span> Switches</button>
       <button class="qbtn" onclick="goTo('racksstats')"><span class="qicon">🗄️</span> Racks</button>
@@ -2532,6 +2614,19 @@ function renderSettingsView(){
       <div class="site-name" style="font-size:14px;margin-bottom:6px">📥 ترحيل بيانات الكاميرات المنقطعة القديمة</div>
       <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">لو عندك كاميرات مسجّلة في النظام القديم (قبل التوحيد مع الأعطال)، راجعها هنا وحدد لكل واحدة "اشتغلت" أو "لسه واقفة" بضغطة واحدة — بدون إعادة كتابة أي بيانات.</p>
       <button class="btn primary block" onclick="openDownCamsMigrationTool()">فتح أداة الترحيل</button>
+    </div>`:''}
+
+    ${isAdmin()? `<div class="site-card" style="margin-top:14px;border-color:var(--accent)" id="trainingAdminPanelHost">
+      <div class="site-name" style="font-size:14px;margin-bottom:6px">🎓 قسم شرح التطبيق والتدريب</div>
+      <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">قسم مخصّص للتدريب على شرح التطبيق أمام الإدارة — مغلق افتراضيًا لكل المستخدمين ما عداك.</p>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px">
+        <input type="checkbox" id="trainingSectionToggle" ${appSettings.training_section_enabled?'checked':''} onchange="toggleTrainingSection(this.checked)" style="width:18px;height:18px;accent-color:var(--accent)">
+        <span>${appSettings.training_section_enabled?'☑️ القسم مفعّل حاليًا':'☐ القسم مغلق حاليًا (الوضع الافتراضي)'}</span>
+      </label>
+      <div class="section-title" style="margin-top:6px"><h2 style="font-size:12px">👤 المستخدمون المسموح لهم بالدخول (بجانبك أنت دايمًا)</h2></div>
+      <div id="trainingAccessListHost"><div class="empty">جاري التحميل...</div></div>
+      <div class="field" style="margin-top:8px"><select class="input" id="trainingGrantUserSelect"></select></div>
+      <button class="btn sm primary block" onclick="grantTrainingAccess()">➕ منح صلاحية الوصول لمستخدم</button>
     </div>`:''}
 
     <div class="site-card" style="margin-top:14px">
@@ -3745,6 +3840,128 @@ async function loadRecurringFaults(){
    ============================================================ */
 let myTasksData = [];
 let allTasksData = [];
+/* ============================================================
+   🎓 قسم شرح التطبيق وطريقة العمل — وضع العرض والتدريب
+   محتوى مبني على الوظائف الحقيقية الموجودة فعليًا في التطبيق فقط
+   ============================================================ */
+const TRAINING_LESSONS = [
+  { title:'1. فكرة المشروع', icon:'💡',
+    content:`قبل التطبيق، متابعة المصانع كانت بتعتمد على مكالمات ورسايل متفرقة، وأي معلومة عن عطل أو كاميرا منقطعة كانت بتضيع بسهولة أو محدش يفتكرها. التطبيق ده حوّل كل ده لنظام واحد موحّد: كل مصنع، كل كاميرا، كل عطل، كل قطعة في المخزن — كلهم مسجّلين ومربوطين ببعض في مكان واحد، وأي حد في الفريق يقدر يشوف نفس المعلومة الصحيحة في نفس اللحظة.`,
+    qa:{ q:'ليه اتعمل التطبيق ده؟', a:'عشان نوقف الاعتماد على المكالمات والذاكرة في متابعة المصانع، ونضمن إن كل معلومة (عطل، كاميرا، صيانة) مسجّلة ومربوطة بمصدرها، وأي حد في الفريق يقدر يوصلها فورًا.' } },
+  { title:'2. نظام المصانع وFactory ID', icon:'🏭',
+    content:`كل مصنع مسجّل بمعرّف فريد (Factory ID) داخل قاعدة البيانات. أي بيانات بتتسجّل — كاميرا، عطل، صنف مخزن، مهمة — بتترتبط بنفس المعرّف ده، مش باسم المصنع كنص. ده معناه إنك تقدر تغيّر اسم المصنع من غير ما تفقد أي بيانات، ومفيش احتمال إن بيانات مصنع تختلط بمصنع تاني بالغلط.`,
+    qa:{ q:'إزاي بتضمنوا إن بيانات المصانع مبتتلخبطش؟', a:'كل سجل في النظام مربوط بمعرّف فريد للمصنع (Factory ID) مش باسمه، فمفيش مجال يحصل خلط بين بيانات مصنعين مختلفين.' } },
+  { title:'3. دورة حياة الكاميرا', icon:'🎥',
+    content:`الكاميرا بتمر بمراحل واضحة: كاميرا جديدة تتسجّل بكل بياناتها (النوع، الشركة، الدقة، IP)، لو حصلها عطل تتسجّل كـ"منقطعة" مع تاريخ الانقطاع، ولما تتصلح بتتسجّل كـ"تم تشغيلها" مع حساب مدة التوقف تلقائيًا. لو احتاجت تعديل فني (تغيير مكان أو زاوية) بتتسجّل في قسم منفصل "كاميرات تحتاج تعديل" وبعد التعديل بتترحّل لـ"تم تعديلها" مع صور قبل وبعد — ونفس الكاميرا (نفس ID) بتفضل هي هي من الأول للآخر، مفيش نسخ مكررة.`,
+    qa:{ q:'إزاي بتتابعوا حالة الكاميرا من الأول للآخر؟', a:'كل كاميرا ليها سجل واحد ثابت (نفس ID) بيتحدّث حالته على طول الوقت — تعمل، منقطعة، اتصلحت، محتاجة تعديل — مع الاحتفاظ بتاريخ كل مرحلة، من غير ما نعمل نسخة جديدة كل مرة.' } },
+  { title:'4. الأعطال والصيانة', icon:'📋',
+    content:`أي عطل بيتسجّل بوصف المشكلة، الخطورة، والإجراء المتخذ، مع إمكانية تسجيل أكتر من عطل لنفس الجهاز عبر الزمن. النظام بيحسب SLA (المدة المسموحة للحل) تلقائيًا، ولو العطل فضل مفتوح أكتر من الوقت المحدد، بيتصعّد تلقائيًا لمستوى أعلى ("تصعيد أول"، "تصعيد عاجل"، "تدخل فوري") ويظهر في شريط التنبيهات.`,
+    qa:{ q:'إزاي بتضمنوا إن العطل ميتنساش؟', a:'النظام بيحسب SLA تلقائيًا لكل عطل، ولو اتأخر الحل عن المدة المسموحة، بيتصعّد أوتوماتيك ويظهر تنبيه واضح — مش محتاجين حد يفتكر يتابع يدويًا.' } },
+  { title:'5. البنية التحتية للشبكة', icon:'🗄️',
+    content:`العلاقة منظّمة بشكل هرمي: كل مصنع (Factory) ليه Racks، وكل Rack فيه Switches، وكل Switch عليه Ports بتوصل للكاميرات — والنظام بيحسب تلقائيًا كام Port مستخدم وكام فاضي. وبالتوازي، كل مصنع ممكن يكون فيه Servers متصلة بالـRacks، وكل Server ليه تفاصيله (المعالج، الرام، التخزين) ومربوط بـUPS لحماية الطاقة.`,
+    qa:{ q:'إزاي عارفين كام Port فاضي في أي سويتش؟', a:'كل سويتش مسجّل بيه إجمالي المنافذ والمنافذ المستخدمة فعليًا، والنظام بيحسب المتاحة تلقائيًا من الفرق بينهم — بدون عدّ يدوي.' } },
+  { title:'6. الأبراج والربط اللاسلكي', icon:'📡',
+    content:`كل مصنع بعيد بيتوصل بالشبكة المركزية عن طريق برج أنتنة، والبرج ده بيعمل رابط لاسلكي (Wireless Link) لبرج مقابل في مصنع الدولية أو الغرفة المركزية. النظام بيسجّل حالة كل رابط (يعمل / ضعيف / منقطع) بلون واضح، وممكن أكتر من مصنع يشتركوا في نفس البرج لو كانوا قريبين من بعض جغرافيًا.`,
+    qa:{ q:'إزاي المصانع البعيدة بتوصل بالشبكة؟', a:'عن طريق أبراج أنتنة عاملة روابط لاسلكية للمصنع المركزي (الدولية)، وكل رابط له حالة اتصال واضحة (يعمل/ضعيف/منقطع) بنقدر نتابعها لحظيًا.' } },
+  { title:'7. الخرائط (تفاعلية ويدوية)', icon:'🗺️',
+    content:`فيه نوعين من الخرائط: "التفاعلية" بتحط علامات حقيقية مربوطة ببيانات الأجهزة الفعلية (كاميرا/سويتش/سيرفر) وتديك تفاصيلها بضغطة، و"اليدوية" محرر رسم كامل بتقدر ترسم فيه أسهم وأشكال ونصوص وتحط صور جاهزة لأجهزة (كاميرا/راك/سويتش)، وتحرّكهم وتكبّرهم وتدوّرهم بحرية. الاتنين بيدعموا Pinch-to-Zoom بلا حدود، وبيحفظوا حالتهم بالكامل عشان ترجع تلاقيها زي ما سبتها بالظبط.`,
+    qa:{ q:'إيه الفرق بين الخريطة التفاعلية واليدوية؟', a:'التفاعلية بتعرض بيانات حقيقية من قاعدة البيانات وتفتحلك تفاصيل الجهاز بضغطة، واليدوية محرر رسم حر بترسم فيه أسهم وأشكال وصور جاهزة للأجهزة — والاتنين بيحفظوا كل تعديل بشكل دائم.' } },
+  { title:'8. المخازن والاحتياجات', icon:'📦',
+    content:`فيه مخزنين منفصلين تمامًا: مخزن الغرفة المركزية ومخزن الكونتينر، وكل صنف ليه رصيد بيتحسب تلقائيًا من حركة الوارد والصادر (مش رقم بتكتبه يدوي). "احتياجات الغرفة" منفصلة عن المخزن — قسم لطلب أصناف جديدة، وتقدر تضيف أكتر من صنف مرة واحدة (إضافة جماعية) بدل ما تدخلهم واحد واحد.`,
+    qa:{ q:'إزاي عارفين رصيد أي صنف بالظبط؟', a:'الرصيد بيتحسب تلقائيًا من فرق الوارد والصادر المسجّلين فعليًا، مش رقم ثابت بيتكتب يدوي — فأي حركة جديدة بتحدّث الرصيد فورًا.' } },
+  { title:'9. الإضاءة', icon:'💡',
+    content:`نفس فلسفة الكاميرات بالظبط: إضاءة تحتاج إصلاح بتتسجّل بمشكلتها وصورتها، ولما تتصلح بتترحّل لـ"تم إصلاحها" مع صورة قبل/بعد، وبتفضل نفس السجل (نفس Lighting ID) طول الوقت مع الاحتفاظ بسجل كل الإصلاحات اللي حصلتلها من الأول.`,
+    qa:{ q:'إزاي متابعين تاريخ إصلاح الإضاءة؟', a:'كل إضاءة ليها سجل واحد ثابت بيتراكم عليه كل عملية إصلاح بتاريخها، مش سجل جديد كل مرة — فتقدر تشوف تاريخها بالكامل من أول مشكلة اتسجّلت.' } },
+  { title:'10. المهام والمتابعة', icon:'✅',
+    content:`تقدر تعيّن مهمة لأي فني بعنوان وتاريخ استحقاق وأولوية، والفني يقدر يحدّث حالتها (قيد الانتظار/قيد التنفيذ/مكتملة). لو المهمة اتقفلت بحالة "مكتملة"، تاريخ الإكمال بيتسجّل تلقائيًا. وتقدر تعدّل نفس المهمة أكتر من مرة من غير ما تتكرر.`,
+    qa:{ q:'إزاي بتتابعوا مهام الفنيين؟', a:'كل مهمة معينة لفني معين بتاريخ استحقاق وأولوية، وحالتها بتتحدّث لحظيًا، وأي تعديل عليها بيدخل على نفس السجل بدون تكرار.' } },
+  { title:'11. مركز التقارير والتصدير الشامل', icon:'📊',
+    content:`أي قسم في التطبيق تقدر تصدّره بـ8 صيغ مختلفة (PDF, Excel, Word, PowerPoint, CSV, JSON, صورة, ZIP). و"التصدير الشامل" تحديدًا بيجمع كل بيانات التطبيق بدون استثناء — كل المصانع، كل الأقسام، كل الصور، كل الخرائط بحالتها المحفوظة — في ملف واحد شامل، مش نسخة مختصرة.`,
+    qa:{ q:'إيه فايدة "التصدير الشامل" بالظبط؟', a:'بيجمّع كل بيانات التطبيق من كل قسم في ملف واحد كامل بكل الصيغ المطلوبة، بما فيها الصور والخرائط بآخر حالة محفوظة — يعني نسخة كاملة جاهزة للأرشفة أو العرض في أي وقت.' } },
+  { title:'12. سجل التدقيق (Audit Log)', icon:'🔐',
+    content:`كل عملية إضافة أو تعديل أو حذف في التطبيق بتتسجّل تلقائيًا: مين عملها، إمتى، وإيه القيمة القديمة والجديدة لو كان تعديل. ده بيدّينا تاريخ كامل قابل للمراجعة والتصدير في أي وقت، وبيمنع إن حد يعمل تعديل من غير ما يبقى فيه أثر مسجّل.`,
+    qa:{ q:'إزاي بتضمنوا المسؤولية عن أي تعديل؟', a:'كل عملية في التطبيق بتتسجّل تلقائيًا في سجل تدقيق يوضّح مين عملها وإمتى، وده بيدّينا شفافية كاملة وقابلية للمراجعة وقت ما نحتاج.' } },
+  { title:'13. الصلاحيات', icon:'👤',
+    content:`النظام فيه مستويات صلاحيات مختلفة (أدمن، مدير، مشرف، زميل) وكمان صلاحيات دقيقة زي رفع الصور أو التصدير أو الوصول لسجل التدقيق. الأدمن بس هو اللي يقدر يمنح أو يسحب أي صلاحية، وده بيضمن إن كل حد يشوف ويعدّل بس اللي مسموحله بيه.`,
+    qa:{ q:'مين اللي بيتحكم في صلاحيات المستخدمين؟', a:'الأدمن بس هو اللي يقدر يمنح أو يسحب أي صلاحية من أي مستخدم، وده بيضمن تحكّم مركزي واضح في مين يشوف ويعدّل إيه.' } },
+];
+const TRAINING_QUIZ_BANK = [
+  { q:'ليه اتعمل التطبيق؟', a:'عشان نوقف الاعتماد على المكالمات والذاكرة، ونوثّق كل حاجة (كاميرات، أعطال، صيانة) في نظام واحد موحّد يقدر يوصله أي حد في الفريق فورًا.' },
+  { q:'إيه فايدة Factory ID؟', a:'بيربط كل البيانات (كاميرا، عطل، مخزن) بمعرّف ثابت للمصنع، فمفيش خلط بين بيانات المصانع حتى لو الاسم اتغيّر.' },
+  { q:'إزاي بتشتغل دورة الكاميرا من البداية للنهاية؟', a:'جديدة → تعمل → (لو حصلها عطل) منقطعة → تم تشغيلها بعد الإصلاح، أو تحتاج تعديل → تم تعديلها — كل ده على نفس سجل الكاميرا من غير تكرار.' },
+  { q:'إزاي بيتم تسجيل الأعطال؟', a:'بوصف المشكلة والخطورة والإجراء، مع حساب SLA تلقائي وتصعيد أوتوماتيك لو اتأخر الحل عن الوقت المسموح.' },
+  { q:'إزاي بتشتغل الخرائط؟', a:'فيه خريطة تفاعلية بتربط علامات ببيانات حقيقية للأجهزة، وخريطة يدوية محرر رسم حر بيحفظ كل تعديل بشكل دائم، والاتنين بيدعموا زوم بلا حدود.' },
+  { q:'إزاي بيتم ربط المصانع بالشبكة المركزية؟', a:'عن طريق أبراج أنتنة وروابط لاسلكية بين كل مصنع والمصنع المركزي، وكل رابط له حالة اتصال واضحة بنتابعها لحظيًا.' },
+  { q:'إزاي بتشتغل التقارير؟', a:'أي قسم تقدر تصدّره بـ8 صيغ مختلفة، بالبيانات والصور والرسوم البيانية الفعلية، مش نسخة مختصرة أو بيانات وهمية.' },
+  { q:'إيه فايدة التصدير الشامل؟', a:'بيجمع كل بيانات التطبيق من كل قسم في ملف واحد شامل بدون استثناء، بما فيها الصور والخرائط بحالتها المحفوظة.' },
+  { q:'إزاي بيتم حفظ الصور؟', a:'كل صورة بتترفع لتخزين سحابي وبترتبط مباشرة بالسجل الخاص بيها (كاميرا/عطل/صنف)، وبتتضمّن فعليًا في التقارير مش كرابط بس.' },
+  { q:'إيه فايدة سجل التدقيق (Audit Log)؟', a:'بيسجّل كل عملية إضافة أو تعديل أو حذف تلقائيًا مع مين عملها وإمتى، وده بيدّي شفافية ومسؤولية كاملة قابلة للمراجعة.' },
+  { q:'إزاي بيتم منع اختلاط بيانات المصانع؟', a:'كل سجل مربوط بمعرّف فريد للمصنع (Factory ID) داخل قاعدة البيانات، مش باسم المصنع كنص، فمفيش احتمال خلط.' },
+];
+let trainingLessonIndex = 0, trainingMode = 'lessons';
+function renderTrainingView(){
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🎓 شرح التطبيق وطريقة العمل</h2></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">قسم خاص للتدريب والاستعداد لعرض المشروع أمام الإدارة.</p>
+    <div class="btn-row" style="margin-bottom:10px">
+      <button class="btn sm ${trainingMode==='lessons'?'primary':''}" onclick="setTrainingMode('lessons')">📚 خطوة بخطوة</button>
+      <button class="btn sm ${trainingMode==='quiz'?'primary':''}" onclick="setTrainingMode('quiz')">🎯 اختبرني</button>
+      <button class="btn sm ${trainingMode==='summary'?'primary':''}" onclick="setTrainingMode('summary')">⭐ ملخص 5 دقائق</button>
+    </div>
+    <div id="trainingContentHost"></div>
+  </div>`;
+}
+function setTrainingMode(mode){ trainingMode = mode; if(mode==='lessons') trainingLessonIndex=0; renderTrainingContent(); }
+function renderTrainingContent(){
+  const host = document.getElementById('trainingContentHost');
+  if(!host) return;
+  if(trainingMode==='lessons'){
+    const l = TRAINING_LESSONS[trainingLessonIndex];
+    host.innerHTML = `
+      <div class="site-card">
+        <div class="site-name" style="font-size:15px">${l.icon} ${l.title}</div>
+        <p style="font-size:13px;line-height:1.9;margin-top:8px">${l.content}</p>
+        <div style="background:var(--bg-2);border-radius:10px;padding:10px;margin-top:10px">
+          <div style="font-size:11.5px;color:var(--accent);font-weight:700">❓ سؤال محتمل من الإدارة:</div>
+          <div style="font-size:12.5px;margin:4px 0">${l.qa.q}</div>
+          <div style="font-size:11.5px;color:var(--success);font-weight:700;margin-top:6px">💬 إجابة مقترحة:</div>
+          <div style="font-size:12.5px">${l.qa.a}</div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn sm" ${trainingLessonIndex<=0?'disabled':''} onclick="navTrainingLesson(-1)">→ السابق</button>
+        <span style="font-size:11px;align-self:center;color:var(--muted-2)">${trainingLessonIndex+1} / ${TRAINING_LESSONS.length}</span>
+        <button class="btn sm primary" ${trainingLessonIndex>=TRAINING_LESSONS.length-1?'disabled':''} onclick="navTrainingLesson(1)">التالي ←</button>
+      </div>`;
+  } else if(trainingMode==='quiz'){
+    if(!window.__currentQuizQ) window.__currentQuizQ = TRAINING_QUIZ_BANK[Math.floor(Math.random()*TRAINING_QUIZ_BANK.length)];
+    const q = window.__currentQuizQ;
+    host.innerHTML = `
+      <div class="site-card">
+        <div style="font-size:11.5px;color:var(--accent);font-weight:700">❓ السؤال:</div>
+        <div style="font-size:14px;margin:8px 0">${q.q}</div>
+        <p style="font-size:11px;color:var(--muted-2)">جاوب في دماغك الأول، بعدين دوس "اعرض الإجابة".</p>
+        <button class="btn sm" onclick="document.getElementById('quizAnswerBox').style.display='block'">👁️ اعرض الإجابة</button>
+        <div id="quizAnswerBox" style="display:none;background:var(--bg-2);border-radius:10px;padding:10px;margin-top:10px">
+          <div style="font-size:11.5px;color:var(--success);font-weight:700">✅ الإجابة النموذجية:</div>
+          <div style="font-size:12.5px;margin-top:4px">${q.a}</div>
+        </div>
+      </div>
+      <button class="btn primary block" style="margin-top:10px" onclick="window.__currentQuizQ=null; renderTrainingContent();">🔄 سؤال تاني</button>`;
+  } else if(trainingMode==='summary'){
+    host.innerHTML = `
+      <div class="site-card">
+        <div class="site-name" style="font-size:14px">⭐ ملخص المشروع في 5 دقائق</div>
+        <p style="font-size:13px;line-height:2;margin-top:10px">
+          التطبيق ده بديل رقمي كامل لمتابعة غرفة المراقبة المركزية لكل المصانع. كل مصنع مسجّل بمعرّف ثابت (Factory ID) وكل بياناته — الكاميرات، الشاشات، الأعطال، الصيانة، البنية التحتية للشبكة (Racks/Switches/Servers/UPS)، الإضاءة، المخازن — مربوطة بيه من غير أي تكرار أو خلط.<br><br>
+          الكاميرا بتتابَع في دورة حياة كاملة من "جديدة" لحد "منقطعة" و"تم تشغيلها"، والأعطال بتتصعّد تلقائيًا لو اتأخر حلها. فيه خريطتين — تفاعلية مربوطة ببيانات حقيقية، ويدوية للرسم الحر — والاتنين بيحفظوا حالتهم بالكامل. المصانع البعيدة بتتوصل بالشبكة عن طريق أبراج أنتنة وروابط لاسلكية بحالة اتصال واضحة.<br><br>
+          أي قسم تقدر تصدّره بـ8 صيغ مختلفة، و"التصدير الشامل" بيجمع كل بيانات التطبيق في ملف واحد. كل عملية بتتسجّل في سجل تدقيق يوضّح مين عملها وإمتى، والصلاحيات بيتحكّم فيها الأدمن بس.<br><br>
+          النتيجة: بدل الاعتماد على المكالمات والذاكرة، بقى عندنا نظام موحّد بيوثّق كل حاجة، بيسهّل استخراج التقارير، وبيدعم اتخاذ القرار بسرعة وبدقة.
+        </p>
+      </div>`;
+  }
+}
+function navTrainingLesson(delta){ trainingLessonIndex = Math.max(0, Math.min(TRAINING_LESSONS.length-1, trainingLessonIndex+delta)); renderTrainingContent(); }
 function renderMyTasksView(){
   return `<div class="view active">
     <div class="section-title" style="margin-top:0"><h2>📋 مهامي</h2>
