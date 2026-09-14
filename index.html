@@ -6278,7 +6278,9 @@ async function openLayoutServerMarkers(layoutId, factoryId){
   layoutMarkerData = { cameras:cams, screens:scr, racks:rck, switches:swt, servers:srv, ups:ups, towers:twr };
   currentLayoutMarkers = markers;
   pendingMarkerCoords = null; layoutMarkerSearch = '';
-  window.__currentMarkerLayout = { layoutId, factoryId, imageUrl: l.file_url };
+  // مهم: الخريطة التفاعلية لازم تستخدم الخلفية الأصلية النظيفة دايمًا، مش آخر نسخة
+  // معدَّلة يدويًا (بالأسهم والأشكال) — عشان الخريطتين يفضلوا مستقلتين تمامًا عن بعض
+  window.__currentMarkerLayout = { layoutId, factoryId, imageUrl: l.original_file_url || l.file_url };
   // استرجاع آخر حالة زوم/تمركز محفوظة لهذه الخريطة بالذات
   try{
     const saved = JSON.parse(localStorage.getItem('rc_layout_view_'+layoutId) || 'null');
@@ -6353,14 +6355,17 @@ function renderLayoutMarkersModal(){
     </div>
     ${pendingMarkerCoords ? `
       <div class="field" style="margin-top:10px"><label>نوع العنصر</label>
-        <select class="input" id="pendingMarkerType" onchange="onPendingMarkerTypeChange()">${Object.entries(MARKER_TYPES).map(([t,c])=>`<option value="${t}">${c.icon} ${c.label}</option>`).join('')}</select>
+        <select class="input" id="pendingMarkerType" onchange="onPendingMarkerTypeChange()">${Object.entries(MARKER_TYPES).map(([t,c])=>`<option value="${t}" ${window.__pendingMarkerForcedType===t?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select>
       </div>
       <div class="field"><label>اختر السجل</label><select class="input" id="pendingMarkerRef"></select></div>
       <div class="btn-row">
         <button class="btn primary sm" id="saveMarkerBtn" onclick="this.disabled=true; this.textContent='جاري الحفظ...'; saveLayoutMarker()">💾 حفظ العلامة</button>
         <button class="btn sm" onclick="pendingMarkerCoords=null; renderLayoutMarkersModal()">إلغاء</button>
       </div>` : ''}
-    ${isAdmin() && !pendingMarkerCoords ? `<button class="btn primary sm block" style="margin-top:10px" onclick="startAddingMarker()">+ إضافة عنصر جديد على الخريطة</button>
+    ${isAdmin() && !pendingMarkerCoords ? `<div class="btn-row" style="margin-top:10px">
+      <button class="btn primary sm" onclick="startAddingMarker('camera')">📷 إضافة كاميرا سريعًا</button>
+      <button class="btn sm" onclick="startAddingMarker()">+ إضافة عنصر آخر</button>
+      </div>
       <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 بعد الضغط فوق، دوس في أي مكان على الصورة لتحديد الموضع. تقدر كمان تسحب أي علامة موجودة لمكان جديد مباشرة.</p>`:''}
     ${!isAdmin() ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:10px">💡 دوس على أي علامة لعرض بياناتها الكاملة.</p>`:''}
   `;
@@ -6423,7 +6428,7 @@ async function composeLayoutImageWithMarkers(layout, factoryData){
   };
   const img = await new Promise((resolve,reject)=>{
     const im = new Image(); im.crossOrigin = 'anonymous';
-    im.onload = ()=> resolve(im); im.onerror = reject; im.src = layout.file_url;
+    im.onload = ()=> resolve(im); im.onerror = reject; im.src = layout.original_file_url || layout.file_url;
   }).catch(()=>null);
   if(!img) return null;
   const scale = 2;
@@ -6505,7 +6510,7 @@ function toggleLayoutLayer(type){
   localStorage.setItem('rc_layout_layers', JSON.stringify(layoutLayerVisibility));
   renderLayoutMarkersModal();
 }
-function startAddingMarker(){
+function startAddingMarker(forcedType){
   const wrap = document.getElementById('layoutMarkerImgWrap');
   toast('دوس على مكان العنصر على الخريطة');
   const handler = (evt)=>{
@@ -6515,6 +6520,7 @@ function startAddingMarker(){
     const x = ((cx - rect.left) / rect.width) * 100;
     const y = ((cy - rect.top) / rect.height) * 100;
     pendingMarkerCoords = {x: Math.max(1,Math.min(99,x)), y: Math.max(1,Math.min(99,y))};
+    window.__pendingMarkerForcedType = forcedType || null;
     wrap.removeEventListener('click', handler);
     renderLayoutMarkersModal();
   };
