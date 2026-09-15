@@ -359,6 +359,15 @@ async function ensureQrLib(){
   return QR_LIB_READY;
 }
 let PPTX_LIB_READY = false, ZIP_LIB_READY = false;
+let DOCX_LIB_READY = false;
+async function ensureDocxLib(){
+  if(typeof docx !== 'undefined'){ DOCX_LIB_READY = true; return true; }
+  DOCX_LIB_READY = await loadScriptWithFallback([
+    'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js',
+    'https://unpkg.com/docx@8.5.0/build/index.js'
+  ]);
+  return DOCX_LIB_READY;
+}
 async function ensurePptxLib(){
   if(typeof PptxGenJS !== 'undefined'){ PPTX_LIB_READY = true; return true; }
   PPTX_LIB_READY = await loadScriptWithFallback([
@@ -2334,21 +2343,37 @@ async function exportPdfReport(){
 }
 
 /* ============================================================
-   تصدير Word (HTML متوافق مع Word)
+   تصدير Word — محرك DOCX حقيقي (Office Open XML) بدعم RTL كامل
    ============================================================ */
 async function exportWordReport(){
+  const ok = await ensureDocxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Word'); return; }
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
   const sites = factoriesData.map(computeFactory);
   const t = computeTotals(sites);
   const m = reportMeta;
-  const html = `<html><head><meta charset="utf-8"><style>body{font-family:Arial;direction:rtl;text-align:right}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px}th{background:#0B1220;color:#fff}</style></head>
-  <body><h2 style="text-align:center">تقرير الحالة اليومية لغرفة المراقبة المركزية</h2>
-  <p>التاريخ: ${fmtDateAr(m.date)} — الوردية: ${m.shift} — معد التقرير: ${m.preparer||'—'}</p>
-  <table><tr><th>المصنع</th><th>الشاشات</th><th>منقطعة</th><th>الكاميرات</th><th>تعمل</th><th>منقطعة</th><th>النسبة</th></tr>
-  ${sites.map(s=>`<tr><td>${s.name}</td><td>${s.screens}</td><td>${s.screensDown}</td><td>${s.camerasTotal}</td><td>${s.camerasUp}</td><td>${s.camerasDown}</td><td>${fmtPct2(s.camUptime)}</td></tr>`).join('')}
-  <tr style="font-weight:bold"><td>الإجمالي</td><td>${t.screens}</td><td>${t.screensDown}</td><td>${t.camerasTotal}</td><td>${t.camerasUp}</td><td>${t.camerasDown}</td><td>${fmtPct2(t.camUptime)}</td></tr></table>
-  <p style="text-align:center;margin-top:20px;color:#666">إعداد وتشغيل النظام: إبراهيم رمضان</p></body></html>`;
-  const blob = new Blob(['\ufeff', html], {type:'application/msword'});
-  await saveOrShareFile(blob, `تقرير-${m.date}.doc`);
+  const headers = ['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة','النسبة'];
+  const cell = (text, isHeader, isTotal) => new TableCell({
+    width:{size:Math.floor(100/headers.length), type:WidthType.PERCENTAGE},
+    shading: isHeader ? {type:ShadingType.CLEAR, fill:'0B1220'} : undefined,
+    children:[new Paragraph({ bidirectional:true, alignment:AlignmentType.RIGHT,
+      children:[new TextRun({text:String(text), bold:isHeader||isTotal, color:isHeader?'FFFFFF':'000000'})] })]
+  });
+  const headerRow = new TableRow({ tableHeader:true, children: headers.map(h=>cell(h,true)) });
+  const dataRows = sites.map(s=> new TableRow({ children:[s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown,fmtPct2(s.camUptime)].map(v=>cell(v,false)) }));
+  const totalRow = new TableRow({ children:['الإجمالي',t.screens,t.screensDown,t.camerasTotal,t.camerasUp,t.camerasDown,fmtPct2(t.camUptime)].map((v,i)=>cell(v,false,true)) });
+  const table = new Table({ rows:[headerRow, ...dataRows, totalRow], width:{size:100,type:WidthType.PERCENTAGE} });
+  const doc = new Document({ sections:[{ children:[
+    new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, heading:HeadingLevel.HEADING_1, children:[new TextRun({text:'تقرير الحالة اليومية لغرفة المراقبة المركزية', bold:true})] }),
+    new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, children:[new TextRun({text:`التاريخ: ${fmtDateAr(m.date)} — الوردية: ${m.shift} — معد التقرير: ${m.preparer||'—'}`, color:'666666', size:20})] }),
+    new Paragraph({text:''}),
+    table,
+    new Paragraph({text:''}),
+    new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, children:[new TextRun({text:'إعداد وتشغيل النظام: إبراهيم رمضان', color:'999999', size:16})] })
+  ]}]});
+  let blob;
+  try{ blob = await Packer.toBlob(doc); }catch(e){ console.error(e); toast('🚫 تعذّر إنشاء ملف Word: '+(e.message||'')); return; }
+  if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف Word (الملف فارغ أو تالف)'); return; }
+  await saveOrShareFile(blob, `تقرير-${m.date}.docx`);
 }
 
 /* ============================================================
@@ -9519,14 +9544,153 @@ async function unifiedExportPdf(title, headers, rows, opts){
   if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف PDF (الملف فارغ أو تالف)'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pdf`);
 }
+function base64DataUriToUint8Array(dataUri){
+  const base64 = dataUri.split(',')[1];
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+/* ============================================================================
+   🔧 محرك DOCX الموحّد — المصدر الوحيد لإنشاء أي ملف Word في التطبيق كله
+   ============================================================================
+   بيحوّل أي HTML تقرير (نفس دوال بناء التقارير الموجودة بالفعل، من غير أي
+   حذف أو إعادة كتابة لمنطقها) لعناصر Word حقيقية: Paragraph/Table/ImageRun
+   فعلية بصيغة Office Open XML — مش HTML متنكّر في .doc إطلاقًا.
+   أي زر "Word" في أي مكان في التطبيق لازم يمرّ من هنا وبس.
+   ============================================================================ */
+async function htmlToDocxChildren(bodyHtml){
+  const { Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
+  const container = document.createElement('div');
+  container.innerHTML = bodyHtml;
+  const children = [];
+
+  function imgToRun(imgEl, w, h){
+    const src = imgEl.getAttribute('src') || '';
+    if(!src.startsWith('data:image/')) return null; // رابط بدل صورة حقيقية — نتجاهله بأمان بدل ما نكسر الملف
+    try{
+      const type = src.includes('image/png') ? 'png' : 'jpg';
+      return new ImageRun({ data: base64DataUriToUint8Array(src), transformation:{ width:w||70, height:h||70 }, type });
+    }catch(e){ return null; }
+  }
+  function textParagraph(text, opts={}){
+    return new Paragraph({ bidirectional:true, alignment: opts.center?AlignmentType.CENTER:AlignmentType.RIGHT,
+      heading: opts.heading, children:[new TextRun({ text: String(text||''), bold: opts.bold, color: opts.color, size: opts.size })] });
+  }
+  function walkTable(tableEl){
+    const trs = Array.from(tableEl.querySelectorAll('tr'));
+    const rows = trs.map(tr=>{
+      const cellEls = Array.from(tr.children);
+      const isHeaderRow = cellEls.length>0 && cellEls.every(c=>c.tagName.toLowerCase()==='th');
+      const cells = cellEls.map(cEl=>{
+        const imgs = Array.from(cEl.querySelectorAll('img'));
+        if(imgs.length){
+          const paras = imgs.map(im=>{ const run = imgToRun(im,55,55); return run ? new Paragraph({alignment:AlignmentType.CENTER, children:[run]}) : null; }).filter(Boolean);
+          return new TableCell({ children: paras.length?paras:[new Paragraph({bidirectional:true, alignment:AlignmentType.RIGHT, children:[new TextRun({text:'لا توجد صورة مسجلة', italics:true, color:'999999'})]})] });
+        }
+        return new TableCell({
+          shading: isHeaderRow ? {type:ShadingType.CLEAR, fill:'0B1220'} : undefined,
+          children:[new Paragraph({ bidirectional:true, alignment:AlignmentType.RIGHT,
+            children:[new TextRun({ text: cEl.textContent.trim(), bold: isHeaderRow, color: isHeaderRow?'FFFFFF':'000000', size:18 })] })]
+        });
+      });
+      return new TableRow({ tableHeader: isHeaderRow, cantSplit: !isHeaderRow, children: cells });
+    });
+    if(!rows.length) return null;
+    return new Table({ rows, width:{size:100, type:WidthType.PERCENTAGE} });
+  }
+  function walk(node){
+    Array.from(node.children).forEach(el=>{
+      const tag = el.tagName.toLowerCase();
+      if(tag==='h1') children.push(textParagraph(el.textContent, {center:true, bold:true, heading:HeadingLevel.HEADING_1}));
+      else if(tag==='h2') children.push(textParagraph(el.textContent, {center:true, bold:true, heading:HeadingLevel.HEADING_2}));
+      else if(tag==='h3') children.push(textParagraph(el.textContent, {bold:true, heading:HeadingLevel.HEADING_3}));
+      else if(tag==='table'){ const t = walkTable(el); if(t){ children.push(t); children.push(new Paragraph({text:''})); } }
+      else if(tag==='img'){ const run = imgToRun(el, 260, 150); if(run) children.push(new Paragraph({alignment:AlignmentType.CENTER, children:[run]})); }
+      else if(tag==='p') children.push(textParagraph(el.textContent, {color:'444444', size:19}));
+      else walk(el); // div/section وغيرهم — نغوص جواهم عشان نلاقي المحتوى الحقيقي بداخلهم
+    });
+  }
+  walk(container);
+  return children;
+}
+async function buildDocxBlobFromHtml(title, bodyHtml){
+  const ok = await ensureDocxLib(); if(!ok) return null;
+  const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = docx;
+  const children = await htmlToDocxChildren(bodyHtml);
+  const doc = new Document({ sections:[{ children:[
+    new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, heading:HeadingLevel.HEADING_1, children:[new TextRun({text:title, bold:true})] }),
+    new Paragraph({text:''}),
+    ...children
+  ]}]});
+  try{ return await Packer.toBlob(doc); }catch(e){ console.error('فشل بناء ملف DOCX من المحرك الموحّد:', e); return null; }
+}
 async function unifiedExportWord(title, headers, rows, opts){
+  const ok = await ensureDocxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Word'); return; }
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
-  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-    <head><meta charset="utf-8"><style>body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:5px;font-size:10pt;} th{background:#0B1220;color:#fff;}</style></head>
-    <body><h1 style="text-align:center">${title}</h1><p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')}</p>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}</body></html>`;
-  const blob = new Blob(['\ufeff', html], {type:'application/msword'});
-  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.doc`);
+  const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
+  const finalHeaders = hasImgs ? [...headers, 'الصور'] : headers;
+  const colPct = Math.floor(100/finalHeaders.length);
+
+  const textCell = (text, isHeader) => new TableCell({
+    width: { size: colPct, type: WidthType.PERCENTAGE },
+    shading: isHeader ? { type: ShadingType.CLEAR, fill: '0B1220' } : undefined,
+    children: [new Paragraph({ bidirectional:true, alignment: AlignmentType.RIGHT,
+      children:[new TextRun({ text: String(text??''), bold: !!isHeader, color: isHeader?'FFFFFF':'000000' })] })]
+  });
+  const imageCell = (images) => {
+    const children = [];
+    images.forEach(im=>{
+      const dataUri = __imgDataCache[im.url];
+      if(!dataUri) return;
+      try{
+        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({
+          data: base64DataUriToUint8Array(dataUri), transformation:{width:65,height:65},
+          type: dataUri.includes('image/png')?'png':'jpg'
+        }) ] }));
+      }catch(e){ console.warn('تعذّر تضمين صورة في Word', e); }
+    });
+    if(!children.length) children.push(new Paragraph({ bidirectional:true, alignment:AlignmentType.RIGHT, children:[new TextRun({text:'لا توجد صورة مسجلة', italics:true, color:'999999'})] }));
+    return new TableCell({ width:{size:colPct, type:WidthType.PERCENTAGE}, children });
+  };
+
+  const headerRow = new TableRow({ tableHeader:true, children: finalHeaders.map(h=> textCell(h, true)) });
+  const dataRows = rows.map((r,i)=>{
+    const cells = r.map(c=> textCell(c, false));
+    if(hasImgs) cells.push(imageCell(unifiedRowImages(opts,i)));
+    return new TableRow({ cantSplit:true, children: cells });
+  });
+  const table = new Table({ rows:[headerRow, ...dataRows], width:{size:100, type:WidthType.PERCENTAGE} });
+
+  const chartParagraphs = [];
+  if(opts?.chartImages?.length){
+    opts.chartImages.forEach(c=>{
+      try{
+        chartParagraphs.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({
+          data: base64DataUriToUint8Array(c.dataUrl), transformation:{width:400,height:150}, type:'png'
+        }) ] }));
+        chartParagraphs.push(new Paragraph({ alignment: AlignmentType.CENTER, bidirectional:true, children:[new TextRun({text:c.title, size:18, color:'666666'})] }));
+      }catch(e){}
+    });
+  }
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph({ alignment: AlignmentType.CENTER, bidirectional:true, heading: HeadingLevel.HEADING_1, children:[new TextRun({text:title, bold:true})] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, bidirectional:true, children:[new TextRun({text:`${new Date().toLocaleDateString('ar-EG')} — ${rows.length} سجل`, color:'666666', size:20})] }),
+        new Paragraph({text:''}),
+        ...chartParagraphs,
+        table
+      ]
+    }]
+  });
+  let blob;
+  try{ blob = await Packer.toBlob(doc); }catch(e){ console.error(e); toast('🚫 تعذّر إنشاء ملف Word: '+(e.message||'')); return; }
+  if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف Word (الملف فارغ أو تالف)'); return; }
+  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.docx`);
 }
 async function unifiedExportExcel(title, headers, rows, opts){
   const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
@@ -9702,7 +9866,8 @@ async function unifiedExportZip(title, headers, rows, opts){
   folder.file('البيانات.csv', '\ufeff'+[headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n'));
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
-  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body><h1>${title}</h1>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}</body></html>`);
+  const docxBlob = await buildDocxBlobFromHtml(title, `${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`);
+  if(docxBlob) folder.file('التقرير.docx', docxBlob);
   if(opts?.chartImages?.length){
     const chartsFolder = folder.folder('الرسوم البيانية');
     opts.chartImages.forEach(c=> chartsFolder.file(`${c.title}.png`, c.dataUrl.split(',')[1], {base64:true}));
@@ -10121,12 +10286,10 @@ async function generateFullFactoryReport(factoryId, format){
   const bodyHtml = await buildFullFactoryReportHtml(d);
 
   if(format==='word'){
-    const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head><meta charset="utf-8"><style>@page{size:21cm 29.7cm;margin:2cm;} body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:4px;font-size:9.5pt;} th{background:#0B1220;color:#fff;}</style></head>
-      <body>${bodyHtml}</body></html>`;
-    const blob = new Blob(['\ufeff', html], {type:'application/msword'});
+    const blob = await buildDocxBlobFromHtml(`تقرير شامل - ${d.f?d.f.name:''}`, bodyHtml);
+    if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف Word (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
     closeModal();
-    await saveOrShareFile(blob, `تقرير-شامل-${d.f?d.f.name:''}-${new Date().toISOString().slice(0,10)}.doc`);
+    await saveOrShareFile(blob, `تقرير-شامل-${d.f?d.f.name:''}-${new Date().toISOString().slice(0,10)}.docx`);
     await logAudit('إنشاء تقرير مصنع شامل (Word)', d.f?d.f.name:factoryId);
     return;
   }
@@ -10369,7 +10532,8 @@ async function generateFactoryZipReport(factoryId){
   const folder = zip.folder(`تقرير-شامل-${fname}-${new Date().toISOString().slice(0,10)}`);
   folder.file('البيانات.json', JSON.stringify(d,null,2));
   const bodyHtml = await buildFullFactoryReportHtml(d);
-  folder.file('التقرير.doc', '\ufeff'+`<html><head><meta charset="utf-8"></head><body>${bodyHtml}</body></html>`);
+  const docxBlob2 = await buildDocxBlobFromHtml(`تقرير شامل - ${fname}`, bodyHtml);
+  if(docxBlob2) folder.file('التقرير.docx', docxBlob2);
   if(await ensurePdfLib()){
     const el = document.createElement('div'); el.innerHTML = bodyHtml; document.body.appendChild(el);
     const pdfBlob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
@@ -10875,12 +11039,10 @@ async function exportAllWord(){
   toast('جاري تجميع كل بيانات التطبيق والصور...');
   try{
     const d = await gatherAllAppData();
-    const bodyHtml = (await buildAllReportHtml(d)).replace('direction:rtl;font-family:Arial;color:#0B1220;padding:10px', 'direction:rtl;font-family:Arial;text-align:right');
-    const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head><meta charset="utf-8"><style>@page{size:21cm 29.7cm;margin:2cm;} body{font-family:Arial;direction:rtl;} table{border-collapse:collapse;width:100%;} td,th{border:1px solid #333;padding:5px;font-size:10.5pt;} th{background:#0B1220;color:#fff;}</style></head>
-      <body>${bodyHtml}</body></html>`;
-    const blob = new Blob(['\ufeff', html], {type:'application/msword'});
-    await saveOrShareFile(blob, exportCenterFilename('doc'));
+    const bodyHtml = await buildAllReportHtml(d);
+    const blob = await buildDocxBlobFromHtml('التصدير الشامل لكل بيانات التطبيق', bodyHtml);
+    if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف Word (الملف فارغ أو تالف) — جرّب مرة أخرى'); return; }
+    await saveOrShareFile(blob, exportCenterFilename('docx'));
     await logAudit('تصدير شامل Word', `${d.sites.length} مصنع`);
   }catch(e){ console.error(e); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
 }
@@ -11104,8 +11266,8 @@ async function exportAllFormats(){
     folder.file('التقرير-الشامل.csv', csvLines.join('\n'));
 
     const reportHtmlBody = await buildAllReportHtml(d); // بالصور المضمّنة (Base64) — تُحسب مرة واحدة وتُستخدم لـ Word وPDF معًا
-    const wordHtml = `<html><head><meta charset="utf-8"></head><body>${reportHtmlBody}</body></html>`;
-    folder.file('التقرير-الشامل.doc', '\ufeff'+wordHtml);
+    const docxBlob3 = await buildDocxBlobFromHtml('التصدير الشامل لكل بيانات التطبيق', reportHtmlBody);
+    if(docxBlob3) folder.file('التقرير-الشامل.docx', docxBlob3);
 
     if(await ensurePdfLib()){
       const el = document.createElement('div'); el.innerHTML = reportHtmlBody;
