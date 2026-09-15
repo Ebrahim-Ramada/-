@@ -3408,7 +3408,7 @@ async function openDeviceStatsOverviewExportPicker(view){
   const byStatus = {}; rows.forEach(r=> byStatus[r.status||'غير محدد'] = (byStatus[r.status||'غير محدد']||0)+1);
   const byFactoryCount = {};
   rows.forEach(r=>{ const fn=factoriesData.find(x=>x.id===r.factory_id)?.name||'—'; byFactoryCount[fn]=(byFactoryCount[fn]||0)+1; });
-  const chartImages = [...buildCameraTypeChartPngs(byFactoryCount,{},{}), ...buildCameraTypeChartPngs(byStatus,{},{})];
+  const chartImages = [buildGenericBarChartPng(byFactoryCount,'عدد كل مصنع'), buildGenericBarChartPng(byStatus,'الحالة')].filter(Boolean);
   if(cfg.hasBrand){
     const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
     const brandChart = buildCameraTypeChartPngs(byBrand,{},{})[0];
@@ -3432,7 +3432,7 @@ function renderDeviceStatsContent(view, cfg){
   const rows = deviceStatsRawData;
   if(!rows.length){ host.innerHTML = '<div class="empty">لا توجد بيانات مسجلة لهذا المصنع.</div>'; return; }
   const byStatus = {}; rows.forEach(r=> byStatus[r.status||'غير محدد'] = (byStatus[r.status||'غير محدد']||0)+1);
-  const charts = [buildCameraTypeChartPngs(byStatus, {}, {})[0]];
+  const charts = [buildGenericBarChartPng(byStatus, 'الحالة')];
   if(cfg.hasBrand){
     const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
     const brandChart = buildCameraTypeChartPngs(byBrand, {}, {})[0];
@@ -3476,7 +3476,7 @@ async function openDeviceStatsExportPicker(view){
   const headers = [cfg.title, 'الحالة', ...cfg.extraFields.map(ef=>ef.label), 'ملاحظات'];
   const data = rows.map(r=>[r[cfg.nameField]||'—', r.status||'—', ...cfg.extraFields.map(ef=>r[ef.key]??''), r.notes||'']);
   const byStatus = {}; rows.forEach(r=> byStatus[r.status||'غير محدد'] = (byStatus[r.status||'غير محدد']||0)+1);
-  const chartImages = buildCameraTypeChartPngs(byStatus, {}, {});
+  const chartImages = [buildGenericBarChartPng(byStatus, 'الحالة')].filter(Boolean);
   if(cfg.hasBrand){
     const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
     const brandChart = buildCameraTypeChartPngs(byBrand,{},{})[0];
@@ -3565,6 +3565,30 @@ function renderCameraTypeStatsContent(rows, factoryId){
     <div id="ctsChartHost" style="margin-top:10px"></div>
     <button class="btn block" style="margin-top:10px" onclick="openCameraTypeStatsExportPicker('${factoryId}')">🖨️ طباعة / تصدير (كل الصيغ)</button>
   `;
+}
+function buildGenericBarChartPng(dataObj, title){
+  const entries = Object.entries(dataObj);
+  if(!entries.length) return null;
+  const scale = 2, W=700*scale, H=260*scale, PAD=30*scale;
+  const cv = document.createElement('canvas'); cv.width=W; cv.height=H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0B1220'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.fillStyle='#38D9C9'; ctx.font=`bold ${13*scale}px Arial`;
+  ctx.fillText(title, W/2, 20*scale);
+  const max = Math.max(...entries.map(e=>e[1]),1);
+  const bw = Math.min(70*scale, (W-PAD*2)/entries.length - 10*scale);
+  entries.forEach(([k,v],i)=>{
+    const x = PAD + i*((W-PAD*2)/entries.length);
+    const h = (v/max)*(H-80*scale);
+    const y = H-40*scale-h;
+    ctx.fillStyle = '#38D9C9';
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x,y,bw,h,4*scale) : ctx.rect(x,y,bw,h); ctx.fill();
+    ctx.fillStyle = '#E9EEFB'; ctx.font = `bold ${11*scale}px Arial`;
+    ctx.fillText(String(v), x+bw/2, y-6*scale);
+    ctx.fillStyle = '#8CA0C4'; ctx.font = `${9.5*scale}px Arial`;
+    ctx.fillText(String(k).slice(0,12), x+bw/2, H-22*scale);
+  });
+  return { title, dataUrl: cv.toDataURL('image/png') };
 }
 function buildCameraTypeChartPngs(byBrand, byRes, byType){
   function drawBarChart(obj, title){
