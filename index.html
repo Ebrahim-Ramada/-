@@ -1596,7 +1596,6 @@ function renderDashboard(){
       <button class="qbtn" onclick="goTo('mytasks')" style="grid-column:1/-1"><span class="qicon">📋</span> مهامي</button>
       <button class="qbtn" onclick="cameraModsTab='تم التعديل'; goTo('cameramods')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات التي تم تعديلها</button>
       <button class="qbtn" onclick="goTo('cameratypestats')" style="grid-column:1/-1"><span class="qicon">📊</span> أنواع الكاميرات بالمصانع</button>
-      ${canAccessTrainingSection() ? `<button class="qbtn" onclick="goTo('training')" style="grid-column:1/-1;border-color:var(--accent)"><span class="qicon">🎓</span> شرح التطبيق وطريقة العمل</button>`:''}
       <button class="qbtn" onclick="goTo('upsstats')"><span class="qicon">🔋</span> UPS</button>
       <button class="qbtn" onclick="goTo('switchesstats')"><span class="qicon">🔀</span> Switches</button>
       <button class="qbtn" onclick="goTo('racksstats')"><span class="qicon">🗄️</span> Racks</button>
@@ -2627,6 +2626,7 @@ function renderSettingsView(){
       <div id="trainingAccessListHost"><div class="empty">جاري التحميل...</div></div>
       <div class="field" style="margin-top:8px"><select class="input" id="trainingGrantUserSelect"></select></div>
       <button class="btn sm primary block" onclick="grantTrainingAccess()">➕ منح صلاحية الوصول لمستخدم</button>
+      <button class="btn block" style="margin-top:8px" onclick="goTo('training')">🎓 فتح القسم الآن (لك أنت بس)</button>
     </div>`:''}
 
     <div class="site-card" style="margin-top:14px">
