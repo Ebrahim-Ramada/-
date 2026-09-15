@@ -361,12 +361,35 @@ async function ensureQrLib(){
 let PPTX_LIB_READY = false, ZIP_LIB_READY = false;
 let DOCX_LIB_READY = false;
 async function ensureDocxLib(){
-  if(typeof docx !== 'undefined'){ DOCX_LIB_READY = true; return true; }
-  DOCX_LIB_READY = await loadScriptWithFallback([
+  console.log('[WORD EXPORT] التحقق من مكتبة docx.js...');
+  if(typeof docx !== 'undefined' && typeof docx.Document === 'function'){
+    console.log('[WORD EXPORT] المكتبة محمَّلة بالفعل من قبل ✅');
+    DOCX_LIB_READY = true; return true;
+  }
+  const urls = [
     'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js',
-    'https://unpkg.com/docx@8.5.0/build/index.js'
-  ]);
-  return DOCX_LIB_READY;
+    'https://unpkg.com/docx@8.5.0/build/index.js',
+    'https://cdn.jsdelivr.net/npm/docx@7.8.2/build/index.js'
+  ];
+  for(const url of urls){
+    console.log('[WORD EXPORT] محاولة تحميل من:', url);
+    try{
+      const scriptLoaded = await loadScriptWithFallback([url]);
+      if(!scriptLoaded){ console.warn('[WORD EXPORT] فشل تحميل السكريبت نفسه من:', url); continue; }
+      // مهم جدًا: نجاح تحميل السكريبت لا يعني إن المكتبة كوّنت المتغيّر العام docx فعليًا —
+      // بعض حزم npm بتتبني لأغراض bundler/Node بس ومبتعرّفش متغيّر عام (window.docx) عند التحميل
+      // المباشر بـ<script>، فلازم نتأكد بعد التحميل إن docx.Document فعلًا موجودة وقابلة للاستخدام
+      if(typeof docx !== 'undefined' && typeof docx.Document === 'function'){
+        console.log('[WORD EXPORT] المكتبة اتحمّلت وتأكّدنا إنها شغّالة فعليًا ✅ من:', url);
+        DOCX_LIB_READY = true; return true;
+      } else {
+        console.warn('[WORD EXPORT] السكريبت اتحمّل لكن docx.Document مش موجودة — المكتبة مش شغّالة فعليًا من:', url, 'typeof docx:', typeof docx);
+      }
+    }catch(e){ console.error('[WORD EXPORT] خطأ أثناء تحميل المكتبة من:', url, e); }
+  }
+  console.error('[WORD EXPORT] فشلت كل محاولات تحميل مكتبة docx.js — مفيش اتصال إنترنت أو الـCDN مش متاح');
+  DOCX_LIB_READY = false;
+  return false;
 }
 async function ensurePptxLib(){
   if(typeof PptxGenJS !== 'undefined'){ PPTX_LIB_READY = true; return true; }
@@ -2639,6 +2662,12 @@ function renderSettingsView(){
       <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">لو عندك كاميرات مسجّلة في النظام القديم (قبل التوحيد مع الأعطال)، راجعها هنا وحدد لكل واحدة "اشتغلت" أو "لسه واقفة" بضغطة واحدة — بدون إعادة كتابة أي بيانات.</p>
       <button class="btn primary block" onclick="openDownCamsMigrationTool()">فتح أداة الترحيل</button>
     </div>`:''}
+
+    <div class="site-card" style="margin-top:14px">
+      <div class="site-name" style="font-size:13px">🧪 تشخيص محرك Word</div>
+      <p style="font-size:11px;color:var(--muted-2)">اختبار معزول لمحرك DOCX نفسه — افتح Console (F12) قبل الضغط عشان تشوف تفاصيل كل خطوة.</p>
+      <button class="btn sm block" onclick="runSimpleWordTest()">تشغيل اختبار Word البسيط</button>
+    </div>
 
     ${isAdmin()? `<div class="site-card" style="margin-top:14px;border-color:var(--accent)" id="trainingAdminPanelHost">
       <div class="site-name" style="font-size:14px;margin-bottom:6px">🎓 قسم شرح التطبيق والتدريب</div>
@@ -9614,19 +9643,67 @@ async function htmlToDocxChildren(bodyHtml){
   walk(container);
   return children;
 }
+// تحقق حقيقي من إن الملف فعلًا DOCX (ZIP سليم) — مش ملف تالف أو HTML متنكّر
+async function validateDocxBlob(blob){
+  if(!blob || blob.size===0) return { valid:false, reason:'الملف فارغ تمامًا (حجم صفر)' };
+  try{
+    const buf = await blob.slice(0, 4).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // أي ملف ZIP حقيقي (وDOCX هو ZIP في الأساس) لازم يبدأ بتوقيع PK
+    const isZip = bytes[0]===0x50 && bytes[1]===0x4B;
+    if(!isZip) return { valid:false, reason:`الملف مش بنية ZIP سليمة (أول بايتات: ${Array.from(bytes).join(',')}) — غالبًا HTML متنكّر أو ملف تالف` };
+    return { valid:true };
+  }catch(e){ return { valid:false, reason:'تعذّر قراءة بداية الملف للتحقق: '+(e.message||'') }; }
+}
 async function buildDocxBlobFromHtml(title, bodyHtml){
-  const ok = await ensureDocxLib(); if(!ok) return null;
-  const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = docx;
-  const children = await htmlToDocxChildren(bodyHtml);
-  const doc = new Document({ sections:[{ children:[
-    new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, heading:HeadingLevel.HEADING_1, children:[new TextRun({text:title, bold:true})] }),
-    new Paragraph({text:''}),
-    ...children
-  ]}]});
-  try{ return await Packer.toBlob(doc); }catch(e){ console.error('فشل بناء ملف DOCX من المحرك الموحّد:', e); return null; }
+  console.log('[WORD EXPORT] START — العنوان:', title);
+  console.log('[WORD EXPORT] Collecting data — حجم HTML المصدر:', (bodyHtml||'').length, 'حرف');
+  const ok = await ensureDocxLib();
+  if(!ok){ console.error('[WORD EXPORT] ERROR — فشل تحميل مكتبة docx.js — راجع اللوج فوق لمعرفة السبب بالتفصيل'); return null; }
+  console.log('[WORD EXPORT] Building DOCX...');
+  let blob;
+  try{
+    const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = docx;
+    const children = await htmlToDocxChildren(bodyHtml);
+    console.log('[WORD EXPORT] عدد عناصر Word اللي اتبنت من الـHTML:', children.length);
+    const doc = new Document({ sections:[{ children:[
+      new Paragraph({ alignment:AlignmentType.CENTER, bidirectional:true, heading:HeadingLevel.HEADING_1, children:[new TextRun({text:title, bold:true})] }),
+      new Paragraph({text:''}),
+      ...children
+    ]}]});
+    blob = await Packer.toBlob(doc);
+    console.log('[WORD EXPORT] DOCX generated — Blob type:', blob?.type, '| Size:', blob?.size, 'bytes');
+  }catch(e){
+    console.error('[WORD EXPORT] ERROR أثناء بناء المستند نفسه:', { message:e.message, name:e.name, stack:e.stack });
+    return null;
+  }
+  const validation = await validateDocxBlob(blob);
+  if(!validation.valid){
+    console.error('[WORD EXPORT] ERROR — فشل التحقق من صحة الملف:', validation.reason);
+    return null;
+  }
+  console.log('[WORD EXPORT] Validation passed ✅');
+  return blob;
+}
+/* 🧪 اختبار Word بسيط جدًا ومعزول — لعزل المشكلة: هل العطل في محرك DOCX نفسه أم في بيانات تقرير معيّن؟ */
+async function runSimpleWordTest(){
+  console.log('[WORD EXPORT] ===== بدء اختبار Word البسيط المعزول =====');
+  toast('🧪 جاري اختبار محرك Word...');
+  const testHtml = `<h1>اختبار ملف Word</h1><p>هذا ملف اختبار من التطبيق.</p>
+    <table><tr><th>اسم</th><th>مصنع</th><th>الحالة</th></tr><tr><td>كاميرا تجريبية</td><td>مصنع الاختبار</td><td>تعمل</td></tr></table>`;
+  const blob = await buildDocxBlobFromHtml('اختبار Word', testHtml);
+  if(!blob){
+    console.error('[WORD EXPORT] ===== فشل الاختبار البسيط — المشكلة في محرك DOCX نفسه (مكتبة/تحميل/بناء)، مش في بيانات أي تقرير =====');
+    toast('🚫 فشل اختبار Word — المشكلة في تحميل المكتبة نفسها. افتح Console (F12) لتفاصيل الخطأ الكامل.');
+    return;
+  }
+  console.log('[WORD EXPORT] Download started (اختبار بسيط)...');
+  await saveOrShareFile(blob, 'word-engine-test.docx');
+  console.log('[WORD EXPORT] ===== نجح الاختبار البسيط بالكامل — محرك DOCX سليم 100%، أي مشكلة لاحقة تكون في بيانات تقرير معيّن =====');
+  toast('✅ نجح اختبار Word البسيط — محرك DOCX شغّال صح');
 }
 async function unifiedExportWord(title, headers, rows, opts){
-  const ok = await ensureDocxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Word'); return; }
+  const ok = await ensureDocxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Word — افتح Console (F12) لمعرفة السبب بالتفصيل'); return; }
   const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
@@ -9687,10 +9764,19 @@ async function unifiedExportWord(title, headers, rows, opts){
       ]
     }]
   });
+  console.log('[WORD EXPORT] START — العنوان:', title, '| عدد السجلات:', rows.length);
+  console.log('[WORD EXPORT] Building DOCX...');
   let blob;
-  try{ blob = await Packer.toBlob(doc); }catch(e){ console.error(e); toast('🚫 تعذّر إنشاء ملف Word: '+(e.message||'')); return; }
-  if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف Word (الملف فارغ أو تالف)'); return; }
-  await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.docx`);
+  try{ blob = await Packer.toBlob(doc); console.log('[WORD EXPORT] DOCX generated — Blob type:', blob?.type, '| Size:', blob?.size, 'bytes'); }
+  catch(e){ console.error('[WORD EXPORT] ERROR في مرحلة البناء:', {message:e.message, name:e.name, stack:e.stack}); toast('🚫 حدث خطأ أثناء إنشاء ملف Word، يرجى المحاولة مرة أخرى.'); return; }
+  const validation = await validateDocxBlob(blob);
+  if(!validation.valid){ console.error('[WORD EXPORT] ERROR — فشل Validation:', validation.reason); toast('🚫 حدث خطأ أثناء إنشاء ملف Word، يرجى المحاولة مرة أخرى.'); return; }
+  console.log('[WORD EXPORT] Validation passed ✅');
+  console.log('[WORD EXPORT] Download started...');
+  try{
+    await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.docx`);
+    console.log('[WORD EXPORT] SUCCESS ✅');
+  }catch(e){ console.error('[WORD EXPORT] ERROR في مرحلة التنزيل (منفصلة عن مرحلة الإنشاء):', {message:e.message, name:e.name, stack:e.stack}); toast('🚫 تم إنشاء الملف لكن حدث خطأ أثناء التنزيل، يرجى المحاولة مرة أخرى.'); }
 }
 async function unifiedExportExcel(title, headers, rows, opts){
   const ok = await ensureExcelLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Excel'); return; }
