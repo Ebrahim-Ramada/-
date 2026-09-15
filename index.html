@@ -3331,8 +3331,8 @@ function renderCameraTypeStatsPlaceholder(factoryId){
    البنية التحتية الموجودة بالفعل (مفيش جدول جديد أو بيانات مكررة)
    ============================================================ */
 const DEVICE_STATS_CONFIG = {
-  upsstats: { table:'factory_ups', title:'UPS', icon:'🔋', nameField:'ups_name', extraFields:[{key:'location',label:'الموقع'}] },
-  switchesstats: { table:'factory_switches', title:'Switches', icon:'🔀', nameField:'switch_name', extraFields:[{key:'total_ports',label:'إجمالي Ports'},{key:'used_ports',label:'مستخدمة'}] },
+  upsstats: { table:'factory_ups', title:'UPS', icon:'🔋', nameField:'ups_name', hasBrand:true, extraFields:[{key:'brand',label:'الشركة المصنعة'},{key:'location',label:'الموقع'}] },
+  switchesstats: { table:'factory_switches', title:'Switches', icon:'🔀', nameField:'switch_name', hasBrand:true, extraFields:[{key:'brand',label:'الشركة المصنعة'},{key:'total_ports',label:'إجمالي Ports'},{key:'used_ports',label:'مستخدمة'}] },
   racksstats: { table:'factory_racks', title:'Racks', icon:'🗄️', nameField:'rack_name', extraFields:[{key:'location',label:'الموقع'}] }
 };
 function renderDeviceStatsPlaceholder(view, cfg, factoryId){
@@ -3409,6 +3409,11 @@ async function openDeviceStatsOverviewExportPicker(view){
   const byFactoryCount = {};
   rows.forEach(r=>{ const fn=factoriesData.find(x=>x.id===r.factory_id)?.name||'—'; byFactoryCount[fn]=(byFactoryCount[fn]||0)+1; });
   const chartImages = [...buildCameraTypeChartPngs(byFactoryCount,{},{}), ...buildCameraTypeChartPngs(byStatus,{},{})];
+  if(cfg.hasBrand){
+    const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
+    const brandChart = buildCameraTypeChartPngs(byBrand,{},{})[0];
+    if(brandChart) chartImages.push({...brandChart, title:'الشركات المصنعة'});
+  }
   const opts = { rawObjects: rows, chartImages, getImageUrls: i=> rows[i].photo_url ? [{label:'صورة', url:rows[i].photo_url}] : [] };
   const preloadUrls = unifiedAllImageUrls(data, opts);
   if(preloadUrls.length) await urlsToDataUris(preloadUrls);
@@ -3427,13 +3432,19 @@ function renderDeviceStatsContent(view, cfg){
   const rows = deviceStatsRawData;
   if(!rows.length){ host.innerHTML = '<div class="empty">لا توجد بيانات مسجلة لهذا المصنع.</div>'; return; }
   const byStatus = {}; rows.forEach(r=> byStatus[r.status||'غير محدد'] = (byStatus[r.status||'غير محدد']||0)+1);
-  const chart = buildCameraTypeChartPngs(byStatus, {}, {})[0];
+  const charts = [buildCameraTypeChartPngs(byStatus, {}, {})[0]];
+  if(cfg.hasBrand){
+    const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
+    const brandChart = buildCameraTypeChartPngs(byBrand, {}, {})[0];
+    if(brandChart) charts.push({...brandChart, title:'الشركات المصنعة'});
+  }
   host.innerHTML = `
     <div class="mini-grid">
       <div class="mini"><div class="n">${rows.length}</div><div class="t">الإجمالي</div></div>
       ${Object.entries(byStatus).slice(0,3).map(([s,c])=>`<div class="mini"><div class="n">${c}</div><div class="t">${s}</div></div>`).join('')}
     </div>
-    ${chart ? `<img src="${chart.dataUrl}" style="width:100%;border-radius:10px;margin:10px 0" alt="رسم بياني">` : ''}
+    ${charts.filter(Boolean).map(c=>`<img src="${c.dataUrl}" style="width:100%;border-radius:10px;margin:10px 0" alt="رسم بياني">`).join('')}
+    ${cfg.hasBrand ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:-4px">💡 لو رسم "الشركات المصنعة" فاضي أو ناقص، ادخل حقل "الشركة المصنعة/الماركة" لكل ${cfg.title} من زر ✏️ تعديل تحت.</p>`:''}
     <button class="btn block" onclick="openDeviceStatsExportPicker('${view}')">🖨️ طباعة / تصدير (كل الصيغ)</button>
     <div id="devStatsListHost" style="margin-top:10px">${rows.map(r=>renderDeviceStatsCard(r,cfg)).join('')}</div>
   `;
@@ -3466,6 +3477,11 @@ async function openDeviceStatsExportPicker(view){
   const data = rows.map(r=>[r[cfg.nameField]||'—', r.status||'—', ...cfg.extraFields.map(ef=>r[ef.key]??''), r.notes||'']);
   const byStatus = {}; rows.forEach(r=> byStatus[r.status||'غير محدد'] = (byStatus[r.status||'غير محدد']||0)+1);
   const chartImages = buildCameraTypeChartPngs(byStatus, {}, {});
+  if(cfg.hasBrand){
+    const byBrand = {}; rows.forEach(r=> byBrand[r.brand?.trim()||'غير مسجَّلة'] = (byBrand[r.brand?.trim()||'غير مسجَّلة']||0)+1);
+    const brandChart = buildCameraTypeChartPngs(byBrand,{},{})[0];
+    if(brandChart) chartImages.push({...brandChart, title:'الشركات المصنعة'});
+  }
   const f = factoriesData.find(x=>x.id===rows[0]?.factory_id);
   const opts = { rawObjects: rows, chartImages, getImageUrls: i=> rows[i].photo_url ? [{label:'صورة', url:rows[i].photo_url}] : [] };
   const preloadUrls = unifiedAllImageUrls(data, opts);
