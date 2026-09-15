@@ -9262,6 +9262,8 @@ function renderReportsCenterView(){
       <button class="qbtn" onclick="exportSectionPicker('store_container')"><span class="qicon">🚛</span> مخزن الكونتينر</button>
       <button class="qbtn" onclick="exportSectionPicker('roomneeds')"><span class="qicon">📋</span> احتياجات الغرفة</button>
       <button class="qbtn" onclick="exportSectionPicker('cameramods')"><span class="qicon">🎥</span> كاميرات التعديل</button>
+      <button class="qbtn" onclick="exportSectionPicker('downcams_fixed')"><span class="qicon">📷</span> الكاميرات التي تم تشغيلها</button>
+      <button class="qbtn" onclick="exportSectionPicker('escalated_faults')"><span class="qicon">🚨</span> أعطال تحتاج تدخل فوري</button>
       <button class="qbtn" onclick="exportSectionPicker('lighting')"><span class="qicon">💡</span> الإضاءة</button>
       <button class="qbtn" onclick="exportSectionPicker('cameras_added')"><span class="qicon">📷</span> الكاميرات المُضافة</button>
       <button class="qbtn" onclick="exportSectionPicker('screens')"><span class="qicon">🖥️</span> الشاشات</button>
@@ -9270,6 +9272,7 @@ function renderReportsCenterView(){
       <button class="qbtn" onclick="exportSectionPicker('servers')"><span class="qicon">🖥️</span> السيرفرات</button>
       <button class="qbtn" onclick="exportSectionPicker('ups')"><span class="qicon">🔋</span> UPS</button>
       <button class="qbtn" onclick="openAuditLogExportPicker()"><span class="qicon">🔐</span> سجل التدقيق</button>
+      <button class="qbtn" onclick="openCameraTypeStatsExportPicker('all')"><span class="qicon">📊</span> أنواع الكاميرات بالمصانع</button>
     </div>
     <div class="section-title"><h2 style="font-size:13px">تصدير شامل لكل التطبيق</h2></div>
     <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
@@ -9283,9 +9286,31 @@ async function exportSectionPicker(section){
       const rows=(data||[]);
       let faultImgs = [];
       try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('fault_images').select('*').in('fault_id',ids); faultImgs=im||[]; } }catch(e){}
+      const byFactory = {}; rows.forEach(f=>{ const fn=factoriesData.find(x=>x.id===f.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الأعطال: ${rows.length}`)].filter(Boolean);
       return { title:'الأعطال', headers:['المصنع','الجهاز','النوع','الخطورة','الحالة','التاريخ'],
         data: rows.map(f=>[factoriesData.find(x=>x.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, new Date(f.reported_at).toLocaleDateString('ar-EG')]), raw:rows,
-        getImageUrls: i=> faultImgs.filter(im=>im.fault_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
+        chartImages, getImageUrls: i=> faultImgs.filter(im=>im.fault_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
+    },
+    downcams_fixed: async()=>{
+      const {data} = await supa.from('cameras').select('*');
+      const rows=(data||[]).filter(c=>c.status==='تعمل' && c.fault_date && c.repair_date);
+      const byFactory = {}; rows.forEach(c=>{ const fn=factoriesData.find(x=>x.id===c.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات التي تم تشغيلها: ${rows.length}`)].filter(Boolean);
+      return { title:'الكاميرات المنقطعة التي تم تشغيلها', headers:['المصنع','الكاميرا','تاريخ الانقطاع','تاريخ التشغيل','ملاحظات'],
+        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, fmtDateAr(c.fault_date), fmtDateAr(c.repair_date), c.notes||'']), raw:rows,
+        chartImages, getImageUrls: i=> rows[i].photo_url ? [{label:'صورة', url:rows[i].photo_url}] : [] };
+    },
+    escalated_faults: async()=>{
+      const {data} = await supa.from('faults').select('*');
+      const rows=(data||[]).filter(f=>f.escalation_level===3).sort((a,b)=> new Date(b.escalated_at||0)-new Date(a.escalated_at||0));
+      let faultImgs = [];
+      try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('fault_images').select('*').in('fault_id',ids); faultImgs=im||[]; } }catch(e){}
+      const byFactory = {}; rows.forEach(f=>{ const fn=factoriesData.find(x=>x.id===f.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الأعطال التي تحتاج تدخل فوري: ${rows.length}`)].filter(Boolean);
+      return { title:'أعطال تحتاج تدخل فوري', headers:['المصنع','الجهاز','الوصف','الأولوية','الحالة','تاريخ التصعيد'],
+        data: rows.map(f=>[factoriesData.find(x=>x.id===f.factory_id)?.name||'', f.device_name, f.fault_type||'', f.severity, f.status, f.escalated_at?fmtDateAr(f.escalated_at):'']), raw:rows,
+        chartImages, getImageUrls: i=> faultImgs.filter(im=>im.fault_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
     },
     maintenance: async()=>{
       const {data} = await supa.from('preventive_maintenance').select('*').order('scheduled_date');
@@ -9322,12 +9347,30 @@ async function exportSectionPicker(section){
     },
     roomneeds: async()=>{
       const {data} = await supa.from('room_needs').select('*');
-      const rows=(data||[]); return { title:'احتياجات الغرفة', headers:['العنوان','الوصف','الأولوية','الحالة'], data: rows.map(n=>[n.title||'', n.description||'', n.priority||'', n.status||'']), raw:rows };
+      const rows=(data||[]); return { title:'احتياجات الغرفة', headers:['العنوان','النوع','الكمية','الوحدة','الوصف','الأولوية','سبب الاحتياج','الحالة','ملاحظات'],
+        data: rows.map(n=>[n.title||'', n.item_type||'', n.quantity??'', n.unit||'', n.description||'', n.priority||'', n.reason||'', n.status||'', n.notes||'']), raw:rows };
     },
     cameramods: async()=>{
       const {data} = await supa.from('camera_modifications').select('*');
-      const rows=(data||[]); return { title:'كاميرات للتعديل', headers:['المصنع','الكاميرا','الموقع','السبب','الحالة'], data: rows.map(c=>[c.factory_name||'', c.camera_name, c.place_name||'', c.problem_description||'', c.status]), raw:rows,
-        getImageUrls: i=>{
+      const allRows=(data||[]);
+      // منع التكرار: كل كاميرا (camera_id لو موجود، وإلا المصنع+الاسم كبديل) تظهر مرة واحدة بس
+      // في التقرير — وعند وجود أكتر من سجل لنفس الكاميرا، نفضّل السجل اللي لسه "قيد الانتظار"
+      // (يعني لسه فعليًا محتاج تعديل) على أي سجل قديم اتقفل بالفعل
+      const dedupMap = new Map();
+      allRows.forEach(c=>{
+        const key = c.camera_id || `${c.factory_id}::${(c.camera_name||'').trim()}`;
+        const existing = dedupMap.get(key);
+        if(!existing) { dedupMap.set(key, c); return; }
+        const existingIsOpen = existing.status!=='تم التعديل', currentIsOpen = c.status!=='تم التعديل';
+        if(currentIsOpen && !existingIsOpen) dedupMap.set(key, c); // نفضّل المفتوح على المقفول
+        else if(currentIsOpen===existingIsOpen && new Date(c.created_at||0) > new Date(existing.created_at||0)) dedupMap.set(key, c); // أو الأحدث لو نفس الحالة
+      });
+      const rows = [...dedupMap.values()];
+      const duplicatesRemoved = allRows.length - rows.length;
+      const byFactory = {}; rows.forEach(c=>{ byFactory[c.factory_name||'—']=(byFactory[c.factory_name||'—']||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات التي تحتاج تعديل: ${rows.length}${duplicatesRemoved>0?' (بعد استبعاد '+duplicatesRemoved+' تكرار)':''}`)].filter(Boolean);
+      return { title:'كاميرات للتعديل', headers:['المصنع','الكاميرا','الموقع','السبب','الحالة'], data: rows.map(c=>[c.factory_name||'', c.camera_name, c.place_name||'', c.problem_description||'', c.status]), raw:rows,
+        chartImages, getImageUrls: i=>{
           const c = rows[i]; const list = [];
           if(c.photo_before_url) list.push({label:'قبل', url:c.photo_before_url});
           if(c.photo_after_url) list.push({label:'بعد', url:c.photo_after_url});
@@ -9336,8 +9379,11 @@ async function exportSectionPicker(section){
     },
     lighting: async()=>{
       const {data} = await supa.from('lighting_needs').select('*');
-      const rows=(data||[]); return { title:'الإضاءة', headers:['المصنع','المكان','المشكلة','الحالة'], data: rows.map(l=>[l.factory_name||'', l.place_name||'', l.problem_description||'', l.status]), raw:rows,
-        getImageUrl: i=> rows[i].photo_before_url || rows[i].photo_url };
+      const rows=(data||[]);
+      const byFactory = {}; rows.forEach(l=>{ byFactory[l.factory_name||'—']=(byFactory[l.factory_name||'—']||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الأماكن المسجَّلة: ${rows.length}`)].filter(Boolean);
+      return { title:'الإضاءة', headers:['المصنع','المكان','المشكلة','الحالة'], data: rows.map(l=>[l.factory_name||'', l.place_name||'', l.problem_description||'', l.status]), raw:rows,
+        chartImages, getImageUrl: i=> rows[i].photo_before_url || rows[i].photo_url };
     },
     cameras_added: async()=>{
       const {data} = await supa.from('cameras').select('*');
@@ -9368,7 +9414,7 @@ async function exportSectionPicker(section){
   };
   try{
     const cfg = await configs[section]();
-    const opts = { getImageUrl: cfg.getImageUrl, getImageUrls: cfg.getImageUrls, rawObjects: cfg.raw };
+    const opts = { getImageUrl: cfg.getImageUrl, getImageUrls: cfg.getImageUrls, rawObjects: cfg.raw, chartImages: cfg.chartImages, chartData: cfg.chartData };
     const preloadUrls = unifiedAllImageUrls(cfg.data, opts);
     if(preloadUrls.length) await urlsToDataUris(preloadUrls);
     openUnifiedExportPicker(cfg.title, cfg.headers, cfg.data, opts);
@@ -9428,7 +9474,8 @@ function unifiedAllImageUrls(rows, opts){
 function unifiedBuildTableHtml(headers, rows, opts){
   const hasImgs = !!(opts?.getImageUrl || opts?.getImageUrls);
   return `<table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
-    <tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}${hasImgs?'<th>الصور</th>':''}</tr>
+    <thead><tr style="background:#0B1220;color:#fff">${headers.map(h=>`<th>${h}</th>`).join('')}${hasImgs?'<th>الصور</th>':''}</tr></thead>
+    <tbody>
     ${rows.map((r,i)=>{
       const cells = r.map(c=>{
         const val = c==null?'':c;
@@ -9444,14 +9491,15 @@ function unifiedBuildTableHtml(headers, rows, opts){
           imgCell = `<td>${imgs.map(im=> __imgDataCache[im.url] ? `<div style="display:inline-block;text-align:center;margin:2px"><img src="${__imgDataCache[im.url]}" style="width:55px;height:55px;object-fit:cover;border-radius:4px;display:block"><span style="font-size:8px">${im.label}</span></div>` : `<span style="font-size:9px;color:#c00">⚠️ تعذّر تحميل الصورة</span>`).join('')}</td>`;
         }
       }
-      return `<tr>${cells}${imgCell}</tr>`;
+      return `<tr style="page-break-inside:avoid">${cells}${imgCell}</tr>`;
     }).join('')}
+    </tbody>
   </table>`;
 }
 function unifiedChartsHtml(opts){
   if(!opts?.chartImages?.length) return '';
   return `<div style="margin:14px 0;text-align:center">
-    ${opts.chartImages.map(c=>`<div style="display:inline-block;margin:6px;vertical-align:top"><img src="${c.dataUrl}" style="max-width:320px;border-radius:8px"><div style="font-size:10px;color:#666">${c.title}</div></div>`).join('')}
+    ${opts.chartImages.map(c=>`<div style="display:inline-block;margin:6px;vertical-align:top;page-break-inside:avoid"><img src="${c.dataUrl}" style="max-width:320px;border-radius:8px"><div style="font-size:10px;color:#666">${c.title}</div></div>`).join('')}
   </div>`;
 }
 async function unifiedExportPdf(title, headers, rows, opts){
