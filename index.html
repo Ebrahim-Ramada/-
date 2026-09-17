@@ -6839,7 +6839,7 @@ async function saveLayoutForm(factoryId){
   try{
     const isPdf = file.type === 'application/pdf';
     let uploadBlob = file, ext = 'pdf';
-    if(!isPdf){ uploadBlob = await compressImageFile(file, 1400, 0.75); ext='jpg'; }
+    if(!isPdf){ uploadBlob = await compressImageFile(file, 2400, 0.9); ext='jpg'; }
     const path = `layouts/${factoryId}-${Date.now()}.${ext}`;
     const {error: upErr} = await supa.storage.from('camera-photos').upload(path, uploadBlob, {contentType: isPdf?'application/pdf':'image/jpeg', upsert:true});
     if(upErr) throw upErr;
@@ -7360,7 +7360,10 @@ async function initLayoutCanvas(imgUrl){
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = ()=>{
-    const maxW = 1000;
+    // كان الحد القديم 1000px بيقصّ أي صورة عالية الجودة لمقاس صغير قبل حتى ما تتعرض للزوم —
+    // ده كان السبب الحقيقي للتكسّر (Pixelation) بغض النظر عن جودة الصورة الأصلية المرفوعة.
+    // رفعناه لـ3000px عشان الكانفاس نفسه يحافظ على تفاصيل كافية تتحمّل الزوم العالي الجديد بلا حدود
+    const maxW = 3000;
     const scale = img.width > maxW ? maxW/img.width : 1;
     canvas.width = Math.round(img.width*scale); canvas.height = Math.round(img.height*scale);
     layoutEditor.bgImage = img;
@@ -7556,7 +7559,9 @@ function addLayoutDeviceIcon(deviceType){
 async function pickLayoutDeviceImage(inputEl, deviceLabel){
   const file = inputEl.files[0]; if(!file) return;
   try{
-    const compressed = await compressImageFile(file);
+    // جودة أعلى بكثير من الافتراضي — عناصر الخريطة بتتعرّض لزوم عالي جدًا (بلا حدود دلوقتي)
+    // فلازم تتحمّل التكبير من غير ما تبقى مبكسلة
+    const compressed = await compressImageFile(file, 1600, 0.9);
     const dataUri = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(compressed); });
     const img = new Image();
     img.onload = ()=>{
@@ -7666,6 +7671,20 @@ function attachLayoutEditorPinchPan(){
       layoutEditor.panY = startPan.y + (newMid.y-startMid.y);
       applyLayoutEditorTransform();
     }
+  }, {passive:false});
+  // دعم عجلة الماوس للزوم على الكمبيوتر — بلا حدود، وبيكبّر تجاه موضع المؤشر نفسه
+  viewport.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+    const oldZoom = layoutEditor.zoom;
+    const factor = e.deltaY < 0 ? 1.12 : (1/1.12);
+    const newZoom = Math.max(0.02, +(oldZoom*factor).toFixed(3));
+    // نحافظ على إن النقطة اللي المؤشر عليها تفضل ثابتة بصريًا وقت الزوم (زوم تجاه المؤشر مش من المنتصف)
+    layoutEditor.panX = mouseX - ((mouseX - layoutEditor.panX) / oldZoom) * newZoom;
+    layoutEditor.panY = mouseY - ((mouseY - layoutEditor.panY) / oldZoom) * newZoom;
+    layoutEditor.zoom = newZoom;
+    applyLayoutEditorTransform();
   }, {passive:false});
 }
 function getCanvasPos(canvas, evt){
