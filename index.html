@@ -7318,6 +7318,9 @@ function openLayoutEditor(layoutId){
       <button class="btn sm" onclick="addLayoutDeviceIcon('camera')">📷 كاميرا</button>
       <button class="btn sm" onclick="addLayoutDeviceIcon('rack')">🗄️ Rack</button>
       <button class="btn sm" onclick="addLayoutDeviceIcon('switch')">🔀 Switch</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('server')">🖥️ Server</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('ups')">🔋 UPS</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('antenna')">📡 Antenna</button>
       <label class="btn sm" style="cursor:pointer">📷 صورة كاميرا<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'كاميرا')"></label>
       <label class="btn sm" style="cursor:pointer">🗄️ صورة Rack<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Rack')"></label>
       <label class="btn sm" style="cursor:pointer">🔀 صورة Switch<input type="file" accept="image/*" style="display:none" onchange="pickLayoutDeviceImage(this,'Switch')"></label>
@@ -7332,6 +7335,7 @@ function openLayoutEditor(layoutId){
       <button class="btn sm" onclick="fitLayoutEditorToScreen()">⛶ ملاءمة</button>
       <button class="btn sm" onclick="resetLayoutEditorView()">↺ إعادة ضبط</button>
     </div>
+    <div id="selectedElementToolsHost"></div>
     <div id="layoutEditViewport" style="overflow:hidden;height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;position:relative;touch-action:none">
       <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:0 0;position:absolute;top:0;left:0"></canvas>
     </div>
@@ -7381,6 +7385,65 @@ function redrawLayoutCanvas(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(layoutEditor.bgImage) ctx.drawImage(layoutEditor.bgImage,0,0,canvas.width,canvas.height);
   layoutEditor.elements.forEach((el,i)=> drawLayoutElement(ctx, el, i===layoutEditor.selectedIndex));
+  renderSelectedElementTools();
+}
+function renderSelectedElementTools(){
+  const host = document.getElementById('selectedElementToolsHost');
+  if(!host) return;
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el){ host.innerHTML = ''; return; }
+  const isText = el.type==='text';
+  host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--muted-2)">🎨 لون العنصر المحدد:</span>
+      <input type="color" value="${el.color||'#FF3B30'}" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="changeSelectedElementColor(this.value)">
+      ${isText ? `
+        <span style="font-size:11px;color:var(--muted-2);margin-right:8px">حجم الخط:</span>
+        <input type="range" min="8" max="120" value="${el.fontSize||18}" style="width:90px" oninput="changeSelectedTextFontSize(this.value)">
+        <span style="font-size:10.5px;min-width:26px">${el.fontSize||18}</span>
+        <button class="btn sm" style="padding:4px 8px" onclick="toggleSelectedTextBold()">${el.bold?'𝗕 Bold✓':'B Bold'}</button>
+      `:''}
+    </div>
+    ${isText ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <span style="font-size:11px;color:var(--muted-2)">🔄 زاوية الدوران:</span>
+      <input type="range" min="0" max="360" value="${el.rotation||0}" style="flex:1" oninput="changeSelectedTextRotation(this.value)">
+      <span style="font-size:10.5px;min-width:34px">${el.rotation||0}°</span>
+    </div>`:''}
+  </div>`;
+}
+function changeSelectedElementColor(newColor){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el) return;
+  pushLayoutHistory();
+  el.color = newColor;
+  if(el.type==='image' && el.deviceType){
+    // عنصر جهاز جاهز (كاميرا/راك/سويتش/سيرفر/UPS/أنتينة) — نعيد رسم الأيقونة بنفسها بس بلون جديد
+    const newSrc = buildDeviceIconDataUri(el.deviceType, newColor);
+    const newImg = new Image();
+    newImg.onload = ()=>{ el.img = newImg; el.src = newSrc; redrawLayoutCanvas(); };
+    newImg.src = newSrc;
+  } else {
+    redrawLayoutCanvas();
+  }
+}
+function changeSelectedTextFontSize(size){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='text') return;
+  el.fontSize = parseInt(size);
+  redrawLayoutCanvas();
+}
+function toggleSelectedTextBold(){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='text') return;
+  pushLayoutHistory();
+  el.bold = !el.bold;
+  redrawLayoutCanvas();
+}
+function changeSelectedTextRotation(deg){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='text') return;
+  el.rotation = parseInt(deg);
+  redrawLayoutCanvas();
 }
 function drawLayoutElement(ctx, el, selected){
   ctx.strokeStyle = el.color; ctx.fillStyle = el.color; ctx.lineWidth = 3; ctx.lineCap='round'; ctx.lineJoin='round';
@@ -7400,7 +7463,15 @@ function drawLayoutElement(ctx, el, selected){
     ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
     if(el.label){ ctx.fillStyle=el.color; ctx.font='bold 14px Arial'; ctx.textAlign='right'; ctx.fillText(el.label, el.x-14, el.y+5); }
   }
-  else if(el.type==='text'){ ctx.font='bold 18px Arial'; ctx.textAlign='left'; ctx.fillText(el.text, el.x, el.y); }
+  else if(el.type==='text'){
+    ctx.save();
+    ctx.translate(el.x, el.y);
+    ctx.rotate((el.rotation||0)*Math.PI/180);
+    ctx.font = `${el.bold?'bold ':''}${el.fontSize||18}px Arial`;
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.fillText(el.text, 0, 0);
+    ctx.restore();
+  }
   else if(el.type==='image' && el.img){
     ctx.save();
     ctx.translate(el.x+el.w/2, el.y+el.h/2);
@@ -7439,22 +7510,29 @@ function layoutElementBBox(el){
   if(el.type==='rect'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
   if(el.type==='circle'){ return {x:el.cx-el.rx,y:el.cy-el.ry,w:el.rx*2,h:el.ry*2}; }
   if(el.type==='pin'){ return {x:el.x-9,y:el.y-9,w:18,h:18}; }
-  if(el.type==='text'){ return {x:el.x,y:el.y-18,w:(el.text.length*10),h:22}; }
+  if(el.type==='text'){ const fs=el.fontSize||18; return {x:el.x,y:el.y-fs,w:(el.text.length*fs*0.55),h:fs*1.25}; }
   if(el.type==='image'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
   return {x:0,y:0,w:0,h:0};
 }
 function pointInBBox(x,y,box){ return x>=box.x && x<=box.x+box.w && y>=box.y && y<=box.y+box.h; }
 function pointNearHandle(x,y,hx,hy){ return Math.hypot(x-hx,y-hy) <= 14; }
 // أيقونات جاهزة مرسومة برمجيًا لكل نوع جهاز (SVG مضمَّن) — بدون فتح معرض الصور إطلاقًا
-const LAYOUT_DEVICE_ICONS = {
-  camera: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="30" width="80" height="50" rx="8" fill="#182446" stroke="#38D9C9" stroke-width="4"/><rect x="35" y="15" width="30" height="20" rx="4" fill="#182446" stroke="#38D9C9" stroke-width="4"/><circle cx="50" cy="55" r="18" fill="#0B1220" stroke="#38D9C9" stroke-width="4"/><circle cx="50" cy="55" r="9" fill="#38D9C9"/><circle cx="75" cy="40" r="4" fill="#FF6B6B"/></svg>`,
-  rack: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="8" width="70" height="84" rx="4" fill="#182446" stroke="#38D9C9" stroke-width="4"/>${[18,34,50,66,82].map(y=>`<rect x="22" y="${y}" width="56" height="10" rx="2" fill="#0B1220" stroke="#38D9C9" stroke-width="2"/><circle cx="70" cy="${y+5}" r="2" fill="#4ADE80"/>`).join('')}</svg>`,
-  switch: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><rect x="5" y="10" width="90" height="40" rx="6" fill="#182446" stroke="#38D9C9" stroke-width="4"/>${Array.from({length:8},(_,i)=>`<rect x="${12+i*10}" y="20" width="6" height="20" rx="1" fill="#0B1220" stroke="#38D9C9" stroke-width="1.5"/>`).join('')}</svg>`
+const LAYOUT_DEVICE_ICON_BUILDERS = {
+  camera: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="30" width="80" height="50" rx="8" fill="#182446" stroke="${c}" stroke-width="4"/><rect x="35" y="15" width="30" height="20" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/><circle cx="50" cy="55" r="18" fill="#0B1220" stroke="${c}" stroke-width="4"/><circle cx="50" cy="55" r="9" fill="${c}"/><circle cx="75" cy="40" r="4" fill="#FF6B6B"/></svg>`,
+  rack: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="8" width="70" height="84" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/>${[18,34,50,66,82].map(y=>`<rect x="22" y="${y}" width="56" height="10" rx="2" fill="#0B1220" stroke="${c}" stroke-width="2"/><circle cx="70" cy="${y+5}" r="2" fill="#4ADE80"/>`).join('')}</svg>`,
+  switch: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><rect x="5" y="10" width="90" height="40" rx="6" fill="#182446" stroke="${c}" stroke-width="4"/>${Array.from({length:8},(_,i)=>`<rect x="${12+i*10}" y="20" width="6" height="20" rx="1" fill="#0B1220" stroke="${c}" stroke-width="1.5"/>`).join('')}</svg>`,
+  server: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="10" width="70" height="80" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/>${[22,42,62].map(y=>`<rect x="22" y="${y}" width="56" height="14" rx="2" fill="#0B1220" stroke="${c}" stroke-width="2"/><circle cx="70" cy="${y+7}" r="2.5" fill="#4ADE80"/><rect x="28" y="${y+4}" width="20" height="6" fill="${c}" opacity="0.5"/>`).join('')}</svg>`,
+  ups: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="18" y="15" width="64" height="70" rx="6" fill="#182446" stroke="${c}" stroke-width="4"/><path d="M55 28 L38 55 H48 L45 72 L64 45 H54 Z" fill="${c}"/></svg>`,
+  antenna: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="46" y="55" width="8" height="35" fill="${c}"/><path d="M50 55 L20 20 M50 55 L80 20" stroke="${c}" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M35 25 Q50 10 65 25 M28 15 Q50 -5 72 15" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.6"/><circle cx="50" cy="55" r="6" fill="#0B1220" stroke="${c}" stroke-width="3"/></svg>`
 };
-const LAYOUT_DEVICE_LABELS = { camera:'كاميرا', rack:'Rack', switch:'Switch' };
+const LAYOUT_DEVICE_LABELS = { camera:'كاميرا', rack:'Rack', switch:'Switch', server:'Server', ups:'UPS', antenna:'أنتينة' };
+function buildDeviceIconDataUri(deviceType, color){
+  const svg = LAYOUT_DEVICE_ICON_BUILDERS[deviceType](color || '#38D9C9');
+  return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+}
 function addLayoutDeviceIcon(deviceType){
-  const svg = LAYOUT_DEVICE_ICONS[deviceType];
-  const dataUri = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+  const dataUri = buildDeviceIconDataUri(deviceType, layoutEditor.color);
+  const svg = LAYOUT_DEVICE_ICON_BUILDERS[deviceType](layoutEditor.color || '#38D9C9');
   const img = new Image();
   img.onload = ()=>{
     const canvas = document.getElementById('layoutEditCanvas');
@@ -7464,7 +7542,7 @@ function addLayoutDeviceIcon(deviceType){
     layoutEditor.elements.push({
       type:'image', src:dataUri, img, label:LAYOUT_DEVICE_LABELS[deviceType], deviceType,
       x: canvas.width/2 - defaultW/2, y: canvas.height/2 - defaultH/2,
-      w: defaultW, h: defaultH, rotation: 0, color:'#38D9C9'
+      w: defaultW, h: defaultH, rotation: 0, color: layoutEditor.color || '#38D9C9'
     });
     layoutEditor.selectedIndex = layoutEditor.elements.length-1;
     layoutEditor.tool = 'select';
@@ -7510,7 +7588,7 @@ function setLayoutTool(t){
 function layoutElementsForHistory(){
   const cleaned = layoutEditor.elements
     .filter(el=> el != null) // إزالة أي فجوة/عنصر فارغ في المصفوفة (سبب محتمل لفقد البيانات)
-    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
+    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,deviceType:el.deviceType,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
   // ضمان نهائي: نمرّر البيانات عبر JSON فعليًا (تسلسل ثم فك تسلسل) عشان نتأكد 100% إنها
   // بيانات JSON نظيفة قابلة للتخزين فعلًا، وليست تحتوي على أي مرجع كائن غير قابل للتسلسل
   // بصمت (زي عنصر DOM أو Circular Reference) كان ممكن يسبب فقد البيانات عند الحفظ الفعلي
