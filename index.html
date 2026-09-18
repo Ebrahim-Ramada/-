@@ -1204,6 +1204,134 @@ async function syncFactoryCameraCounts(factoryId, deltaTotal, deltaDown){
 /* ============================================================
    سجل التدقيق: تسجيل أي عملية إدارية (Admin فقط ينفّذ عمليات الكتابة)
    ============================================================ */
+/* ============================================================================
+   🔐 نظام حماية الحذف الموحّد — أي حذف في التطبيق كله يمرّ من هنا وبس.
+   التحقق من كلمة المرور بيحصل فعليًا داخل قاعدة البيانات (verify_delete_password)
+   عبر RPC، مش مجرد مقارنة نص في الواجهة — فمينفعش حد يتجاوزها من الـConsole.
+   ============================================================================ */
+async function renderDeleteSecurityPanel(){
+  const host = document.getElementById('deleteSecurityStatusHost');
+  if(!host) return;
+  await checkDeletePasswordConfigured();
+  host.innerHTML = deletePasswordConfigured ? `
+    <p style="font-size:11.5px;color:var(--success)">✅ كلمة مرور الحذف مُفعّلة — أي عملية حذف في التطبيق محمية بيها.</p>
+    <button class="btn sm block" onclick="openChangeDeletePasswordForm()">🔄 تغيير كلمة مرور الحذف</button>
+  ` : `
+    <p style="font-size:11.5px;color:var(--danger)">⚠️ لسه ما اتعملتش — أي حد يقدر يحذف أي حاجة من غير حماية حاليًا.</p>
+    <button class="btn sm primary block" onclick="openChangeDeletePasswordForm()">🔐 إنشاء كلمة مرور الحذف الآن</button>
+  `;
+}
+function openChangeDeletePasswordForm(){
+  const isChange = deletePasswordConfigured;
+  openModal(`
+    <div class="modal-head"><h3>🔐 ${isChange?'تغيير':'إنشاء'} كلمة مرور الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${isChange? `<div class="field"><label>كلمة المرور الحالية (للتأكد إنك أنت فعلًا)</label><input type="password" class="input" id="oldDeletePw"></div>`:''}
+    <div class="field"><label>كلمة المرور الجديدة</label><input type="password" class="input" id="newDeletePw1"></div>
+    <div class="field"><label>تأكيد كلمة المرور الجديدة</label><input type="password" class="input" id="newDeletePw2"></div>
+    <div id="deletePwSetError" style="color:var(--danger);font-size:12px;margin-top:4px"></div>
+    <p style="font-size:10.5px;color:var(--muted-2);margin-top:6px">💡 كلمة المرور دي هتتطلب في أي عملية حذف بالتطبيق كله — مفيش طريقة لاسترجاعها لو نسيتها غير تعيين واحدة جديدة.</p>
+    <button class="btn primary block" style="margin-top:10px" onclick="saveDeletePassword(${isChange})">💾 حفظ</button>
+  `);
+}
+async function saveDeletePassword(isChange){
+  const errHost = document.getElementById('deletePwSetError');
+  const p1 = document.getElementById('newDeletePw1').value, p2 = document.getElementById('newDeletePw2').value;
+  if(!p1 || p1.length<4){ errHost.textContent = 'كلمة المرور لازم تكون 4 خانات على الأقل'; return; }
+  if(p1!==p2){ errHost.textContent = 'كلمة المرور والتأكيد مش متطابقين'; return; }
+  if(isChange){
+    const oldPw = document.getElementById('oldDeletePw').value;
+    if(!oldPw){ errHost.textContent = 'أدخل كلمة المرور الحالية'; return; }
+    try{
+      const {data: valid} = await supa.rpc('verify_delete_password', {input_password: oldPw});
+      if(!valid){ errHost.textContent = '❌ كلمة المرور الحالية غير صحيحة'; return; }
+    }catch(e){ errHost.textContent = 'تعذّر التحقق: '+(e.message||''); return; }
+  }
+  try{
+    const {error} = await supa.rpc('set_delete_password', {new_password: p1});
+    if(error) throw error;
+    deletePasswordConfigured = true;
+    await logAudit(isChange?'تغيير كلمة مرور الحذف':'إنشاء كلمة مرور الحذف', 'بواسطة '+currentProfile.display_name);
+    toast('✅ تم الحفظ بنجاح');
+    closeModal();
+    renderDeleteSecurityPanel();
+  }catch(e){ errHost.textContent = 'تعذّر الحفظ: '+(e.message||''); }
+}
+let deletePasswordConfigured = null; // null = لسه ما اتفحصش، true/false بعد الفحص
+async function checkDeletePasswordConfigured(){
+  try{ const {data} = await supa.rpc('delete_password_is_set'); deletePasswordConfigured = !!data; }
+  catch(e){ deletePasswordConfigured = false; }
+  return deletePasswordConfigured;
+}
+/**
+ * الدالة الموحّدة لأي عملية حذف في التطبيق — بتحل محل استدعاء الحذف المباشر.
+ * @param {Function} doDeleteFn - async function تنفّذ الحذف الفعلي، بتتنفّذ بس لو كلمة المرور صح
+ * @param {string} label - اسم العنصر/العملية المعروض في نافذة التأكيد وسجل التدقيق
+ * @param {object} opts - { dangerous:boolean (يطلب تأكيد إضافي), bulkCount:number (لو حذف جماعي) }
+ */
+async function confirmDeleteWithPassword(doDeleteFn, label, opts={}){
+  if(deletePasswordConfigured===null) await checkDeletePasswordConfigured();
+  if(!deletePasswordConfigured){
+    openModal(`<div class="modal-head"><h3>⚠️ لم يتم إعداد كلمة مرور الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <p style="font-size:13px;color:var(--muted)">لازم الأدمن يعدّ كلمة مرور الحذف الأول من الإعدادات قبل ما تقدر تحذف أي حاجة.</p>
+      ${isAdmin()? `<button class="btn primary block" style="margin-top:10px" onclick="closeModal(); goTo('settings')">الذهاب للإعدادات</button>` : `<p style="font-size:11px;color:var(--muted-2)">اطلب من الأدمن يعدّها.</p>`}`);
+    return;
+  }
+  const bulkLine = opts.bulkCount ? `<p style="font-size:12.5px;color:var(--amber);font-weight:700">⚠️ سيتم حذف ${opts.bulkCount} سجل</p>` : '';
+  openModal(`
+    <div class="modal-head"><h3>⚠️ تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:13px;color:var(--muted)">هذا الإجراء سيؤدي إلى حذف: <b>${label}</b>${bulkLine}</p>
+    <div class="field" style="margin-top:10px"><label>🔐 أدخل كلمة مرور الحذف</label><input type="password" class="input" id="deletePwInput" autofocus></div>
+    <div id="deletePwError" style="color:var(--danger);font-size:12px;margin-top:4px"></div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn sm" onclick="closeModal()">إلغاء</button>
+      <button class="btn sm danger" onclick="submitDeletePassword()">تأكيد الحذف</button>
+    </div>
+  `);
+  window.__pendingDelete = { doDeleteFn, label, opts };
+  setTimeout(()=> document.getElementById('deletePwInput')?.focus(), 50);
+}
+async function submitDeletePassword(){
+  const pending = window.__pendingDelete; if(!pending) return;
+  const pwInput = document.getElementById('deletePwInput');
+  const password = pwInput.value;
+  const errHost = document.getElementById('deletePwError');
+  if(!password){ errHost.textContent = 'أدخل كلمة المرور'; return; }
+  let valid = false;
+  try{ const {data, error} = await supa.rpc('verify_delete_password', {input_password: password}); if(error) throw error; valid = !!data; }
+  catch(e){ errHost.textContent = '🚫 تعذّر التحقق: '+(e.message||''); return; }
+  if(!valid){
+    errHost.textContent = '❌ كلمة مرور الحذف غير صحيحة';
+    pwInput.value = '';
+    await logAudit('محاولة حذف فاشلة (كلمة مرور خاطئة)', pending.label); // الكلمة نفسها ممنوع تتسجّل إطلاقًا
+    return;
+  }
+  // كلمة المرور صح — لو العملية خطيرة، نطلب تأكيد إضافي قبل التنفيذ الفعلي
+  if(pending.opts.dangerous){
+    openModal(`<div class="modal-head"><h3>⚠️ تأكيد نهائي</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+      <p style="font-size:13px;color:var(--danger);font-weight:700">هل أنت متأكد من تنفيذ عملية الحذف؟ هذا الإجراء لا يمكن التراجع عنه.</p>
+      <p style="font-size:12.5px;color:var(--muted)">${pending.label}${pending.opts.bulkCount?` — ${pending.opts.bulkCount} سجل`:''}</p>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn sm" onclick="closeModal()">إلغاء</button>
+        <button class="btn sm danger" onclick="executeConfirmedDelete()">حذف نهائي</button>
+      </div>`);
+  } else {
+    await executeConfirmedDelete();
+  }
+}
+async function executeConfirmedDelete(){
+  const pending = window.__pendingDelete; if(!pending) return;
+  closeModal();
+  toast('جاري الحذف...');
+  try{
+    await pending.doDeleteFn();
+    await logAudit('حذف ناجح', pending.label + (pending.opts.bulkCount?` — ${pending.opts.bulkCount} سجل`:''));
+  }catch(e){
+    console.error(e);
+    await logAudit('حذف فاشل (خطأ تقني)', pending.label + ' — ' + (e.message||''));
+    toast('🚫 تعذّر الحذف: '+(e.message||''));
+  }
+  window.__pendingDelete = null;
+}
 async function logAudit(action, details, oldValue, newValue){
   const row = {
     actor_id: currentProfile ? currentProfile.id : null,
@@ -1301,7 +1429,7 @@ function renderCurrentView(){
   else if(currentView==='archive') { host.innerHTML = renderArchivePlaceholder(); loadArchive(); }
   else if(currentView==='audit') { host.innerHTML = renderAuditPlaceholder(); loadAuditLog(); }
   else if(currentView==='users' && isAdmin()) { host.innerHTML = renderUsersPlaceholder(); loadUsers(); }
-  else if(currentView==='settings') { host.innerHTML = renderSettingsView(); if(isAdmin()) renderTrainingAccessPanel(); }
+  else if(currentView==='settings') { host.innerHTML = renderSettingsView(); if(isAdmin()){ renderTrainingAccessPanel(); renderDeleteSecurityPanel(); } }
   else if(currentView==='compare') { host.innerHTML = renderComparePlaceholder(); setTimeout(renderCompareResult, 30); }
   else if(currentView==='maintenance') {
     host.innerHTML = renderPreventiveMaintenanceView(currentViewCtx);
@@ -1534,11 +1662,11 @@ function compressImageFile(file, maxW=800, quality=0.65){
 
 function confirmDeleteFactory(id, name){
   if(!isAdmin()){ toast('🚫 هذه العملية متاحة للأدمن فقط'); return; }
-  openModal(`
-    <div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="color:var(--muted);font-size:13.5px">هل تريد حذف <b style="color:var(--text)">${name}</b>؟</p>
-    <button class="btn danger block" onclick="deleteFactory('${id}')">حذف نهائيًا</button>
-  `);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('factories').delete().eq('id', id);
+    if(error) throw error;
+    toast('تم الحذف'); loadFactories(); goTo('dashboard');
+  }, `المصنع "${name}" وكل بياناته المرتبطة به`, {dangerous:true});
 }
 async function deleteFactory(id){
   const f = factoriesData.find(x=>x.id===id);
@@ -2661,6 +2789,11 @@ function renderSettingsView(){
       <div class="site-name" style="font-size:14px;margin-bottom:6px">📥 ترحيل بيانات الكاميرات المنقطعة القديمة</div>
       <p style="font-size:11px;color:var(--muted-2);margin:0 0 10px">لو عندك كاميرات مسجّلة في النظام القديم (قبل التوحيد مع الأعطال)، راجعها هنا وحدد لكل واحدة "اشتغلت" أو "لسه واقفة" بضغطة واحدة — بدون إعادة كتابة أي بيانات.</p>
       <button class="btn primary block" onclick="openDownCamsMigrationTool()">فتح أداة الترحيل</button>
+    </div>`:''}
+
+    ${isAdmin()? `<div class="site-card" style="margin-top:14px" id="deleteSecurityPanelHost">
+      <div class="site-name" style="font-size:13px">🔐 أمان الحذف</div>
+      <div id="deleteSecurityStatusHost"><p style="font-size:11px;color:var(--muted-2)">جاري التحميل...</p></div>
     </div>`:''}
 
     <div class="site-card" style="margin-top:14px">
@@ -4184,12 +4317,12 @@ async function updateTaskStatus(id, status){
   }catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteTask(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteTask('${id}')">حذف نهائيًا</button>`);
-}
-async function confirmDeleteTask(id){
-  try{ await supa.from('tasks').delete().eq('id',id); await logAudit('حذف مهمة', id); closeModal(); toast('تم الحذف'); loadMyTasks(); }
-  catch(e){ toast('🚫 تعذّر الحذف'); }
+  const t = myTasksData.find(x=>x.id===id);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('tasks').delete().eq('id',id);
+    if(error) throw error;
+    toast('تم الحذف'); loadMyTasks();
+  }, `المهمة "${t?t.title:id}"`);
 }
 async function openTaskAssignForm(taskId){
   const t = taskId ? myTasksData.find(x=>x.id===taskId) : null;
@@ -6746,6 +6879,7 @@ async function loadLayouts(factoryId){
       ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">🧩 العناصر التفاعلية على الخريطة</button>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
         ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
+        ${l.file_type==='pdf' ? `<button class="btn sm primary" onclick="openPdfLayoutEditor('${l.id}')">✏️ تعديل PDF</button>`:''}
         ${l.original_file_url? `<button class="btn sm" onclick="confirmRestoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
         ${l.pre_restore_file_url? `<button class="btn sm" style="background:var(--success);color:#fff" onclick="undoRestoreOriginal('${l.id}')">↩️ تراجع عن آخر استعادة</button>`:''}
         <button class="btn sm danger" onclick="deleteLayout('${l.id}','${l.factory_id}')">🗑 حذف</button>
@@ -6758,6 +6892,134 @@ async function loadLayouts(factoryId){
    ============================================================ */
 let pdfLayoutDoc = null, pdfLayoutPage = 1, pdfLayoutTotalPages = 1;
 let pdfLayoutZoom = 1;
+/* ============================================================
+   ✏️ تعديل خرائط PDF — بنفس أدوات الرسم بالظبط (أسهم/أشكال/نصوص/
+   أجهزة)، مع دعم صفحات متعددة والحفاظ على ملف PDF الأصلي دائمًا
+   ============================================================ */
+async function openPdfLayoutEditor(layoutId){
+  const l = layoutsData.find(x=>x.id===layoutId);
+  if(!l || l.file_type!=='pdf'){ toast('التعديل بالأدوات متاح على خرائط PDF بس'); return; }
+  openModal(`<div class="modal-head"><h3>✏️ تعديل PDF: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري تحميل الـPDF...</div>`);
+  const ok = await ensurePdfJsLib();
+  if(!ok){ document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>✏️ تعديل PDF</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">⚠️ تعذّر تحميل مكتبة PDF.</div>`; return; }
+  try{
+    const pdfDoc = await pdfjsLib.getDocument(l.file_url).promise;
+    let pagesElements = {};
+    try{ if(l.pdf_edit_state) pagesElements = typeof l.pdf_edit_state==='string' ? JSON.parse(l.pdf_edit_state) : l.pdf_edit_state; }catch(e){ pagesElements = {}; }
+    const startPage = Math.min(Math.max(1, l.pdf_last_edited_page||1), pdfDoc.numPages);
+    layoutEditor = {
+      layoutId, factoryId:l.factory_id, isPdf:true, pdfDoc, pdfTotalPages:pdfDoc.numPages, pdfCurrentPage:startPage, pdfPagesElements:pagesElements,
+      elements: pagesElements[startPage] || [], history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, panX:0, panY:0, selectedIndex:-1,
+      hadElementsOnOpen: Object.values(pagesElements).some(arr=>arr && arr.length>0)
+    };
+    renderPdfEditorShell(l);
+    await renderPdfEditorPage();
+  }catch(e){ console.error(e); document.getElementById('modalHost').innerHTML = `<div class="modal-head"><h3>✏️ تعديل PDF</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">⚠️ تعذّر فتح الـPDF: ${e.message||''}</div>`; }
+}
+function renderPdfEditorShell(l){
+  openModal(`
+    <div class="modal-head"><h3>✏️ تعديل PDF: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${layoutEditor.hadElementsOnOpen ? `<p style="font-size:10.5px;color:var(--success);margin-top:-6px">✅ تم استرجاع تعديلاتك المحفوظة على كل الصفحات.</p>`:''}
+    ${layoutEditor.pdfTotalPages>1 ? `<div class="btn-row" style="margin-bottom:8px">
+      <button class="btn sm" id="pdfPrevPageBtn" onclick="switchPdfEditorPage(-1)">◀ السابقة</button>
+      <span style="font-size:11px;align-self:center">صفحة <b id="pdfPageLabel">${layoutEditor.pdfCurrentPage}</b> من ${layoutEditor.pdfTotalPages}</span>
+      <button class="btn sm" id="pdfNextPageBtn" onclick="switchPdfEditorPage(1)">التالية ▶</button>
+    </div>`:''}
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="layoutToolbar">
+      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص']].map(([t,l2])=>
+        `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
+      <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
+      <button class="btn sm" onclick="addLayoutDeviceIcon('camera')">📷 كاميرا</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('rack')">🗄️ Rack</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('switch')">🔀 Switch</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('server')">🖥️ Server</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('ups')">🔋 UPS</button>
+      <button class="btn sm" onclick="addLayoutDeviceIcon('antenna')">📡 Antenna</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
+      <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
+      <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
+      <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
+      <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
+      <span style="font-size:11px;align-self:center;min-width:40px;text-align:center" id="layoutZoomLabel">100%</span>
+      <button class="btn sm" onclick="zoomLayoutEditor(1.25)">➕</button>
+      <button class="btn sm" onclick="fitLayoutEditorToScreen()">⛶ ملاءمة</button>
+      <button class="btn sm" onclick="resetLayoutEditorView()">↺ إعادة ضبط</button>
+    </div>
+    <div id="selectedElementToolsHost"></div>
+    <div id="layoutEditViewport" style="overflow:hidden;height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;position:relative;touch-action:none">
+      <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:0 0;position:absolute;top:0;left:0"></canvas>
+    </div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 ملف الـPDF الأصلي محفوظ دائمًا ولا يتأثر — التعديلات بتتحفظ منفصلة لكل صفحة.</p>
+    <button class="btn primary block" style="margin-top:8px" onclick="savePdfLayoutEdit()">💾 حفظ تعديل PDF</button>
+    <div id="layoutSaveStatus" style="margin-top:8px"></div>
+  `);
+}
+async function renderPdfEditorPage(){
+  const page = await layoutEditor.pdfDoc.getPage(layoutEditor.pdfCurrentPage);
+  // دقة عالية (scale 2.5) عشان الصفحة تتحمّل الزوم بلا حدود من غير Pixelation
+  const viewport = page.getViewport({scale: 2.5});
+  const renderCanvas = document.createElement('canvas');
+  renderCanvas.width = viewport.width; renderCanvas.height = viewport.height;
+  await page.render({canvasContext: renderCanvas.getContext('2d'), viewport}).promise;
+  const img = new Image();
+  await new Promise(res=>{ img.onload = res; img.src = renderCanvas.toDataURL('image/png'); });
+  const canvas = document.getElementById('layoutEditCanvas');
+  canvas.width = img.width; canvas.height = img.height;
+  layoutEditor.bgImage = img;
+  // تحميل صور الأجهزة المستعادة لنفس الصفحة
+  layoutEditor.elements.filter(el=>el.type==='image' && el.src && !el.img).forEach(el=>{
+    const dImg = new Image(); dImg.onload = ()=> redrawLayoutCanvas(); dImg.src = el.src; el.img = dImg;
+  });
+  redrawLayoutCanvas();
+  if(!canvas.__eventsAttached){ attachLayoutCanvasEvents(canvas); attachLayoutEditorPinchPan(); canvas.__eventsAttached = true; }
+  applyLayoutEditorTransform();
+}
+async function switchPdfEditorPage(delta){
+  const next = layoutEditor.pdfCurrentPage + delta;
+  if(next<1 || next>layoutEditor.pdfTotalPages) return;
+  // نحفظ عناصر الصفحة الحالية في الذاكرة قبل ما ننتقل (مفيش فقد للتعديلات بين الصفحات)
+  layoutEditor.pdfPagesElements[layoutEditor.pdfCurrentPage] = layoutElementsForHistory();
+  layoutEditor.pdfCurrentPage = next;
+  layoutEditor.elements = layoutEditor.pdfPagesElements[next] || [];
+  layoutEditor.selectedIndex = -1; layoutEditor.history=[]; layoutEditor.redoStack=[];
+  document.getElementById('pdfPageLabel').textContent = next;
+  document.getElementById('pdfPrevPageBtn').disabled = next<=1;
+  document.getElementById('pdfNextPageBtn').disabled = next>=layoutEditor.pdfTotalPages;
+  toast('⏳ جاري تحميل الصفحة...');
+  await renderPdfEditorPage();
+}
+async function savePdfLayoutEdit(){
+  const canvas = document.getElementById('layoutEditCanvas');
+  if(!canvas){ toast('تعذّر الحفظ'); return; }
+  const saveBtn = document.querySelector('button[onclick="savePdfLayoutEdit()"]');
+  if(saveBtn){ saveBtn.disabled=true; saveBtn.textContent='جاري الحفظ...'; }
+  const statusHost = document.getElementById('layoutSaveStatus');
+  const setStatus = html => { if(statusHost) statusHost.innerHTML = html; };
+  try{
+    // نحفظ عناصر الصفحة الحالية في كائن كل الصفحات قبل الإرسال
+    layoutEditor.pdfPagesElements[layoutEditor.pdfCurrentPage] = layoutElementsForHistory();
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ جاري تجهيز معاينة الصفحة الحالية...</p>`);
+    const blob = await new Promise(res=> canvas.toBlob(res, 'image/jpeg', 0.92));
+    if(!blob || blob.size===0){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 تعذّر إنشاء معاينة الصفحة.</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ تعديل PDF';} return; }
+    const path = `layouts/${layoutEditor.layoutId}-pdf-preview-${Date.now()}.jpg`;
+    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, blob, {contentType:'image/jpeg', upsert:true});
+    if(upErr){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل رفع المعاينة: ${upErr.message||''}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ تعديل PDF';} return; }
+    const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+    setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ جاري حفظ التعديلات في قاعدة البيانات (ملف الـPDF الأصلي مش هيتأثر)...</p>`);
+    const payload = { pdf_edit_state: layoutEditor.pdfPagesElements, pdf_annotated_preview_url: pub.publicUrl, pdf_last_edited_page: layoutEditor.pdfCurrentPage };
+    const {error} = await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId);
+    if(error){ setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 فشل الحفظ: ${error.message||''}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ تعديل PDF';} return; }
+    const l = layoutsData.find(x=>x.id===layoutEditor.layoutId);
+    if(l){ l.pdf_edit_state = layoutEditor.pdfPagesElements; l.pdf_annotated_preview_url = pub.publicUrl; l.pdf_last_edited_page = layoutEditor.pdfCurrentPage; }
+    await logAudit('تعديل خريطة PDF', `${l?l.layout_name:''} — صفحة ${layoutEditor.pdfCurrentPage}`);
+    setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم حفظ التعديلات بنجاح — ملف الـPDF الأصلي محفوظ زي ما هو.</p>
+      <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
+    if(saveBtn) saveBtn.style.display='none';
+  }catch(e){ console.error(e); setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 خطأ غير متوقع: ${e.message||''}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ تعديل PDF';} }
+}
 async function openPdfLayoutViewer(layoutId){
   const l = layoutsData.find(x=>x.id===layoutId);
   if(!l){ toast('تعذّر إيجاد الخريطة'); return; }
@@ -7236,11 +7498,11 @@ async function deleteLayoutMarker(markerId){
 async function deleteLayout(id, factoryId){
   const l = layoutsData.find(x=>x.id===id);
   const fid = l ? l.factory_id : factoryId;
-  try{
-    await supa.from('factory_layouts').delete().eq('id', id);
-    await logAudit('حذف خريطة مصنع', l?l.layout_name:id);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('factory_layouts').delete().eq('id', id);
+    if(error) throw error;
     toast('✅ تم الحذف'); loadLayouts(fid);
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, `الخريطة "${l?l.layout_name:''}"`, {dangerous:true});
 }
 function confirmRestoreOriginalLayout(id){
   const l = layoutsData.find(x=>x.id===id);
