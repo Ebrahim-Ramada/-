@@ -2689,14 +2689,13 @@ function confirmDeleteArchiveEntry(id){
     <p style="font-size:13px;color:var(--muted)">حذف هذا التقرير من الأرشيف نهائيًا؟ لا يمكن التراجع.</p>
     <button class="btn danger block" onclick="deleteArchiveEntry('${id}')">حذف نهائيًا</button>`);
 }
-async function deleteArchiveEntry(id){
+function deleteArchiveEntry(id){
   if(!isAdmin() && !hasPerm('delete_report')){ toast('🚫 لا تملك صلاحية الحذف'); return; }
-  try{
+  confirmDeleteWithPassword(async ()=>{
     const {error} = await supa.from('reports_archive').delete().eq('id', id);
     if(error) throw error;
-    await logAudit('حذف تقرير من الأرشيف', id);
     closeModal(); toast('✅ تم الحذف'); loadArchive();
-  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+  }, 'تقرير من الأرشيف');
 }
 
 
@@ -3183,13 +3182,13 @@ async function uploadMaintenanceImages(taskId, inputEl){
   maintenanceImagesData = data||[];
   toast(`✅ تم رفع ${ok} صورة`); openMaintenanceGallery(taskId); renderMaintenanceList();
 }
-async function deleteMaintenanceImage(imageId, taskId){
+function deleteMaintenanceImage(imageId, taskId){
   if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
-  try{
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('maintenance_images').delete().eq('id', imageId);
     maintenanceImagesData = maintenanceImagesData.filter(x=>x.id!==imageId);
     toast('✅ تم الحذف'); openMaintenanceGallery(taskId); renderMaintenanceList();
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, 'صورة صيانة');
 }
 function openMaintenanceForm(factoryId, id){
   const t = id ? preventiveTasks.find(x=>x.id===id) : null;
@@ -3248,9 +3247,12 @@ async function saveMaintenanceTask(id){
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'خطأ غير معروف')); }
 }
 function deleteMaintenanceTask(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف مهمة الصيانة هذه نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteMaintenanceTask('${id}')">حذف نهائيًا</button>`);
+  const t = preventiveTasks.find(x=>x.id===id);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('preventive_maintenance').delete().eq('id', id);
+    if(error) throw error;
+    closeModal(); toast('✅ تم الحذف'); loadPreventiveTasks(t?.factory_id||currentViewCtx);
+  }, 'مهمة صيانة');
 }
 async function confirmDeleteMaintenanceTask(id){
   try{
@@ -3400,8 +3402,10 @@ async function addCameraBrand(factoryId){
   try{ const {error} = await supa.from('camera_brands').insert({factory_id:factoryId, name, created_by:currentProfile.id}); if(error) throw error; toast('✅ تمت الإضافة'); openCameraTypesManager(factoryId); }
   catch(e){ toast('🚫 تعذّر الإضافة (ربما مُضافة بالفعل)'); }
 }
-async function deleteCameraBrand(id, factoryId){
-  try{ await supa.from('camera_brands').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId); }catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteCameraBrand(id, factoryId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('camera_brands').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId);
+  }, 'شركة كاميرات مصنّعة');
 }
 async function addCameraResolution(factoryId){
   const name = document.getElementById('newResName').value.trim();
@@ -3409,8 +3413,10 @@ async function addCameraResolution(factoryId){
   try{ const {error} = await supa.from('camera_resolutions').insert({factory_id:factoryId, name, created_by:currentProfile.id}); if(error) throw error; toast('✅ تمت الإضافة'); openCameraTypesManager(factoryId); }
   catch(e){ toast('🚫 تعذّر الإضافة (ربما مُضافة بالفعل)'); }
 }
-async function deleteCameraResolution(id, factoryId){
-  try{ await supa.from('camera_resolutions').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId); }catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteCameraResolution(id, factoryId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('camera_resolutions').delete().eq('id',id); toast('تم الحذف'); openCameraTypesManager(factoryId);
+  }, 'دقة كاميرا');
 }
 
 /* ============================================================
@@ -3484,9 +3490,10 @@ async function saveCameraTypeCount(factoryId){
     toast('✅ تم الإضافة'); await reloadCameraTypeCounts(factoryId); renderCameraTypeCountsManager(factoryId);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
-async function deleteCameraTypeCount(id, factoryId){
-  try{ await supa.from('camera_type_counts').delete().eq('id',id); toast('تم الحذف'); await reloadCameraTypeCounts(factoryId); renderCameraTypeCountsManager(factoryId); }
-  catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteCameraTypeCount(id, factoryId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('camera_type_counts').delete().eq('id',id); toast('تم الحذف'); await reloadCameraTypeCounts(factoryId); renderCameraTypeCountsManager(factoryId);
+  }, 'سجل نوع كاميرا');
 }
 
 /* ============================================================
@@ -4494,8 +4501,9 @@ async function completeHandoverFollowUp(id){
   }catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteHandover(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteHandover('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('shift_handovers').delete().eq('id',id); closeModal(); toast('تم الحذف'); loadShiftHandovers();
+  }, 'سجل تسليم شيفت');
 }
 async function confirmDeleteHandover(id){
   try{ await supa.from('shift_handovers').delete().eq('id',id); await logAudit('حذف سجل شيفت', id); closeModal(); toast('تم الحذف'); loadShiftHandovers(); }
@@ -4760,9 +4768,9 @@ async function trackCameraSla(oldCam, newStatus){
 }
 function deleteCameraRecord(camId){
   const c = camerasData.find(x=>x.id===camId);
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف كاميرا "${c.camera_name}" نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteCamera('${camId}','${c.factory_id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await confirmDeleteCamera(camId, c.factory_id);
+  }, `الكاميرا "${c.camera_name}" وكل بياناتها`, {dangerous:true});
 }
 async function confirmDeleteCamera(camId, factoryId){
   try{
@@ -5168,9 +5176,10 @@ async function quickUpdateScreenStatus(screenId, newStatus){
     toast('✅ تم التحديث'); loadScreens(s.factory_id); loadFactories();
   }catch(e){ toast('🚫 تعذّر التحديث'); }
 }
-async function deleteScreenRecord(screenId, factoryId){
-  try{ await supa.from('screens').delete().eq('id', screenId); await logAudit('حذف شاشة', screenId); toast('تم الحذف'); loadScreens(factoryId); loadFactories(); }
-  catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteScreenRecord(screenId, factoryId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('screens').delete().eq('id', screenId); toast('تم الحذف'); loadScreens(factoryId); loadFactories();
+  }, 'شاشة');
 }
 
 /* ============================================================
@@ -5292,13 +5301,13 @@ async function uploadFaultImages(faultId, inputEl){
   faultImagesData = data||[];
   toast(`✅ تم رفع ${ok} صورة`); openFaultGallery(faultId); renderFaultsList();
 }
-async function deleteFaultImage(imageId, faultId){
+function deleteFaultImage(imageId, faultId){
   if(!isAdmin()){ toast('🚫 الأدمن فقط'); return; }
-  try{
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('fault_images').delete().eq('id', imageId);
     faultImagesData = faultImagesData.filter(x=>x.id!==imageId);
     toast('✅ تم الحذف'); openFaultGallery(faultId); renderFaultsList();
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, 'صورة عطل');
 }
 function openFaultForm(id){
   const f = id ? faultsData.find(x=>x.id===id) : null;
@@ -5445,9 +5454,11 @@ async function updateFaultStatus(id, newStatus){
   }catch(e){ console.error(e); toast('🚫 تعذّر التحديث: '+(e.message||'')); }
 }
 function deleteFault(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف سجل هذا العطل نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteFault('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('faults').delete().eq('id', id);
+    if(error) throw error;
+    closeModal(); toast('✅ تم الحذف'); loadFaults();
+  }, 'سجل عطل');
 }
 async function confirmDeleteFault(id){
   try{
@@ -5612,9 +5623,9 @@ async function saveStoreItemForm(id){
   }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 function deleteStoreItem(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف الصنف وكل حركاته المسجّلة نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteStoreItem('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('store_items').delete().eq('id',id); closeModal(); toast('تم الحذف'); loadStoreData(currentViewCtx);
+  }, 'الصنف وكل حركاته المسجّلة', {dangerous:true});
 }
 async function confirmDeleteStoreItem(id){
   try{ await supa.from('store_items').delete().eq('id',id); await logAudit('حذف صنف مخزن', id); closeModal(); toast('تم الحذف'); loadStoreData(currentViewCtx); }
@@ -5681,16 +5692,16 @@ async function uploadItemImages(itemId, inputEl){
   openItemGalleryModal(itemId);
   renderStoreList();
 }
-async function deleteItemImage(imageId, itemId){
+function deleteItemImage(imageId, itemId){
   if(!isAdmin() && !hasPerm('delete_store_images')){ toast('🚫 لا تملك صلاحية حذف الصور'); return; }
-  try{
+  confirmDeleteWithPassword(async ()=>{
     const {error} = await supa.from('store_item_images').delete().eq('id', imageId);
     if(error) throw error;
     storeItemImagesData = storeItemImagesData.filter(x=>x.id!==imageId);
     toast('✅ تم حذف الصورة');
     openItemGalleryModal(itemId);
     renderStoreList();
-  }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
+  }, 'صورة صنف مخزن');
 }
 
 function openStoreTransactionForm(itemId){
@@ -5727,11 +5738,12 @@ async function saveStoreTransactionForm(itemId){
   }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 function deleteStoreTransaction(txnId, itemId){
-  openModal(`
-    <div class="modal-head"><h3>تأكيد حذف الحركة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">هل تريد حذف هذه الحركة نهائيًا؟ سيتم إعادة حساب الرصيد تلقائيًا.</p>
-    <button class="btn danger block" onclick="confirmDeleteStoreTransaction('${txnId}','${itemId}')">حذف نهائيًا</button>
-  `);
+  const item = storeItemsData.find(x=>x.id===itemId);
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('store_transactions').delete().eq('id', txnId);
+    if(error) throw error;
+    closeModal(); toast('✅ تم حذف الحركة'); loadStoreData(currentViewCtx);
+  }, `حركة مخزن — ${item?item.item_name:itemId} (سيُعاد حساب الرصيد تلقائيًا)`);
 }
 async function confirmDeleteStoreTransaction(txnId, itemId){
   try{
@@ -5990,8 +6002,9 @@ async function updateModStatus(id, status){
   catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteCameraMod(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteCameraMod('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('camera_modifications').delete().eq('id',id); closeModal(); toast('تم الحذف'); loadCameraMods(currentViewCtx);
+  }, 'سجل كاميرا للتعديل');
 }
 async function confirmDeleteCameraMod(id){
   try{ await supa.from('camera_modifications').delete().eq('id',id); await logAudit('حذف سجل كاميرا للتعديل', id); closeModal(); toast('تم الحذف'); loadCameraMods(currentViewCtx); }
@@ -6292,8 +6305,9 @@ async function updateLightingStatus(id, status){
   catch(e){ toast('🚫 تعذّر التحديث'); }
 }
 function deleteLightingNeed(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteLighting('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('lighting_needs').delete().eq('id',id); closeModal(); toast('تم الحذف'); loadLightingNeeds(currentViewCtx);
+  }, 'احتياج إضاءة');
 }
 async function confirmDeleteLighting(id){
   try{ await supa.from('lighting_needs').delete().eq('id',id); await logAudit('حذف احتياج إضاءة', id); closeModal(); toast('تم الحذف'); loadLightingNeeds(currentViewCtx); }
@@ -6472,9 +6486,11 @@ async function saveEditDownCamName(id){
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 function deleteDownCam(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">هذا حذف نهائي لسجل العطل بالكامل (وسيختفي من شاشة الأعطال أيضًا). متأكد؟</p>
-    <button class="btn danger block" onclick="confirmDeleteDownCam('${id}')">حذف نهائيًا</button>`);
+  const c = downCamsData.find(x=>x.id===id);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('faults').delete().eq('id',id);
+    closeModal(); toast('تم الحذف'); loadDownCams(c?.factory_id||currentViewCtx);
+  }, `${c?c.device_name:id} — حذف نهائي لسجل العطل بالكامل (سيختفي من شاشة الأعطال أيضًا)`, {dangerous:true});
 }
 async function confirmDeleteDownCam(id){
   try{
@@ -6806,8 +6822,9 @@ async function removeRoomNeedPhoto(id){
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function deleteRoomNeed(id){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteRoomNeed('${id}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('room_needs').delete().eq('id',id); closeModal(); toast('تم الحذف'); loadRoomNeeds(); loadDashboardSummaries();
+  }, 'احتياج غرفة');
 }
 async function confirmDeleteRoomNeed(id){
   try{ await supa.from('room_needs').delete().eq('id',id); await logAudit('حذف احتياج غرفة', id); closeModal(); toast('تم الحذف'); loadRoomNeeds(); loadDashboardSummaries(); }
@@ -7488,12 +7505,12 @@ function handleMarkerClick(markerId){
       <button class="btn block" style="margin-top:8px" onclick="renderLayoutMarkersModal()">رجوع للخريطة</button>`);
   } else { closeModal(); openProfile(); }
 }
-async function deleteLayoutMarker(markerId){
-  try{
+function deleteLayoutMarker(markerId){
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('layout_markers').delete().eq('id', markerId);
     currentLayoutMarkers = currentLayoutMarkers.filter(x=>x.id!==markerId);
     toast('✅ تم حذف العلامة'); renderLayoutMarkersModal();
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, 'علامة على الخريطة التفاعلية');
 }
 async function deleteLayout(id, factoryId){
   const l = layoutsData.find(x=>x.id===id);
@@ -8402,9 +8419,10 @@ async function saveServerForm(factoryId, serverId){
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 function deleteServer(serverId, factoryId){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف السيرفر وكل بياناته (الهاردات، الصور) نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteServer('${serverId}','${factoryId}')">حذف نهائيًا</button>`);
+  const s = serversData.find(x=>x.id===serverId);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('factory_servers').delete().eq('id',serverId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId);
+  }, `السيرفر "${s?s.server_name:serverId}" وكل بياناته (الهاردات، الصور)`, {dangerous:true});
 }
 async function confirmDeleteServer(serverId, factoryId){
   try{ const s=serversData.find(x=>x.id===serverId); await supa.from('factory_servers').delete().eq('id',serverId); await logAudit('حذف سيرفر', s?s.server_name:serverId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
@@ -8531,9 +8549,10 @@ async function saveTowerForm(factoryId, towerId){
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
 function deleteTower(towerId, factoryId){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:13px;color:var(--muted)">حذف البرج وكل روابطه اللاسلكية المرتبطة به نهائيًا؟</p>
-    <button class="btn danger block" onclick="confirmDeleteTower('${towerId}','${factoryId}')">حذف نهائيًا</button>`);
+  const t = towersData.find(x=>x.id===towerId);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('antenna_towers').delete().eq('id',towerId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId);
+  }, `البرج "${t?t.tower_name:towerId}" وكل روابطه اللاسلكية`, {dangerous:true});
 }
 async function confirmDeleteTower(towerId, factoryId){
   try{ const t=towersData.find(x=>x.id===towerId); await supa.from('antenna_towers').delete().eq('id',towerId); await logAudit('حذف برج أنتنة', t?t.tower_name:towerId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
@@ -8579,9 +8598,10 @@ async function uploadTowerImages(towerId, inputEl){
   currentTowerImages = data||[];
   toast(`✅ تم رفع ${ok} صورة`); openTowerGallery(towerId);
 }
-async function deleteTowerImage(imageId, towerId){
-  try{ await supa.from('tower_images').delete().eq('id',imageId); currentTowerImages = currentTowerImages.filter(x=>x.id!==imageId); toast('✅ تم الحذف'); openTowerGallery(towerId); }
-  catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteTowerImage(imageId, towerId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('tower_images').delete().eq('id',imageId); currentTowerImages = currentTowerImages.filter(x=>x.id!==imageId); toast('✅ تم الحذف'); openTowerGallery(towerId);
+  }, 'صورة برج أنتنة');
 }
 
 /* ---------- الروابط اللاسلكية ---------- */
@@ -8669,14 +8689,13 @@ async function showWirelessLinkDetails(linkId){
     ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn danger block" style="margin-top:10px" onclick="deleteWirelessLink('${l.id}')">🗑 حذف الرابط</button>`:''}
   `);
 }
-async function deleteWirelessLink(linkId){
-  try{
-    const l = wirelessLinksData.find(x=>x.id===linkId);
+function deleteWirelessLink(linkId){
+  const l = wirelessLinksData.find(x=>x.id===linkId);
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('wireless_links').delete().eq('id',linkId);
-    await logAudit('حذف رابط لاسلكي', l?l.link_name:linkId);
     const t = l ? towersData.find(x=>x.id===l.from_tower_id) : null;
     closeModal(); toast('تم الحذف'); if(t) loadNetworkData(t.factory_id);
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, l?l.link_name:'رابط لاسلكي');
 }
 
 /* ============================================================
@@ -8838,12 +8857,12 @@ async function saveDriveForm(serverId, driveId){
     renderServerProfileModal(1);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
 }
-async function deleteDrive(driveId, serverId){
-  try{
+function deleteDrive(driveId, serverId){
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('server_drives').delete().eq('id',driveId);
     currentServerDrives = currentServerDrives.filter(x=>x.id!==driveId);
     toast('تم الحذف'); renderServerProfileModal(1);
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, 'هارد سيرفر');
 }
 async function uploadServerImages(serverId, inputEl){
   if(!isAdmin() && !hasPerm('upload_server_images')){ toast('🚫 لا تملك صلاحية رفع الصور'); return; }
@@ -8867,13 +8886,13 @@ async function uploadServerImages(serverId, inputEl){
   currentServerImages = data||[];
   toast(`✅ تم رفع ${ok} صورة`); renderServerProfileModal(2);
 }
-async function deleteServerImage(imageId, serverId){
+function deleteServerImage(imageId, serverId){
   if(!isAdmin() && !hasPerm('delete_server_images')){ toast('🚫 لا تملك صلاحية الحذف'); return; }
-  try{
+  confirmDeleteWithPassword(async ()=>{
     await supa.from('server_images').delete().eq('id',imageId);
     currentServerImages = currentServerImages.filter(x=>x.id!==imageId);
     toast('✅ تم الحذف'); renderServerProfileModal(2);
-  }catch(e){ toast('🚫 تعذّر الحذف'); }
+  }, 'صورة سيرفر');
 }
 
 /* ============================================================
@@ -9347,9 +9366,9 @@ async function removeRackPhoto(rackId, factoryId){
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function deleteRack(rackId, factoryId){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:12.5px;color:var(--muted)">حذف الراك؟ (لن يتم حذف السويتشات المرتبطة به، لكن سيُفصل ارتباطها)</p>
-    <button class="btn danger block" onclick="confirmDeleteRack('${rackId}','${factoryId}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('factory_racks').delete().eq('id',rackId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId);
+  }, 'راك (لن يتم حذف السويتشات المرتبطة، بس هيتفصل ارتباطها)');
 }
 async function confirmDeleteRack(rackId, factoryId){
   try{ await supa.from('factory_racks').delete().eq('id',rackId); await logAudit('حذف راك', rackId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
@@ -9486,8 +9505,9 @@ async function removeSwitchPhoto(switchId, factoryId){
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function deleteSwitch(switchId, factoryId){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteSwitch('${switchId}','${factoryId}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('factory_switches').delete().eq('id',switchId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId);
+  }, 'سويتش');
 }
 async function confirmDeleteSwitch(switchId, factoryId){
   try{ await supa.from('factory_switches').delete().eq('id',switchId); await logAudit('حذف سويتش', switchId); closeModal(); toast('تم الحذف'); loadNetworkData(factoryId); }
@@ -9607,8 +9627,9 @@ async function removeUpsPhoto(upsId, factoryId){
   catch(e){ toast('🚫 تعذّر الحذف'); }
 }
 function deleteUps(upsId, factoryId){
-  openModal(`<div class="modal-head"><h3>تأكيد الحذف</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <button class="btn danger block" onclick="confirmDeleteUps('${upsId}','${factoryId}')">حذف نهائيًا</button>`);
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('factory_ups').delete().eq('id',upsId); closeModal(); toast('تم الحذف'); loadUpsData(factoryId);
+  }, 'UPS');
 }
 async function confirmDeleteUps(upsId, factoryId){
   try{ await supa.from('factory_ups').delete().eq('id',upsId); await logAudit('حذف UPS', upsId); closeModal(); toast('تم الحذف'); loadUpsData(factoryId); }
@@ -11917,9 +11938,10 @@ async function saveOnCall(){
     toast('✅ تم الحفظ'); openOnCallManager(); loadOnCallCard();
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'تحقق من تشغيل schema_part10.sql')); }
 }
-async function deleteOnCall(id){
-  try{ await supa.from('oncall_schedule').delete().eq('id',id); toast('تم الحذف'); openOnCallManager(); loadOnCallCard(); }
-  catch(e){ toast('🚫 تعذّر الحذف'); }
+function deleteOnCall(id){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('oncall_schedule').delete().eq('id',id); toast('تم الحذف'); openOnCallManager(); loadOnCallCard();
+  }, 'سجل مناوبة');
 }
 
 </script>
