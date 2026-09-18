@@ -7114,14 +7114,44 @@ async function saveLayoutForm(factoryId){
   const file = fileEl.files[0];
   if(!name){ toast('أدخل اسم الخريطة'); return; }
   if(!file){ toast('اختر ملف الخريطة'); return; }
-  toast('جاري رفع الملف...');
+  const saveBtn = document.querySelector('button[onclick="saveLayoutForm(\'' + factoryId + '\')"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري الرفع...'; }
   try{
     const isPdf = file.type === 'application/pdf';
-    let uploadBlob = file, ext = 'pdf';
-    if(!isPdf){ uploadBlob = await compressImageFile(file, 2400, 0.9); ext='jpg'; }
+    let uploadBlob, ext;
+    if(isPdf){
+      // الـPDF ما بيتضغطش، فلو كان كبير جدًا (سكانر بدقة عالية) بنحذّر بدل ما نسيب المستخدم يستنى ويفشل بصمت
+      if(file.size > 15*1024*1024){ toast('⚠️ ملف الـPDF كبير جدًا (أكتر من 15MB) — ده ممكن يفشل أو ياخد وقت طويل على نت بطيء'); }
+      uploadBlob = file; ext = 'pdf';
+    } else {
+      // جودة متوازنة: أحسن بكتير من القديم (كانت بتتكسّر عند الزوم) من غير ما تبقى ثقيلة توقّف الرفع
+      toast('⏳ جاري ضغط الصورة...');
+      uploadBlob = await compressImageFile(file, 1800, 0.82);
+      // لو لسه كبير (صورة معقدة جدًا)، نضغط تاني بشكل أخف عشان نضمن نجاح الرفع بدل ما يفشل
+      if(uploadBlob.size > 6*1024*1024){
+        toast('⏳ الملف كبير، جاري ضغط إضافي لضمان نجاح الرفع...');
+        uploadBlob = await compressImageFile(file, 1400, 0.72);
+      }
+      ext = 'jpg';
+    }
     const path = `layouts/${factoryId}-${Date.now()}.${ext}`;
-    const {error: upErr} = await supa.storage.from('camera-photos').upload(path, uploadBlob, {contentType: isPdf?'application/pdf':'image/jpeg', upsert:true});
-    if(upErr) throw upErr;
+    toast('⏳ جاري رفع الملف... (' + Math.round(uploadBlob.size/1024) + ' KB)');
+    // محاولة الرفع مع إعادة محاولة تلقائية مرة واحدة لو فشل بسبب مشكلة شبكة مؤقتة
+    let upErr = null;
+    for(let attempt=1; attempt<=2; attempt++){
+      const res = await supa.storage.from('camera-photos').upload(path, uploadBlob, {contentType: isPdf?'application/pdf':'image/jpeg', upsert:true});
+      upErr = res.error;
+      if(!upErr) break;
+      if(attempt===1){ toast('⏳ حاولنا تاني، جاري إعادة المحاولة...'); await new Promise(r=>setTimeout(r,1200)); }
+    }
+    if(upErr){
+      // رسالة خطأ حقيقية توضح السبب الفعلي بدل "تعذّر الرفع" العامة
+      let reason = upErr.message || 'خطأ غير معروف';
+      if(/exceeded|size|too large|payload/i.test(reason)) reason = 'حجم الملف كبير جدًا على السيرفر — جرّب صورة أصغر أو دقة أقل';
+      else if(/network|fetch|timeout/i.test(reason)) reason = 'مشكلة في الاتصال بالإنترنت — تأكد من قوة الشبكة وحاول تاني';
+      else if(/permission|policy|rls/i.test(reason)) reason = 'مفيش صلاحية للرفع — تواصل مع الأدمن للتأكد من إعدادات التخزين';
+      throw new Error(reason);
+    }
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
     const {error} = await supa.from('factory_layouts').insert({
       factory_id: factoryId, layout_name: name, file_url: pub.publicUrl, file_type: isPdf?'pdf':'image',
@@ -7130,8 +7160,12 @@ async function saveLayoutForm(factoryId){
     if(error) throw error;
     const f = factoriesData.find(x=>x.id===factoryId);
     await logAudit('إضافة خريطة مصنع', `${f?f.name:''}: ${name}`);
-    closeModal(); toast('✅ تم رفع الخريطة'); loadLayouts(factoryId);
-  }catch(e){ console.error(e); toast('🚫 تعذّر الرفع: '+(e.message||'')); }
+    closeModal(); toast('✅ تم رفع الخريطة بنجاح'); loadLayouts(factoryId);
+  }catch(e){
+    console.error('[LAYOUT UPLOAD] ERROR:', e);
+    toast('🚫 تعذّر الرفع: '+(e.message||'خطأ غير معروف'));
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '💾 رفع وحفظ'; }
+  }
 }
 
 /* ============================================================
