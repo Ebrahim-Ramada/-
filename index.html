@@ -6943,6 +6943,7 @@ async function loadLayouts(factoryId){
       ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">🧩 العناصر التفاعلية على الخريطة</button>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:6px">
         ${l.file_type==='image' ? `<button class="btn sm primary" onclick="openLayoutEditor('${l.id}')">✏️ تعديل</button>`:''}
+        <button class="btn sm" onclick="downloadOriginalLayoutFile('${l.id}')">⬇️ تحميل الأصل (جودة كاملة)</button>
         ${l.file_type==='pdf' ? `<button class="btn sm primary" onclick="openPdfLayoutEditor('${l.id}')">✏️ تعديل PDF</button>`:''}
         ${l.original_file_url? `<button class="btn sm" onclick="confirmRestoreOriginalLayout('${l.id}')">↩️ الأصل</button>`:''}
         ${l.pre_restore_file_url? `<button class="btn sm" style="background:var(--success);color:#fff" onclick="undoRestoreOriginal('${l.id}')">↩️ تراجع عن آخر استعادة</button>`:''}
@@ -7084,6 +7085,20 @@ async function savePdfLayoutEdit(){
     if(saveBtn) saveBtn.style.display='none';
   }catch(e){ console.error(e); setStatus(`<p style="font-size:12px;color:var(--danger)">🚫 خطأ غير متوقع: ${e.message||''}</p>`); if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ تعديل PDF';} }
 }
+async function downloadOriginalLayoutFile(layoutId){
+  const l = layoutsData.find(x=>x.id===layoutId);
+  if(!l || !l.file_url){ toast('🚫 الملف غير موجود'); return; }
+  toast('⏳ جاري تحميل الملف الأصلي بجودته الكاملة...');
+  try{
+    // بنجيب البايتات الخام للملف زي ما هي بالظبط — بدون أي مرور بـCanvas أو إعادة ترميز
+    // أو تغيير صيغة، عشان لو رفعت PNG يفضل PNG، ولو JPEG يفضل JPEG بنفس الجودة الأصلية
+    const res = await fetch(l.file_url);
+    const blob = await res.blob();
+    const ext = l.original_mime_type ? (l.original_mime_type.split('/')[1]||'jpg') : (l.file_type==='pdf'?'pdf':'jpg');
+    await saveOrShareFile(blob, `${l.layout_name}-original.${ext}`);
+    if(l.original_width) toast(`✅ تم تحميل الملف الأصلي (${l.original_width}×${l.original_height}px)`);
+  }catch(e){ console.error(e); toast('🚫 تعذّر تحميل الملف الأصلي: '+(e.message||'')); }
+}
 async function openPdfLayoutViewer(layoutId){
   const l = layoutsData.find(x=>x.id===layoutId);
   if(!l){ toast('تعذّر إيجاد الخريطة'); return; }
@@ -7165,28 +7180,31 @@ async function saveLayoutForm(factoryId){
   if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري الرفع...'; }
   try{
     const isPdf = file.type === 'application/pdf';
-    let uploadBlob, ext;
-    if(isPdf){
-      // الـPDF ما بيتضغطش، فلو كان كبير جدًا (سكانر بدقة عالية) بنحذّر بدل ما نسيب المستخدم يستنى ويفشل بصمت
-      if(file.size > 15*1024*1024){ toast('⚠️ ملف الـPDF كبير جدًا (أكتر من 15MB) — ده ممكن يفشل أو ياخد وقت طويل على نت بطيء'); }
-      uploadBlob = file; ext = 'pdf';
-    } else {
-      // جودة متوازنة: أحسن بكتير من القديم (كانت بتتكسّر عند الزوم) من غير ما تبقى ثقيلة توقّف الرفع
-      toast('⏳ جاري ضغط الصورة...');
-      uploadBlob = await compressImageFile(file, 1800, 0.82);
-      // لو لسه كبير (صورة معقدة جدًا)، نضغط تاني بشكل أخف عشان نضمن نجاح الرفع بدل ما يفشل
-      if(uploadBlob.size > 6*1024*1024){
-        toast('⏳ الملف كبير، جاري ضغط إضافي لضمان نجاح الرفع...');
-        uploadBlob = await compressImageFile(file, 1400, 0.72);
-      }
-      ext = 'jpg';
+    // 🎯 قاعدة أساسية: الملف الأصلي بيترفع زي ما هو بالظبط — بدون Resize ولا ضغط
+    // ولا إعادة رسم على Canvas ولا تحويل صيغة. الجودة الأصلية 100% محفوظة دايمًا.
+    const ext = isPdf ? 'pdf' : (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const path = `layouts/${factoryId}-${Date.now()}-original.${ext}`;
+    if(file.size > 30*1024*1024){ toast('⚠️ الملف كبير جدًا (أكتر من 30MB) — الرفع بالجودة الأصلية ممكن ياخد وقت طويل على نت بطيء، برضه هنحاول'); }
+    toast('⏳ جاري رفع الملف الأصلي بجودته الكاملة... (' + (file.size/1024/1024).toFixed(1) + ' MB)');
+
+    // نحسب أبعاد الصورة الأصلية الحقيقية (بدون أي تصغير) عشان نسجّلها كبيانات وصفية
+    let originalWidth = null, originalHeight = null;
+    if(!isPdf){
+      try{
+        const dims = await new Promise((resolve,reject)=>{
+          const img = new Image();
+          img.onload = ()=> resolve({w:img.naturalWidth, h:img.naturalHeight});
+          img.onerror = reject;
+          img.src = URL.createObjectURL(file);
+        });
+        originalWidth = dims.w; originalHeight = dims.h;
+      }catch(e){}
     }
-    const path = `layouts/${factoryId}-${Date.now()}.${ext}`;
-    toast('⏳ جاري رفع الملف... (' + Math.round(uploadBlob.size/1024) + ' KB)');
-    // محاولة الرفع مع إعادة محاولة تلقائية مرة واحدة لو فشل بسبب مشكلة شبكة مؤقتة
+
+    // رفع الملف الأصلي كما هو تمامًا — بدون أي إعادة رسم أو تشفير أو ضغط
     let upErr = null;
     for(let attempt=1; attempt<=2; attempt++){
-      const res = await supa.storage.from('camera-photos').upload(path, uploadBlob, {contentType: isPdf?'application/pdf':'image/jpeg', upsert:true});
+      const res = await supa.storage.from('camera-photos').upload(path, file, {contentType: file.type || (isPdf?'application/pdf':'image/jpeg'), upsert:true});
       upErr = res.error;
       if(!upErr) break;
       if(attempt===1){ toast('⏳ حاولنا تاني، جاري إعادة المحاولة...'); await new Promise(r=>setTimeout(r,1200)); }
@@ -7194,22 +7212,36 @@ async function saveLayoutForm(factoryId){
     if(upErr){
       // رسالة خطأ حقيقية توضح السبب الفعلي بدل "تعذّر الرفع" العامة
       let reason = upErr.message || 'خطأ غير معروف';
-      if(/exceeded|size|too large|payload/i.test(reason)) reason = 'حجم الملف كبير جدًا على السيرفر — جرّب صورة أصغر أو دقة أقل';
-      else if(/network|fetch|timeout/i.test(reason)) reason = 'مشكلة في الاتصال بالإنترنت — تأكد من قوة الشبكة وحاول تاني';
+      if(/exceeded|size|too large|payload/i.test(reason)) reason = 'حجم الملف الأصلي كبير جدًا على حد السيرفر المسموح — الملف اترفع بجودته الكاملة بدون ضغط، فلو الصورة ضخمة جدًا ممكن تحتاج زيادة حد الرفع من إعدادات Supabase Storage';
+      else if(/network|fetch|timeout/i.test(reason)) reason = 'مشكلة في الاتصال بالإنترنت أثناء رفع ملف كبير — تأكد من قوة الشبكة وحاول تاني';
       else if(/permission|policy|rls/i.test(reason)) reason = 'مفيش صلاحية للرفع — تواصل مع الأدمن للتأكد من إعدادات التخزين';
       throw new Error(reason);
     }
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+
+    // معاينة صغيرة منفصلة تمامًا (للعرض السريع في كارت القائمة بس) — الأصل فوق ده متأثرش خالص
+    let previewUrl = null;
+    if(!isPdf){
+      try{
+        const previewBlob = await compressImageFile(file, 500, 0.75);
+        const previewPath = `layouts/${factoryId}-${Date.now()}-preview.jpg`;
+        const {error: pErr} = await supa.storage.from('camera-photos').upload(previewPath, previewBlob, {contentType:'image/jpeg', upsert:true});
+        if(!pErr){ const {data: pPub} = supa.storage.from('camera-photos').getPublicUrl(previewPath); previewUrl = pPub.publicUrl; }
+      }catch(e){ console.warn('تعذّر إنشاء معاينة سريعة (مش مشكلة، الأصل اترفع صح)', e); }
+    }
+
     const {error} = await supa.from('factory_layouts').insert({
       factory_id: factoryId, layout_name: name, file_url: pub.publicUrl, file_type: isPdf?'pdf':'image',
+      original_width: originalWidth, original_height: originalHeight, original_file_size: file.size, original_mime_type: file.type,
+      preview_url: previewUrl,
       notes: document.getElementById('ly_notes').value.trim(), created_by: currentProfile.id
     });
     if(error) throw error;
     const f = factoriesData.find(x=>x.id===factoryId);
-    await logAudit('إضافة خريطة مصنع', `${f?f.name:''}: ${name}`);
-    closeModal(); toast('✅ تم رفع الخريطة بنجاح'); loadLayouts(factoryId);
+    await logAudit('إضافة خريطة مصنع (جودة أصلية كاملة)', `${f?f.name:''}: ${name}${originalWidth?` — ${originalWidth}×${originalHeight}px`:''}`);
+    closeModal(); toast('✅ تم رفع الخريطة بجودتها الأصلية الكاملة'); loadLayouts(factoryId);
   }catch(e){
-    console.error('[LAYOUT UPLOAD] ERROR:', e);
+    console.error('[LAYOUT UPLOAD - ORIGINAL QUALITY] ERROR:', e);
     toast('🚫 تعذّر الرفع: '+(e.message||'خطأ غير معروف'));
     if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '💾 رفع وحفظ'; }
   }
