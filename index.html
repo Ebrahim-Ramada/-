@@ -7608,6 +7608,42 @@ async function undoRestoreOriginal(id){
    يحتفظ دائمًا بالصورة الأصلية منفصلة عن النسخة المعدَّلة
    ============================================================ */
 let layoutEditor = null;
+/* ============================================================================
+   🎯 إصلاح جذري: تثبيت مكان عناصر الخريطة بالنسبة للخريطة نفسها، مش للكانفاس
+   الحالي. لو حجم الكانفاس اتغيّر (زي رفع الجودة اللي غيّرت maxW)، بيتم إعادة
+   قياس كل العناصر تناسبيًا عشان تفضل في نفس المكان الجغرافي بالظبط.
+   ============================================================================ */
+function rescaleLayoutElements(elements, sx, sy){
+  if(sx===1 && sy===1) return elements; // مفيش تغيير مطلوب
+  return elements.map(el=>{
+    const e = {...el};
+    if(e.type==='image' || e.type==='rect'){ e.x*=sx; e.y*=sy; if(e.w!=null)e.w*=sx; if(e.h!=null)e.h*=sy; }
+    else if(e.type==='pin'){ e.x*=sx; e.y*=sy; }
+    else if(e.type==='text'){ e.x*=sx; e.y*=sy; if(e.fontSize) e.fontSize*=((sx+sy)/2); }
+    else if(e.type==='arrow'){ e.x1*=sx; e.y1*=sy; e.x2*=sx; e.y2*=sy; }
+    else if(e.type==='circle'){ e.cx*=sx; e.cy*=sy; e.rx*=sx; e.ry*=sy; }
+    else if(e.type==='pen'){ e.points = e.points.map(p=>({x:p.x*sx, y:p.y*sy})); }
+    return e;
+  });
+}
+/**
+ * بيتحقق إن أبعاد الكانفاس الحالية متطابقة مع الأبعاد اللي اتحفظت بيها العناصر
+ * فعليًا، ولو مختلفة (زي بعد رفع الجودة) بيعيد قياس كل العناصر تلقائيًا مرة واحدة
+ * عشان تفضل بالظبط في نفس مكانها الجغرافي على الخريطة — بدون أي تدخل يدوي.
+ * naturalW/naturalH: أبعاد الصورة الأصلية الحقيقية (ثابتة دايمًا، مرجع موثوق).
+ */
+function migrateLayoutElementsIfNeeded(elements, refW, refH, currentW, currentH, naturalW, naturalH){
+  if(!elements.length) return { elements, migrated:false };
+  if(refW && refH && refW===currentW && refH===currentH) return { elements, migrated:false };
+  // لو معندناش أبعاد مرجعية محفوظة (بيانات قديمة من قبل هذا الإصلاح)، القاعدة الوحيدة
+  // المعروفة تاريخيًا في التطبيق قبل تعديلات الجودة الأخيرة كانت: حد أقصى 1000px
+  let oldW, oldH;
+  if(refW && refH){ oldW = refW; oldH = refH; }
+  else { oldW = Math.min(1000, naturalW); oldH = Math.round(naturalH*(oldW/naturalW)); }
+  if(oldW===currentW && oldH===currentH) return { elements, migrated:false };
+  const sx = currentW/oldW, sy = currentH/oldH;
+  return { elements: rescaleLayoutElements(elements, sx, sy), migrated:true };
+}
 function openLayoutEditor(layoutId){
   const l = layoutsData.find(x=>x.id===layoutId);
   if(!l || l.file_type!=='image'){ toast('التعديل متاح فقط على الخرائط المصوَّرة'); return; }
@@ -7680,6 +7716,14 @@ async function initLayoutCanvas(imgUrl){
     const scale = img.width > maxW ? maxW/img.width : 1;
     canvas.width = Math.round(img.width*scale); canvas.height = Math.round(img.height*scale);
     layoutEditor.bgImage = img;
+    // 🎯 إصلاح جذري: التأكد إن أماكن العناصر مرتبطة بنفس أبعاد الكانفاس اللي
+    // اتحفظت بيها فعليًا — ولو الأبعاد اتغيّرت (زي بعد رفع الجودة)، بيتم إعادة
+    // قياس كل العناصر تلقائيًا مرة واحدة عشان تفضل في نفس مكانها الجغرافي بالظبط
+    const lRec = layoutsData.find(x=>x.id===layoutEditor.layoutId);
+    const migration = migrateLayoutElementsIfNeeded(layoutEditor.elements, lRec?.edit_state_ref_w, lRec?.edit_state_ref_h, canvas.width, canvas.height, img.width, img.height);
+    layoutEditor.elements = migration.elements;
+    layoutEditor.canvasRefW = canvas.width; layoutEditor.canvasRefH = canvas.height;
+    if(migration.migrated){ toast('🔧 تم تثبيت أماكن العناصر تلقائيًا بعد تحديث نظام الخريطة — كل حاجة في مكانها الصح'); }
     // تحميل صور الأجهزة المستعادة (كاميرا/راك/سويتش) من عناصر تم استرجاعها من حفظ سابق
     layoutEditor.elements.filter(el=>el.type==='image' && el.src && !el.img).forEach(el=>{
       const dImg = new Image();
@@ -8155,7 +8199,7 @@ async function saveLayoutEdit(){
     }
     setStatus(`<p style="font-size:11px;color:var(--muted-2)">⏳ تم تجهيز ${preparedElements.length} عنصر بنجاح (حجم البيانات: ${JSON.stringify(preparedElements).length} حرف) — جاري الإرسال...</p>`);
     async function trySave(withState){
-      const payload = withState ? {...basePayload, edit_state: preparedElements} : basePayload;
+      const payload = withState ? {...basePayload, edit_state: preparedElements, edit_state_ref_w: layoutEditor.canvasRefW, edit_state_ref_h: layoutEditor.canvasRefH} : basePayload;
       return await supa.from('factory_layouts').update(payload).eq('id', layoutEditor.layoutId).select('id');
     }
     let {error, data: updatedRows} = await trySave(true);
@@ -8207,7 +8251,7 @@ async function saveLayoutEdit(){
     }
     await logAudit('تعديل خريطة (رسم/علامات)', `${l.layout_name} — ${layoutEditor.elements.length} عنصر — تم التحقق من الحفظ`);
     // نحدّث نسخة الخريطة في الذاكرة فورًا (بدل انتظار إعادة تحميل كاملة) عشان تقدر تتأكد بعينك
-    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved) l.edit_state = preparedElements;
+    l.file_url = pub.publicUrl; if(basePayload.original_file_url) l.original_file_url = basePayload.original_file_url; if(stateSaved){ l.edit_state = preparedElements; l.edit_state_ref_w = layoutEditor.canvasRefW; l.edit_state_ref_h = layoutEditor.canvasRefH; }
     setStatus(`<p style="font-size:12px;color:var(--success)">✅ تم الحفظ والتحقق الفعلي من القاعدة بنجاح (${verifiedCount||layoutEditor.elements.length} عنصر مؤكَّد من قاعدة البيانات نفسها${stateSaved?'':', ⚠️ حالة الاستكمال لم تُحفظ — شغّل schema_part29.sql'}).<br>الصورة الجديدة: <a href="${pub.publicUrl}" target="_blank" style="color:var(--accent)">فتح الصورة المحفوظة في تبويب جديد للتأكد</a></p>
       <button class="btn primary sm block" style="margin-top:8px" onclick="closeModal(); loadLayouts('${layoutEditor.factoryId}')">تمام، إغلاق</button>`);
     if(saveBtn){ saveBtn.style.display='none'; }
