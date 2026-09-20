@@ -8241,10 +8241,18 @@ function attachLayoutCanvasEvents(canvas){
     if(tool==='select' && layoutEditor.selectedIndex>=0){
       const el = layoutEditor.elements[layoutEditor.selectedIndex];
       if(mode==='resize' && el.type==='image'){
-        // تكبير/تصغير مع الحفاظ على تناسب الأبعاد الأصلية
+        // 🎯 إصلاح جذري: تحويل موضع الماوس لمساحة العنصر المحلية (غير المدوَّرة)
+        // أولًا — قبل حساب الحجم الجديد. من غير التحويل ده، تغيير الحجم على عنصر
+        // مدوَّر (90°/180°/أي زاوية) كان بيدّي نتيجة غلط بتبان وكأن الصورة "اتقلبت"
+        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+        const rad = -((el.rotation||0) * Math.PI/180);
+        const dx = pos.x-cx, dy = pos.y-cy;
+        const localX = dx*Math.cos(rad) - dy*Math.sin(rad); // موضع الماوس بالنسبة لمركز العنصر في مساحته المحلية غير المدوَّرة
         const ratio = el.h/el.w;
-        const newW = Math.max(20, pos.x - el.x);
+        const newW = Math.max(20, localX + el.w/2);
         el.w = newW; el.h = newW*ratio;
+        // نحافظ على مركز العنصر ثابت أثناء تغيير الحجم (مهم جدًا مع الدوران) بدل ما ينزاح مكانه
+        el.x = cx - el.w/2; el.y = cy - el.h/2;
         redrawLayoutCanvas(); return;
       }
       if(mode==='rotate' && el.type==='image'){
