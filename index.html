@@ -7989,11 +7989,21 @@ const LAYOUT_DEVICE_ICON_BUILDERS = {
   </svg>`,
   govision_bullet_real: c => {
     // بدون أي مستطيل أو إطار أو خلفية خالص — الصورة لوحدها بخلفية شفافة 100%.
-    // تغيير اللون بيتم عن طريق فلتر لوني حقيقي (Hue Rotation) على بكسلات
-    // الصورة نفسها، مش عن طريق إطار أو مستطيل حواليها.
-    const hueRotation = colorToHueRotation(c);
+    // 🎯 تلوين حقيقي بقوة كاملة (Colorize): كل بكسل بياخد سطوعه الأصلي (Luminance)
+    // ويتحوّل مباشرة للون المختار بالظبط (HEX الحقيقي) — مش إزاحة لونية خفيفة
+    // (Hue Rotation) زي قبل كده. أبيض الصورة الأصلي بيبقى اللون المختار بقوته
+    // الكاملة، والأسود بيفضل غامق، فالتفاصيل والشكل بيتحافظ عليهم مع لون واضح وقوي.
+    const hex = c.replace('#','');
+    const r = parseInt(hex.slice(0,2),16)/255, g = parseInt(hex.slice(2,4),16)/255, b = parseInt(hex.slice(4,6),16)/255;
+    const lr=0.299, lg=0.587, lb=0.114; // أوزان السطوع القياسية
+    const matrix = [
+      lr*r, lg*r, lb*r, 0, 0,
+      lr*g, lg*g, lb*g, 0, 0,
+      lr*b, lg*b, lb*b, 0, 0,
+      0,    0,    0,    1, 0
+    ].join(' ');
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <defs><filter id="tintF"><feColorMatrix type="hueRotate" values="${hueRotation}"/><feColorMatrix type="saturate" values="1.4"/></filter></defs>
+      <defs><filter id="tintF" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${matrix}"/></filter></defs>
       <image href="${GOVISION_BULLET_REAL_IMG}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid meet" filter="url(#tintF)"/>
     </svg>`;
   }
