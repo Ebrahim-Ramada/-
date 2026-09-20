@@ -7987,12 +7987,34 @@ const LAYOUT_DEVICE_ICON_BUILDERS = {
     <!-- لمبة IR صغيرة تحت العدسة (سمة مميزة لكاميرات Bullet الحقيقية) -->
     <circle cx="108" cy="35" r="14" fill="none" stroke="${c}" stroke-width="1" opacity="0.4"/>
   </svg>`,
-  govision_bullet_real: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-    <rect x="2" y="2" width="96" height="96" rx="14" fill="#0B1220" stroke="${c}" stroke-width="4"/>
-    <image href="${GOVISION_BULLET_REAL_IMG}" x="8" y="8" width="84" height="84" preserveAspectRatio="xMidYMid meet"/>
-  </svg>`
+  govision_bullet_real: c => {
+    // بدون أي مستطيل أو إطار أو خلفية خالص — الصورة لوحدها بخلفية شفافة 100%.
+    // تغيير اللون بيتم عن طريق فلتر لوني حقيقي (Hue Rotation) على بكسلات
+    // الصورة نفسها، مش عن طريق إطار أو مستطيل حواليها.
+    const hueRotation = colorToHueRotation(c);
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs><filter id="tintF"><feColorMatrix type="hueRotate" values="${hueRotation}"/><feColorMatrix type="saturate" values="1.4"/></filter></defs>
+      <image href="${GOVISION_BULLET_REAL_IMG}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid meet" filter="url(#tintF)"/>
+    </svg>`;
+  }
 };
 const LAYOUT_DEVICE_LABELS = { camera:'كاميرا', rack:'Rack', switch:'Switch', server:'Server', ups:'UPS', antenna:'أنتينة', govision_bullet:'كاميرا Govision Bullet', govision_bullet_real:'كاميرا Govision Bullet (صورة حقيقية)' };
+function colorToHueRotation(hexColor){
+  // نحسب درجة اللون (Hue) بتاعت اللون المختار عشان نستخدمها كقيمة تدوير لوني
+  // على الصورة، فكل لون يديله المستخدم يدّي تأثير فعلي مختلف على الصورة نفسها
+  try{
+    const hex = hexColor.replace('#','');
+    const r = parseInt(hex.slice(0,2),16)/255, g = parseInt(hex.slice(2,4),16)/255, b = parseInt(hex.slice(4,6),16)/255;
+    const max = Math.max(r,g,b), min = Math.min(r,g,b), d = max-min;
+    if(d===0) return 0;
+    let h;
+    if(max===r) h = ((g-b)/d) % 6;
+    else if(max===g) h = (b-r)/d + 2;
+    else h = (r-g)/d + 4;
+    h = Math.round(h*60); if(h<0) h+=360;
+    return h;
+  }catch(e){ return 0; }
+}
 function buildDeviceIconDataUri(deviceType, color){
   const svg = LAYOUT_DEVICE_ICON_BUILDERS[deviceType](color || '#38D9C9');
   return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
