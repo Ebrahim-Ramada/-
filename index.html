@@ -6975,6 +6975,7 @@ async function openPdfLayoutEditor(layoutId){
     layoutEditor = {
       layoutId, factoryId:l.factory_id, isPdf:true, pdfDoc, pdfTotalPages:pdfDoc.numPages, pdfCurrentPage:startPage, pdfPagesElements:pagesElements,
       elements: pagesElements[startPage] || [], history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:1, panX:0, panY:0, selectedIndex:-1,
+      multiSelectMode:false, multiSelected:new Set(),
       hadElementsOnOpen: Object.values(pagesElements).some(arr=>arr && arr.length>0)
     };
     renderPdfEditorShell(l);
@@ -7009,12 +7010,14 @@ function renderPdfEditorShell(l){
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
       <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
+      <button class="btn sm" id="multiSelectToggleBtn" onclick="toggleMultiSelectMode()">☑️ تحديد كاميرات</button>
       <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
       <span style="font-size:11px;align-self:center;min-width:40px;text-align:center" id="layoutZoomLabel">100%</span>
       <button class="btn sm" onclick="zoomLayoutEditor(1.25)">➕</button>
       <button class="btn sm" onclick="fitLayoutEditorToScreen()">⛶ ملاءمة</button>
       <button class="btn sm" onclick="resetLayoutEditorView()">↺ إعادة ضبط</button>
     </div>
+    <div id="multiSelectToolsHost"></div>
     <div id="selectedElementToolsHost"></div>
     <div id="layoutEditViewport" style="overflow:hidden;height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;position:relative;touch-action:none">
       <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:0 0;position:absolute;top:0;left:0"></canvas>
@@ -7732,7 +7735,7 @@ function openLayoutEditor(layoutId){
   try{ if(l.edit_state) restoredElements = typeof l.edit_state==='string' ? JSON.parse(l.edit_state) : l.edit_state; }catch(e){ restoredElements = []; }
   let savedView = {zoom:1, panX:0, panY:0};
   try{ const raw = localStorage.getItem('rc_manualmap_view_'+layoutId); if(raw) savedView = JSON.parse(raw); }catch(e){}
-  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:savedView.zoom||1, panX:savedView.panX||0, panY:savedView.panY||0, selectedIndex:-1, hadElementsOnOpen: restoredElements.length>0 };
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'pen', color:'#FF3B30', zoom:savedView.zoom||1, panX:savedView.panX||0, panY:savedView.panY||0, selectedIndex:-1, multiSelectMode:false, multiSelected:new Set(), hadElementsOnOpen: restoredElements.length>0 };
   // الرسم دائمًا فوق الخلفية الأصلية الحقيقية (وليس فوق آخر صورة مُصدَّرة) — يمنع تراكم الجودة السيئة
   // ويضمن إن العناصر المستعادة تتوضع بشكل صحيح فوق نفس الخلفية اللي اتحفظت بالنسبة ليها
   const bgUrl = l.original_file_url || l.file_url;
@@ -7761,12 +7764,14 @@ function openLayoutEditor(layoutId){
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
       <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
+      <button class="btn sm" id="multiSelectToggleBtn" onclick="toggleMultiSelectMode()">☑️ تحديد كاميرات</button>
       <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
       <span style="font-size:11px;align-self:center;min-width:40px;text-align:center" id="layoutZoomLabel">100%</span>
       <button class="btn sm" onclick="zoomLayoutEditor(1.25)">➕</button>
       <button class="btn sm" onclick="fitLayoutEditorToScreen()">⛶ ملاءمة</button>
       <button class="btn sm" onclick="resetLayoutEditorView()">↺ إعادة ضبط</button>
     </div>
+    <div id="multiSelectToolsHost"></div>
     <div id="selectedElementToolsHost"></div>
     <div id="layoutEditViewport" style="overflow:hidden;height:55vh;border:1px solid var(--border-soft);border-radius:10px;background:#111;position:relative;touch-action:none">
       <canvas id="layoutEditCanvas" style="touch-action:none;transform-origin:0 0;position:absolute;top:0;left:0"></canvas>
@@ -7828,6 +7833,20 @@ function redrawLayoutCanvas(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(layoutEditor.bgImage) ctx.drawImage(layoutEditor.bgImage,0,0,canvas.width,canvas.height);
   layoutEditor.elements.forEach((el,i)=> drawLayoutElement(ctx, el, i===layoutEditor.selectedIndex));
+  // تمييز بصري واضح لكل كاميرا محدّدة في وضع التحديد المتعدد — إطار أخضر سميك + علامة ✓
+  if(layoutEditor.multiSelectMode && layoutEditor.multiSelected?.size){
+    layoutEditor.multiSelected.forEach(i=>{
+      const el = layoutEditor.elements[i]; if(!el) return;
+      const box = layoutElementBBox(el);
+      ctx.save();
+      ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 4; ctx.setLineDash([]);
+      ctx.strokeRect(box.x-4, box.y-4, box.w+8, box.h+8);
+      ctx.fillStyle = '#22C55E'; ctx.beginPath(); ctx.arc(box.x+box.w+4, box.y-4, 11, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 14px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('✓', box.x+box.w+4, box.y-3);
+      ctx.restore();
+    });
+  }
   renderSelectedElementTools();
 }
 function renderSelectedElementTools(){
@@ -8118,6 +8137,79 @@ function layoutEditorRedo(){
   layoutEditor.elements = JSON.parse(layoutEditor.redoStack.pop());
   layoutEditor.selectedIndex=-1; reloadImageElementsAfterHistoryChange(); redrawLayoutCanvas();
 }
+/* ============================================================
+   ☑️ تحديد متعدد لكاميرات الخريطة اليدوية — حذف جماعي محمي
+   ============================================================ */
+function isCameraDeviceType(deviceType){
+  return deviceType==='camera' || deviceType==='govision_bullet' || deviceType==='govision_bullet_real';
+}
+function toggleMultiSelectMode(){
+  layoutEditor.multiSelectMode = !layoutEditor.multiSelectMode;
+  layoutEditor.multiSelected = new Set();
+  layoutEditor.selectedIndex = -1;
+  const btn = document.getElementById('multiSelectToggleBtn');
+  if(btn) btn.classList.toggle('primary', layoutEditor.multiSelectMode);
+  if(layoutEditor.multiSelectMode) toast('☑️ وضع التحديد المتعدد مفعّل — دوس على أي كاميرا لتحديدها');
+  renderMultiSelectTools(); redrawLayoutCanvas();
+}
+function toggleCameraSelection(idx){
+  if(layoutEditor.multiSelected.has(idx)) layoutEditor.multiSelected.delete(idx);
+  else layoutEditor.multiSelected.add(idx);
+  renderMultiSelectTools(); redrawLayoutCanvas();
+}
+function selectAllMapCameras(){
+  layoutEditor.multiSelected = new Set();
+  layoutEditor.elements.forEach((el,i)=>{ if(el.type==='image' && isCameraDeviceType(el.deviceType)) layoutEditor.multiSelected.add(i); });
+  renderMultiSelectTools(); redrawLayoutCanvas();
+}
+function deselectAllMapCameras(){
+  layoutEditor.multiSelected = new Set();
+  renderMultiSelectTools(); redrawLayoutCanvas();
+}
+function renderMultiSelectTools(){
+  const host = document.getElementById('multiSelectToolsHost');
+  if(!host) return;
+  if(!layoutEditor.multiSelectMode){ host.innerHTML=''; return; }
+  const n = layoutEditor.multiSelected.size;
+  const totalCams = layoutEditor.elements.filter(el=>el.type==='image' && isCameraDeviceType(el.deviceType)).length;
+  host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px;border-color:var(--accent)">
+    <p style="font-size:12px;margin:0 0 6px">☑️ ${n>0?`تم تحديد <b>${n}</b> كاميرا`:'دوس على أي كاميرا لتحديدها'} (من إجمالي ${totalCams})</p>
+    <div class="btn-row">
+      <button class="btn sm" onclick="selectAllMapCameras()">تحديد الكل</button>
+      <button class="btn sm" onclick="deselectAllMapCameras()">إلغاء تحديد الكل</button>
+      ${n>0? `<button class="btn sm danger" onclick="confirmBulkDeleteMapCameras()">🗑️ حذف المحدد (${n})</button>`:''}
+    </div>
+  </div>`;
+}
+async function confirmBulkDeleteMapCameras(){
+  const n = layoutEditor.multiSelected.size;
+  if(n===0) return;
+  const selectedEls = [...layoutEditor.multiSelected].map(i=>layoutEditor.elements[i]);
+  const labels = selectedEls.map(el=> LAYOUT_DEVICE_LABELS[el.deviceType]||'كاميرا').join('، ');
+  confirmDeleteWithPassword(async ()=>{
+    // مهم: بيحذف عناصر الخريطة (الرسومات) بس — مش بيمس أي سجل كاميرا حقيقي في قاعدة البيانات
+    const idxToDelete = new Set(layoutEditor.multiSelected);
+    layoutEditor.elements = layoutEditor.elements.filter((el,i)=> !idxToDelete.has(i));
+    layoutEditor.multiSelected = new Set();
+    layoutEditor.selectedIndex = -1;
+    // حفظ مباشر لبيانات العناصر — مش عن طريق saveLayoutEdit() لأنها محتاجة الكانفاس
+    // نفسه موجود فعليًا في الـDOM، وهو مقفول دلوقتي بسبب نافذة كلمة المرور اللي فوقه
+    const savedLayoutId = layoutEditor.layoutId, wasEditingPdf = !!layoutEditor.isPdf, savedFactoryId = layoutEditor.factoryId;
+    const cleanElements = layoutElementsForHistory();
+    if(wasEditingPdf){
+      layoutEditor.pdfPagesElements[layoutEditor.pdfCurrentPage] = cleanElements;
+      await supa.from('factory_layouts').update({ pdf_edit_state: layoutEditor.pdfPagesElements }).eq('id', savedLayoutId);
+    } else {
+      await supa.from('factory_layouts').update({ edit_state: cleanElements }).eq('id', savedLayoutId);
+      const l = layoutsData.find(x=>x.id===savedLayoutId); if(l) l.edit_state = cleanElements;
+    }
+    await logAudit('حذف جماعي لكاميرات من الخريطة اليدوية', `${n} عنصر (${labels}) من خريطة ${layoutsData.find(x=>x.id===savedLayoutId)?.layout_name||''} — إزالة من الخريطة فقط، سجلات الكاميرات الحقيقية لم تتأثر`);
+    // نافذة كلمة المرور استبدلت محتوى مودال المحرر بالكامل — نعيد فتحه تاني عشان
+    // المستخدم يفضل شغّال على نفس الخريطة ويشوف نتيجة الحذف على طول
+    toast(`✅ تم حذف ${n} كاميرا من الخريطة وحفظ التعديل`);
+    if(wasEditingPdf) await openPdfLayoutEditor(savedLayoutId); else openLayoutEditor(savedLayoutId);
+  }, `${n} كاميرا من الخريطة (إزالة من الخريطة فقط، مش حذف سجلات حقيقية)`, {bulkCount:n});
+}
 function deleteSelectedLayoutElement(){
   if(layoutEditor.selectedIndex<0) { toast('حدّد عنصرًا أولًا (أداة تحديد)'); return; }
   const idx = layoutEditor.selectedIndex;
@@ -8200,6 +8292,16 @@ function attachLayoutCanvasEvents(canvas){
     evt.preventDefault();
     const pos = getCanvasPos(canvas, evt);
     const tool = layoutEditor.tool;
+    if(layoutEditor.multiSelectMode){
+      // وضع التحديد المتعدد: دوسة على كاميرا بتحدّدها/تلغي تحديدها بس — مفيش سحب أو تعديل تاني
+      for(let i=layoutEditor.elements.length-1;i>=0;i--){
+        const el = layoutEditor.elements[i];
+        if(el.type==='image' && isCameraDeviceType(el.deviceType) && pointInBBox(pos.x,pos.y,layoutElementBBox(el))){
+          toggleCameraSelection(i); return;
+        }
+      }
+      return; // دوسة على مكان فاضي أو عنصر مش كاميرا — نتجاهلها في الوضع ده
+    }
     if(tool==='select'){
       // لو فيه عنصر صورة محدَّد بالفعل، افحص الأول لو الضغطة على مقبض تكبير أو تدوير بتاعه
       if(layoutEditor.selectedIndex>=0){
