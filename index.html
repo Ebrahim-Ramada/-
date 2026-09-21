@@ -7915,32 +7915,6 @@ function drawLayoutElement(ctx, el, selected){
     ctx.fillText(el.text, 0, 0);
     ctx.restore();
   }
-  else if(el.type==='image' && el.img && el.deviceType==='govision_bullet_real'){
-    // 🎯 فصل معماري حقيقي: جسم الكاميرا يفضل معتدل (Upright) دايمًا — الحامل
-    // فوق، الشكل مش بيتقلب أبدًا. اتجاه الرؤية بيتمثّل بسهم منفصل تمامًا بيدور
-    // بحرية حوالين نقطة العدسة، من غير ما يأثر على شكل جسم الكاميرا خالص.
-    ctx.save();
-    ctx.translate(el.x+el.w/2, el.y+el.h/2);
-    // جسم الكاميرا: بدون أي ctx.rotate خالص — يفضل معتدل مهما كان "اتجاه الرؤية" المختار
-    ctx.drawImage(el.img, -el.w/2, -el.h/2, el.w, el.h);
-    // سهم اتجاه الرؤية (Heading/FOV Indicator): منفصل تمامًا، بيدور بحرية حوالين
-    // نقطة العدسة (يمين جسم الكاميرا تقريبًا) على أساس el.rotation بس هو اللي بيتحرك
-    const heading = (el.rotation||0) * Math.PI/180;
-    const lensX = el.w*0.36, lensY = 0; // موضع العدسة تقريبًا بالنسبة لمركز الصورة (يمين الجسم)
-    ctx.translate(lensX, lensY);
-    ctx.rotate(heading);
-    const arrowLen = Math.max(14, el.w*0.35);
-    ctx.strokeStyle = el.color||'#38D9C9'; ctx.fillStyle = el.color||'#38D9C9'; ctx.lineWidth = Math.max(1.5, el.w*0.025);
-    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(arrowLen,0); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(arrowLen,0); ctx.lineTo(arrowLen-6,-5); ctx.lineTo(arrowLen-6,5); ctx.closePath(); ctx.fill();
-    ctx.restore();
-    if(el.label){
-      ctx.save(); ctx.translate(el.x+el.w/2, el.y+el.h/2);
-      ctx.font='bold 12px Arial'; ctx.textAlign='center'; ctx.fillStyle='#fff';
-      ctx.fillText(el.label, 0, el.h/2+16);
-      ctx.restore();
-    }
-  }
   else if(el.type==='image' && el.img){
     ctx.save();
     ctx.translate(el.x+el.w/2, el.y+el.h/2);
@@ -7971,11 +7945,6 @@ function drawLayoutElement(ctx, el, selected){
 function layoutImageHandles(el){
   const cx = el.x+el.w/2, cy = el.y+el.h/2, rad = (el.rotation||0)*Math.PI/180;
   const rot = (px,py)=>{ const dx=px-cx, dy=py-cy; return { x: cx+dx*Math.cos(rad)-dy*Math.sin(rad), y: cy+dx*Math.sin(rad)+dy*Math.cos(rad) }; };
-  // 🎯 كاميرا Govision Bullet الحقيقية: الجسم يفضل معتدل دايمًا (مش بيدور بصريًا)،
-  // فمقبض التكبير لازم يفضل في مكانه الثابت (بدون تدوير) عشان يتماشى مع الشكل الفعلي المعروض
-  if(el.deviceType==='govision_bullet_real'){
-    return { resize: {x: el.x+el.w, y: el.y+el.h}, rotate: rot(cx, cy) };
-  }
   return { resize: rot(el.x+el.w, el.y+el.h), rotate: rot(cx, el.y-28) };
 }
 function layoutElementBBox(el){
@@ -8286,10 +8255,7 @@ function attachLayoutCanvasEvents(canvas){
         // أولًا — قبل حساب الحجم الجديد. من غير التحويل ده، تغيير الحجم على عنصر
         // مدوَّر (90°/180°/أي زاوية) كان بيدّي نتيجة غلط بتبان وكأن الصورة "اتقلبت"
         const cx = el.x+el.w/2, cy = el.y+el.h/2;
-        // كاميرا Govision الحقيقية: الجسم معتدل بصريًا دايمًا (el.rotation بيمثّل اتجاه
-        // الرؤية بس، مش دوران الجسم) — فحساب تغيير الحجم بيتم على أساس دوران = صفر
-        const effectiveRotation = el.deviceType==='govision_bullet_real' ? 0 : (el.rotation||0);
-        const rad = -(effectiveRotation * Math.PI/180);
+        const rad = -((el.rotation||0) * Math.PI/180);
         const dx = pos.x-cx, dy = pos.y-cy;
         const localX = dx*Math.cos(rad) - dy*Math.sin(rad); // موضع الماوس بالنسبة لمركز العنصر في مساحته المحلية غير المدوَّرة
         const ratio = el.h/el.w;
