@@ -5131,6 +5131,7 @@ function renderScreensPlaceholder(factoryId){
       ${isAdmin()? `<button class="btn primary sm" onclick="openScreenForm('${factoryId}')">+ إضافة شاشة</button>`:''}
     </div>
     <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
+    <button class="btn sm primary" onclick="exportSectionPicker('screens','${factoryId}')">🖨️ طباعة / تصدير</button>
     <div id="screensListHost" style="margin-top:12px"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
@@ -5552,6 +5553,7 @@ function renderStorePlaceholder(warehouse){
       <button class="btn sm" onclick="exportStoreExcel()">📊 Excel</button>
       <button class="btn sm" onclick="exportStorePdf()">🧾 PDF</button>
       <button class="btn sm" onclick="window.print()">🖨️ طباعة</button>
+      <button class="btn sm primary" onclick="exportSectionPicker('${warehouse==='الكونتينر'?'store_container':'store_room'}')">📤 كل الصيغ (موحّد)</button>
     </div>`:''}
     <div id="storeListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
@@ -6149,6 +6151,7 @@ function renderLightingPlaceholder(factoryId){
       ${isAdmin()? `<button class="btn primary sm" onclick="openLightingForm('${factoryId}')">+ إضاءة تحتاج إصلاح/تعديل</button>`:''}
     </div>
     <button class="btn sm" onclick="goTo('lighting')">→ رجوع لكل المصانع</button>
+    <button class="btn sm primary" onclick="exportSectionPicker('lighting','${factoryId}')">🖨️ طباعة / تصدير</button>
     <div id="lightingSummaryHost" style="margin-top:8px"></div>
     <div style="display:flex;gap:6px;margin:10px 0">
       <button class="btn sm ${lightingTab==='قيد الإصلاح'?'primary':''}" onclick="setLightingTab('قيد الإصلاح')">🔧 تحتاج إصلاح/تعديل</button>
@@ -6658,6 +6661,7 @@ function renderRoomNeedsPlaceholder(){
       <button class="btn sm" onclick="exportRoomNeedsExcel()">📊 Excel</button>
       <button class="btn sm" onclick="exportRoomNeedsPdf()">🧾 PDF</button>
       <button class="btn sm" onclick="window.print()">🖨️ طباعة</button>
+      <button class="btn sm primary" onclick="exportSectionPicker('roomneeds')">📤 كل الصيغ (موحّد)</button>
     </div>`:''}
     <div id="roomNeedsListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
