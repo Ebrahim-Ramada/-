@@ -1464,6 +1464,10 @@ function renderCurrentView(){
     host.innerHTML = renderCameraTypeStatsPlaceholder(currentViewCtx);
     if(currentViewCtx) loadCameraTypeStatsForFactory(currentViewCtx); else loadCameraTypeStatsFactoryPicker();
   }
+  else if(currentView==='roomentryreports') {
+    host.innerHTML = renderRoomEntryReportsPlaceholder(currentViewCtx);
+    if(currentViewCtx) loadRoomEntryReportsForFactory(currentViewCtx); else loadRoomEntryReportsFactoryPicker();
+  }
   else if(['upsstats','switchesstats','racksstats'].includes(currentView)) {
     const cfg = DEVICE_STATS_CONFIG[currentView];
     host.innerHTML = renderDeviceStatsPlaceholder(currentView, cfg, currentViewCtx);
@@ -1804,6 +1808,7 @@ function renderDashboard(){
       <button class="qbtn" onclick="cameraModsTab='تم التعديل'; goTo('cameramods')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات التي تم تعديلها</button>
       <button class="qbtn" onclick="goTo('cameratypestats')" style="grid-column:1/-1"><span class="qicon">📊</span> أنواع الكاميرات بالمصانع</button>
       <button class="qbtn" onclick="goTo('upsstats')"><span class="qicon">🔋</span> UPS</button>
+      <button class="qbtn" onclick="goTo('roomentryreports')" style="grid-column:1/-1"><span class="qicon">🚪</span> تقرير دخول غرفة التحكم المركزية</button>
       <button class="qbtn" onclick="goTo('switchesstats')"><span class="qicon">🔀</span> Switches</button>
       <button class="qbtn" onclick="goTo('racksstats')"><span class="qicon">🗄️</span> Racks</button>
       <button class="qbtn" onclick="goTo('addedcameras')" style="grid-column:1/-1"><span class="qicon">📷</span> الكاميرات التي تم إضافتها</button>
@@ -3402,6 +3407,7 @@ function renderCamerasPlaceholder(factoryId){
     <div class="btn-row">
       <button class="btn sm" onclick="goTo('factories')">→ رجوع للمصانع</button>
       ${isAdmin()? `<button class="btn sm" onclick="openCameraTypesManager('${factoryId}')">📷 الشركات والدقات</button>`:''}
+      <button class="btn sm primary" onclick="exportSectionPicker('cameras','${factoryId}')">🖨️ طباعة / تصدير</button>
     </div>
     <div id="cameraStatsHost" style="margin-top:10px"></div>
     <div id="camerasListHost" style="margin-top:12px"><div class="empty">جاري التحميل...</div></div>
@@ -5251,6 +5257,7 @@ function renderFaultsPlaceholder(){
     <div class="field"><select class="input" onchange="faultsFilter.status=this.value; renderFaultsList()">
       <option value="">كل الحالات</option>${['مفتوح','جاري الإصلاح','تم الإصلاح','مغلق','متوقف بانتظار قطع غيار'].map(s=>`<option>${s}</option>`).join('')}
     </select></div>
+    <button class="btn sm block" style="margin-top:6px" onclick="exportSectionPicker('faults', faultsFilter.factory||undefined)">🖨️ طباعة / تصدير${faultsFilter.factory?' (المصنع المحدد)':' (كل المصانع)'}</button>
     <div id="faultsListHost"><div class="empty">جاري التحميل...</div></div>
   </div>`;
 }
@@ -6744,6 +6751,222 @@ async function saveRoomNeedForm(id){
    كل صنف = سجل مستقل تمامًا (نفس بنية الإضافة الفردية بالظبط)
    ============================================================ */
 let bulkRoomNeedItems = [];
+/* ============================================================================
+   🚪 تقرير دخول غرفة التحكم المركزية — نسخة إلكترونية من النموذج الورقي
+   ============================================================================ */
+let roomEntryReportsData = [];
+let roomEntryFilter = { text:'', dateFrom:'', dateTo:'', department:'' };
+function renderRoomEntryReportsPlaceholder(factoryId){
+  if(!factoryId){
+    return `<div class="view active">
+      <div class="section-title" style="margin-top:0"><h2>🚪 تقرير دخول غرفة التحكم المركزية</h2></div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر مصنع لعرض تقارير الدخول الخاصة بيه أو إنشاء تقرير جديد.</p>
+      <div id="roomEntryFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
+    </div>`;
+  }
+  const f = factoriesData.find(x=>x.id===factoryId);
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🚪 ${f?f.name:''}</h2>
+      <button class="btn primary sm" onclick="openRoomEntryReportForm('${factoryId}')">+ تقرير جديد</button>
+    </div>
+    <button class="btn sm" onclick="goTo('roomentryreports')">→ رجوع لكل المصانع</button>
+    <div class="field" style="margin-top:8px"><input class="input" id="rer_search" placeholder="🔍 بحث بالاسم أو الإدارة..." value="${roomEntryFilter.text}" oninput="roomEntryFilter.text=this.value; renderRoomEntryReportsList()"></div>
+    <div class="row2">
+      <div class="field"><label style="font-size:10.5px">من تاريخ</label><input class="input" type="date" value="${roomEntryFilter.dateFrom}" onchange="roomEntryFilter.dateFrom=this.value; renderRoomEntryReportsList()"></div>
+      <div class="field"><label style="font-size:10.5px">إلى تاريخ</label><input class="input" type="date" value="${roomEntryFilter.dateTo}" onchange="roomEntryFilter.dateTo=this.value; renderRoomEntryReportsList()"></div>
+    </div>
+    <div id="roomEntryReportsListHost" style="margin-top:8px"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadRoomEntryReportsFactoryPicker(){
+  const host = document.getElementById('roomEntryFactoryPickerHost');
+  if(!host) return;
+  let all = [];
+  try{ const {data} = await supa.from('control_room_entry_reports').select('factory_id'); all = data||[]; }catch(e){}
+  const counts = {}; all.forEach(r=> counts[r.factory_id]=(counts[r.factory_id]||0)+1);
+  host.innerHTML = factoriesData.map(f=>`
+    <div class="site-card" style="cursor:pointer" onclick="goTo('roomentryreports','${f.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="site-name" style="font-size:14px">${f.name}</div>
+        <span class="pill ${counts[f.id]?'ok':''}">${counts[f.id]||0} تقرير</span>
+      </div>
+    </div>`).join('');
+}
+async function loadRoomEntryReportsForFactory(factoryId){
+  const host = document.getElementById('roomEntryReportsListHost');
+  if(!host) return;
+  try{ const {data,error} = await supa.from('control_room_entry_reports').select('*').eq('factory_id',factoryId).order('report_date',{ascending:false}); if(error) throw error; roomEntryReportsData = data||[]; }
+  catch(e){ host.innerHTML = `<div class="empty">⚠️ تعذّر التحميل: ${e.message||''}</div>`; return; }
+  renderRoomEntryReportsList();
+}
+function renderRoomEntryReportsList(){
+  const host = document.getElementById('roomEntryReportsListHost');
+  if(!host) return;
+  let rows = roomEntryReportsData;
+  if(roomEntryFilter.text){
+    const q = roomEntryFilter.text.toLowerCase();
+    rows = rows.filter(r=> (r.people||[]).some(p=> (p.name||'').toLowerCase().includes(q) || (p.department||'').toLowerCase().includes(q)));
+  }
+  if(roomEntryFilter.dateFrom) rows = rows.filter(r=> r.report_date >= roomEntryFilter.dateFrom);
+  if(roomEntryFilter.dateTo) rows = rows.filter(r=> r.report_date <= roomEntryFilter.dateTo);
+  if(!rows.length){ host.innerHTML = '<div class="empty">لا توجد تقارير مطابقة.</div>'; return; }
+  host.innerHTML = rows.map(r=>`
+    <div class="site-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:13px">📅 ${fmtDateAr(r.report_date)} ${r.time_from?`(${r.time_from} - ${r.time_to||''})`:''}</b>
+        <span class="pill">${(r.people||[]).length} شخص</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:4px">${r.visiting_entity||''} — بواسطة ${r.created_by_name||''}</div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn sm" onclick="openRoomEntryReportForm('${r.factory_id}','${r.id}')">👁️ عرض / تعديل</button>
+        <button class="btn sm" onclick="exportRoomEntryReport('${r.id}')">🖨️ طباعة / تصدير</button>
+        ${isAdmin()? `<button class="btn sm danger" onclick="deleteRoomEntryReport('${r.id}','${r.factory_id}')">🗑 حذف</button>`:''}
+      </div>
+    </div>`).join('');
+}
+function deleteRoomEntryReport(id, factoryId){
+  confirmDeleteWithPassword(async ()=>{
+    await supa.from('control_room_entry_reports').delete().eq('id',id);
+    closeModal(); toast('تم الحذف'); loadRoomEntryReportsForFactory(factoryId);
+  }, 'تقرير دخول غرفة التحكم', {dangerous:true});
+}
+/* -------- فورم إنشاء/تعديل التقرير — قوائم ديناميكية غير محدودة -------- */
+let rerFormState = null;
+function openRoomEntryReportForm(factoryId, reportId){
+  const r = reportId ? roomEntryReportsData.find(x=>x.id===reportId) : null;
+  rerFormState = {
+    id: reportId||null, factoryId,
+    report_date: r?.report_date || new Date().toISOString().slice(0,10),
+    time_from: r?.time_from||'', time_to: r?.time_to||'', visiting_entity: r?.visiting_entity||'',
+    people: r?.people ? JSON.parse(JSON.stringify(r.people)) : [{name:'',department:''}],
+    events: r?.events ? JSON.parse(JSON.stringify(r.events)) : [],
+    review_results: r?.review_results ? JSON.parse(JSON.stringify(r.review_results)) : [],
+    room_officer_name: r?.room_officer_name||'', room_supervisor_name: r?.room_supervisor_name||'', security_manager_name: r?.security_manager_name||'',
+    notes: r?.notes||''
+  };
+  renderRoomEntryReportForm();
+}
+function renderRoomEntryReportForm(){
+  const s = rerFormState;
+  const f = factoriesData.find(x=>x.id===s.factoryId);
+  openModal(`
+    <div class="modal-head"><h3>🚪 تقرير دخول غرفة التحكم — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="row2">
+      <div class="field"><label>التاريخ</label><input class="input" type="date" id="rer_date" value="${s.report_date}"></div>
+      <div class="field"><label>جهة/إدارة الزيارة</label><input class="input" id="rer_entity" value="${s.visiting_entity}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>الوقت من</label><input class="input" type="time" id="rer_from" value="${s.time_from}"></div>
+      <div class="field"><label>الوقت إلى</label><input class="input" type="time" id="rer_to" value="${s.time_to}"></div>
+    </div>
+
+    <div class="section-title"><h2 style="font-size:13px">👥 الأشخاص المسموح لهم بالدخول</h2></div>
+    <div id="rerPeopleHost">${s.people.map((p,i)=>renderRerPersonRow(p,i)).join('')}</div>
+    <button class="btn sm block" onclick="addRerRow('people')">➕ إضافة شخص</button>
+
+    <div class="section-title"><h2 style="font-size:13px">📌 لمراجعة الحدث الآتي</h2></div>
+    <div id="rerEventsHost">${s.events.map((e,i)=>renderRerEventRow(e,i)).join('')}</div>
+    <button class="btn sm block" onclick="addRerRow('events')">➕ إضافة حدث</button>
+
+    <div class="section-title"><h2 style="font-size:13px">✅ نتيجة المراجعة والفحص تبين الآتي</h2></div>
+    <div id="rerResultsHost">${s.review_results.map((res,i)=>renderRerResultRow(res,i)).join('')}</div>
+    <button class="btn sm block" onclick="addRerRow('review_results')">➕ إضافة نتيجة</button>
+
+    <div class="section-title"><h2 style="font-size:13px">✍️ الاعتمادات</h2></div>
+    <div class="field"><label>مسؤول الغرفة</label><input class="input" id="rer_officer" value="${s.room_officer_name}"></div>
+    <div class="field"><label>مشرف الغرفة</label><input class="input" id="rer_supervisor" value="${s.room_supervisor_name}"></div>
+    <div class="field"><label>مدير الأمن</label><input class="input" id="rer_security" value="${s.security_manager_name}"></div>
+    <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="rer_notes">${s.notes}</textarea></div>
+
+    <button class="btn primary block" style="margin-top:10px" onclick="saveRoomEntryReport()">💾 حفظ التقرير</button>
+  `);
+}
+function renderRerPersonRow(p,i){
+  return `<div class="site-card" id="rerPerson_${i}" style="margin-top:6px;padding:8px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted-2)"><span>${i+1}-</span>${i>0||rerFormState.people.length>1?`<button class="btn sm danger" style="padding:2px 8px" onclick="removeRerRow('people',${i})">🗑</button>`:''}</div>
+    <div class="row2">
+      <div class="field"><label>الاسم</label><input class="input" data-idx="${i}" oninput="updateRerField('people',${i},'name',this.value)" value="${p.name||''}"></div>
+      <div class="field"><label>تابع لإدارة</label><input class="input" data-idx="${i}" oninput="updateRerField('people',${i},'department',this.value)" value="${p.department||''}"></div>
+    </div>
+  </div>`;
+}
+function renderRerEventRow(e,i){
+  return `<div class="site-card" id="rerEvent_${i}" style="margin-top:6px;padding:8px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted-2)"><span>${i+1}-</span><button class="btn sm danger" style="padding:2px 8px" onclick="removeRerRow('events',${i})">🗑</button></div>
+    <div class="field"><label>وصف الحدث</label><textarea class="input" oninput="updateRerField('events',${i},'description',this.value)">${e.description||''}</textarea></div>
+    <div class="row2">
+      <div class="field"><label>التاريخ/الوقت</label><input class="input" type="text" placeholder="اختياري" oninput="updateRerField('events',${i},'event_datetime',this.value)" value="${e.event_datetime||''}"></div>
+      <div class="field"><label>الكاميرا/الموقع</label><input class="input" oninput="updateRerField('events',${i},'location_or_camera',this.value)" value="${e.location_or_camera||''}"></div>
+    </div>
+    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('events',${i},'notes',this.value)" value="${e.notes||''}"></div>
+  </div>`;
+}
+function renderRerResultRow(r,i){
+  return `<div class="site-card" id="rerResult_${i}" style="margin-top:6px;padding:8px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted-2)"><span>${i+1}-</span><button class="btn sm danger" style="padding:2px 8px" onclick="removeRerRow('review_results',${i})">🗑</button></div>
+    <div class="field"><label>نتيجة المراجعة</label><textarea class="input" oninput="updateRerField('review_results',${i},'result',this.value)">${r.result||''}</textarea></div>
+    <div class="field"><label>التفاصيل</label><input class="input" oninput="updateRerField('review_results',${i},'details',this.value)" value="${r.details||''}"></div>
+    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('review_results',${i},'notes',this.value)" value="${r.notes||''}"></div>
+  </div>`;
+}
+function updateRerField(listName, idx, field, value){ rerFormState[listName][idx][field] = value; }
+function addRerRow(listName){
+  const templates = { people:{name:'',department:''}, events:{description:'',event_datetime:'',location_or_camera:'',notes:''}, review_results:{result:'',details:'',notes:''} };
+  rerFormState[listName].push({...templates[listName]});
+  renderRoomEntryReportForm();
+}
+function removeRerRow(listName, idx){
+  rerFormState[listName].splice(idx,1);
+  renderRoomEntryReportForm();
+}
+async function saveRoomEntryReport(){
+  const s = rerFormState;
+  const payload = {
+    factory_id: s.factoryId, report_date: document.getElementById('rer_date').value,
+    time_from: document.getElementById('rer_from').value||null, time_to: document.getElementById('rer_to').value||null,
+    visiting_entity: document.getElementById('rer_entity').value.trim(),
+    people: s.people.filter(p=>p.name?.trim()), events: s.events, review_results: s.review_results,
+    room_officer_name: document.getElementById('rer_officer').value.trim(),
+    room_supervisor_name: document.getElementById('rer_supervisor').value.trim(),
+    security_manager_name: document.getElementById('rer_security').value.trim(),
+    notes: document.getElementById('rer_notes').value.trim()
+  };
+  try{
+    if(s.id){
+      payload.updated_by = currentProfile.id; payload.updated_by_name = currentProfile.display_name; payload.updated_at = new Date().toISOString();
+      const {error} = await supa.from('control_room_entry_reports').update(payload).eq('id', s.id);
+      if(error) throw error;
+      await logAudit('تعديل تقرير دخول غرفة التحكم', `${factoriesData.find(x=>x.id===s.factoryId)?.name} — ${payload.report_date}`);
+    } else {
+      payload.created_by = currentProfile.id; payload.created_by_name = currentProfile.display_name;
+      const {error} = await supa.from('control_room_entry_reports').insert(payload);
+      if(error) throw error;
+      await logAudit('إنشاء تقرير دخول غرفة التحكم', `${factoriesData.find(x=>x.id===s.factoryId)?.name} — ${payload.report_date}`);
+    }
+    closeModal(); toast('✅ تم الحفظ بنجاح'); loadRoomEntryReportsForFactory(s.factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+/* -------- التصدير — نفس النظام الموحّد بكل الصيغ الثمانية، بترتيب النموذج الورقي -------- */
+async function exportRoomEntryReport(reportId){
+  const r = roomEntryReportsData.find(x=>x.id===reportId);
+  if(!r){ toast('التقرير غير موجود'); return; }
+  const f = factoriesData.find(x=>x.id===r.factory_id);
+  const bodyHtml = `
+    <h1>تقرير دخول غرفة التحكم المركزية</h1>
+    <p style="text-align:center">التاريخ: ${fmtDateAr(r.report_date)} — التوقيت: من ${r.time_from||'—'} إلى ${r.time_to||'—'}</p>
+    <p style="text-align:center">يسمح بما يلي دخول غرفة التحكم المركزية من مصنع: <b>${f?f.name:''}</b>${r.visiting_entity?` — جهة الزيارة: ${r.visiting_entity}`:''}</p>
+    <h2>الأشخاص المسموح لهم بالدخول</h2>
+    <table><tr><th>الاسم</th><th>الإدارة التابعة لها</th></tr>${(r.people||[]).map(p=>`<tr><td>${p.name||''}</td><td>${p.department||''}</td></tr>`).join('')}</table>
+    ${(r.events||[]).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.map(e=>`<tr><td>${e.description||''}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${e.notes||''}</td></tr>`).join('')}</table>`:''}
+    ${(r.review_results||[]).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.map(res=>`<tr><td>${res.result||''}</td><td>${res.details||''}</td><td>${res.notes||''}</td></tr>`).join('')}</table>`:''}
+    <h2>الاعتمادات</h2>
+    <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${r.room_officer_name||''}</td><td>${r.room_supervisor_name||''}</td><td>${r.security_manager_name||''}</td></tr></table>
+  `;
+  const headers = ['الاسم','الإدارة التابعة لها'];
+  const data = (r.people||[]).map(p=>[p.name||'', p.department||'']);
+  openUnifiedExportPicker(`${f?f.name:''} - تقرير دخول غرفة التحكم - ${r.report_date}`, headers, data, { rawObjects: r.people, customBodyHtml: bodyHtml });
+  await logAudit('طباعة/تصدير تقرير دخول غرفة التحكم', `${f?f.name:''} — ${r.report_date}`);
+}
 function openBulkRoomNeedsForm(){
   bulkRoomNeedItems = [ { title:'', item_type:'', quantity:1, unit:'قطعة', brand:'', description:'', priority:'متوسطة', reason:'', notes:'' } ];
   renderBulkRoomNeedsForm();
@@ -10052,9 +10275,18 @@ function renderReportsCenterView(){
     <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
   </div>`;
 }
-async function exportSectionPicker(section){
+async function exportSectionPicker(section, factoryId){
   toast('جاري تجميع البيانات...');
   const configs = {
+    cameras: async()=>{
+      const {data} = await supa.from('cameras').select('*').order('camera_name');
+      const rows=(data||[]);
+      const byFactory = {}; rows.forEach(c=>{ const fn=factoriesData.find(x=>x.id===c.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات: ${rows.length}`)].filter(Boolean);
+      return { title:'الكاميرات', headers:['المصنع','اسم الكاميرا','النوع','الشركة المصنعة','الدقة','IP','الموقع','الحالة'],
+        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, c.camera_type||'', c.brand||'', c.resolution||'', c.ip_address||'', c.location||'', c.status]),
+        raw:rows, chartImages, getImageUrl: i=> rows[i].photo_url };
+    },
     faults: async()=>{
       const {data} = await supa.from('faults').select('*').order('reported_at',{ascending:false});
       const rows=(data||[]);
@@ -10188,10 +10420,24 @@ async function exportSectionPicker(section){
   };
   try{
     const cfg = await configs[section]();
-    const opts = { getImageUrl: cfg.getImageUrl, getImageUrls: cfg.getImageUrls, rawObjects: cfg.raw, chartImages: cfg.chartImages, chartData: cfg.chartData };
-    const preloadUrls = unifiedAllImageUrls(cfg.data, opts);
+    let data = cfg.data, raw = cfg.raw, title = cfg.title;
+    let getImageUrl = cfg.getImageUrl, getImageUrls = cfg.getImageUrls;
+    // 🎯 فلترة بالمصنع المحدد — بيشتغل مع أي قسم موجود في configs من غير ما نلمس كودها الداخلي،
+    // ومع الحفاظ على ربط الصور الصحيح (بيعيد توجيه الفهرس المفلتر للفهرس الأصلي الصحيح)
+    if(factoryId && raw){
+      const keepIdx = raw.map((r,i)=> r.factory_id===factoryId ? i : -1).filter(i=>i>=0);
+      if(!keepIdx.length){ toast('لا توجد بيانات مسجلة لهذا المصنع في هذا القسم'); return; }
+      data = keepIdx.map(i=>cfg.data[i]);
+      raw = keepIdx.map(i=>cfg.raw[i]);
+      const f = factoriesData.find(x=>x.id===factoryId);
+      title = `${f?f.name:''} - ${cfg.title} - ${new Date().toISOString().slice(0,10)}`;
+      if(cfg.getImageUrls){ const orig=cfg.getImageUrls; getImageUrls = (fi)=> orig(keepIdx[fi]); }
+      if(cfg.getImageUrl){ const orig=cfg.getImageUrl; getImageUrl = (fi)=> orig(keepIdx[fi]); }
+    }
+    const opts = { getImageUrl, getImageUrls, rawObjects: raw, chartImages: cfg.chartImages, chartData: cfg.chartData };
+    const preloadUrls = unifiedAllImageUrls(data, opts);
     if(preloadUrls.length) await urlsToDataUris(preloadUrls);
-    openUnifiedExportPicker(cfg.title, cfg.headers, cfg.data, opts);
+    openUnifiedExportPicker(title, cfg.headers, data, opts);
   }catch(e){ console.error(e); toast('🚫 تعذّر تجميع البيانات: '+(e.message||'')); }
 }
 /* ============================================================
@@ -10281,7 +10527,7 @@ async function unifiedExportPdf(title, headers, rows, opts){
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
   const el = document.createElement('div');
-  el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px;color:#0B1220">
+  el.innerHTML = opts?.customBodyHtml ? `<div style="direction:rtl;font-family:Arial;padding:14px;color:#0B1220">${opts.customBodyHtml}</div>` : `<div style="direction:rtl;font-family:Arial;padding:14px;color:#0B1220">
     <h1 style="text-align:center">${title}</h1>
     <p style="text-align:center;color:#666">${new Date().toLocaleDateString('ar-EG')} — ${rows.length} سجل${allUrls.length?' — '+allUrls.length+' صورة':''}</p>
     ${unifiedChartsHtml(opts)}
@@ -10423,6 +10669,12 @@ async function runSimpleWordTest(){
   toast('✅ نجح اختبار Word البسيط — محرك DOCX شغّال صح');
 }
 async function unifiedExportWord(title, headers, rows, opts){
+  if(opts?.customBodyHtml){
+    const blob = await buildDocxBlobFromHtml(title, opts.customBodyHtml);
+    if(!blob){ toast('🚫 تعذّر إنشاء ملف Word'); return; }
+    await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.docx`);
+    return;
+  }
   const ok = await ensureDocxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة Word — افتح Console (F12) لمعرفة السبب بالتفصيل'); return; }
   const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
   const allUrls = unifiedAllImageUrls(rows, opts);
