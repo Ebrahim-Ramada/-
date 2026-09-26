@@ -8201,10 +8201,14 @@ function renderSelectedElementTools(){
     </div>`;
     return;
   }
+  const isRackSwitchUps = el.deviceType==='rack_switch_ups';
   host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span style="font-size:11px;color:var(--muted-2)">🎨 لون العنصر المحدد:</span>
-      <input type="color" value="${el.color||'#FF3B30'}" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="changeSelectedElementColor(this.value)">
+      <input type="color" value="${el.color&&el.color!=='ORIGINAL'?el.color:'#FF3B30'}" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="changeSelectedElementColor(this.value)">
+      ${isRackSwitchUps ? `
+        <button class="btn sm ${el.color==='ORIGINAL'?'primary':''}" onclick="changeSelectedElementColor('ORIGINAL')">🖼️ الصورة الحقيقية (بدون تلوين)</button>
+      `:''}
       ${isText ? `
         <span style="font-size:11px;color:var(--muted-2);margin-right:8px">حجم الخط:</span>
         <input type="range" min="8" max="120" value="${el.fontSize||18}" style="width:90px" oninput="changeSelectedTextFontSize(this.value)">
@@ -8212,6 +8216,7 @@ function renderSelectedElementTools(){
         <button class="btn sm" style="padding:4px 8px" onclick="toggleSelectedTextBold()">${el.bold?'𝗕 Bold✓':'B Bold'}</button>
       `:''}
     </div>
+    ${isRackSwitchUps ? `<p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 دوس "الصورة الحقيقية" لعرضها بألوانها الأصلية زي ما هي، أو اختار أي لون من الدائرة اللونية فوق لتلوينها.</p>`:''}
     ${isText ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <span style="font-size:11px;color:var(--muted-2)">🔄 زاوية الدوران:</span>
       <input type="range" min="0" max="360" value="${el.rotation||0}" style="flex:1" oninput="changeSelectedTextRotation(this.value)">
@@ -8457,8 +8462,15 @@ const LAYOUT_DEVICE_ICON_BUILDERS = {
     </svg>`;
   },
   // أيقونة صورة حقيقية لراك شبكة كامل (خزانة + Switch + UPS) — خلفية شفافة 100%،
-  // 🎯 وبقت قابلة لتغيير اللون بنفس تقنية الكاميرا الحقيقية (Colorize بقوة كاملة)
+  // 🎯 قابلة لتغيير اللون (Colorize)، أو عرض الصورة الحقيقية زي ما هي بدون أي تلوين
+  // (لما c==='ORIGINAL') — الاتنين متاحين وتقدر تختار بينهم في أي وقت
   rack_switch_ups: c => {
+    if(c === 'ORIGINAL'){
+      // الصورة الحقيقية 100% بدون أي فلتر تلوين خالص
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <image href="${RACK_SWITCH_UPS_REAL_IMG}" x="2" y="2" width="96" height="96" preserveAspectRatio="xMidYMid meet"/>
+      </svg>`;
+    }
     const hex = c.replace('#','');
     const r = parseInt(hex.slice(0,2),16)/255, g = parseInt(hex.slice(2,4),16)/255, b = parseInt(hex.slice(4,6),16)/255;
     const lr=0.299, lg=0.587, lb=0.114;
@@ -8496,8 +8508,11 @@ function buildDeviceIconDataUri(deviceType, color){
   return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
 }
 function addLayoutDeviceIcon(deviceType){
-  const dataUri = buildDeviceIconDataUri(deviceType, layoutEditor.color);
-  const svg = LAYOUT_DEVICE_ICON_BUILDERS[deviceType](layoutEditor.color || '#38D9C9');
+  // 🎯 Rack+Switch+UPS: الافتراضي عند الإضافة هو الصورة الحقيقية بألوانها الأصلية،
+  // وبعدين المستخدم يقدر يلوّنها من لوحة التحكم لو حب
+  const initialColor = deviceType==='rack_switch_ups' ? 'ORIGINAL' : (layoutEditor.color || '#38D9C9');
+  const dataUri = buildDeviceIconDataUri(deviceType, initialColor);
+  const svg = LAYOUT_DEVICE_ICON_BUILDERS[deviceType](initialColor);
   const img = new Image();
   img.onload = ()=>{
     const canvas = document.getElementById('layoutEditCanvas');
@@ -8507,7 +8522,7 @@ function addLayoutDeviceIcon(deviceType){
     layoutEditor.elements.push({
       type:'image', src:dataUri, img, label:LAYOUT_DEVICE_LABELS[deviceType], deviceType,
       x: canvas.width/2 - defaultW/2, y: canvas.height/2 - defaultH/2,
-      w: defaultW, h: defaultH, rotation: 0, color: layoutEditor.color || '#38D9C9'
+      w: defaultW, h: defaultH, rotation: 0, color: initialColor
     });
     layoutEditor.selectedIndex = layoutEditor.elements.length-1;
     layoutEditor.tool = 'select';
