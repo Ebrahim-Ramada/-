@@ -8085,6 +8085,49 @@ function renderSelectedElementTools(){
   const el = layoutEditor.elements[layoutEditor.selectedIndex];
   if(!el){ host.innerHTML = ''; return; }
   const isText = el.type==='text';
+  const isRect = el.type==='rect';
+  if(isRect){
+    host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px">
+      <div class="field"><label style="font-size:10.5px">✏️ النص جوّه المربع</label>
+        <textarea class="input" style="min-height:60px" oninput="updateRectText(this.value)" placeholder="اكتب نص هنا...">${el.text||''}</textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <span style="font-size:10.5px;color:var(--muted-2)">حجم الخط:</span>
+        <input type="range" min="8" max="80" value="${el.fontSize||16}" style="width:80px" oninput="updateRectStyle('fontSize', parseInt(this.value))">
+        <span style="font-size:10px;min-width:22px">${el.fontSize||16}</span>
+        <button class="btn sm" style="padding:4px 8px" onclick="toggleRectStyle('bold')">${el.bold?'𝗕✓':'B'}</button>
+        <button class="btn sm" style="padding:4px 8px;font-style:italic" onclick="toggleRectStyle('italic')">${el.italic?'I✓':'I'}</button>
+        <button class="btn sm" style="padding:4px 8px;text-decoration:underline" onclick="toggleRectStyle('underline')">${el.underline?'U✓':'U'}</button>
+        <input type="color" value="${el.textColor||'#ffffff'}" title="لون النص" style="width:32px;height:30px;border-radius:6px;border:1px solid var(--border);cursor:pointer" onchange="updateRectStyle('textColor', this.value)">
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+        <span style="font-size:10.5px;color:var(--muted-2)">محاذاة:</span>
+        ${['right','center','left'].map(a=>`<button class="btn sm ${el.textAlign===a?'primary':''}" style="padding:4px 8px" onclick="updateRectStyle('textAlign','${a}')">${a==='right'?'⇥':a==='center'?'↔':'⇤'}</button>`).join('')}
+        <span style="font-size:10.5px;color:var(--muted-2);margin-right:8px">Padding:</span>
+        <input type="range" min="0" max="30" value="${el.padding!=null?el.padding:6}" style="width:70px" oninput="updateRectStyle('padding', parseInt(this.value))">
+      </div>
+      <div style="border-top:1px solid var(--border-soft);margin-top:8px;padding-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-size:10.5px;color:var(--muted-2)">🖊️ لون الحد:</span>
+        <input type="color" value="${el.borderColor||'#FF3B30'}" style="width:32px;height:30px;border-radius:6px;border:1px solid var(--border);cursor:pointer" onchange="updateRectStyle('borderColor', this.value)">
+        <span style="font-size:10.5px;color:var(--muted-2)">سمك:</span>
+        <input type="range" min="0" max="15" value="${el.borderWidth!=null?el.borderWidth:2}" style="width:60px" oninput="updateRectStyle('borderWidth', parseInt(this.value))">
+        <button class="btn sm ${el.borderStyle==='dashed'?'primary':''}" style="padding:4px 8px" onclick="updateRectStyle('borderStyle','${el.borderStyle==='dashed'?'solid':'dashed'}')">${el.borderStyle==='dashed'?'┄ متقطع':'▬ متصل'}</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <span style="font-size:10.5px;color:var(--muted-2)">🪣 الخلفية:</span>
+        <button class="btn sm ${el.bgColor==='transparent'?'primary':''}" style="padding:4px 8px" onclick="updateRectStyle('bgColor','transparent')">شفاف</button>
+        <input type="color" value="${el.bgColor&&el.bgColor!=='transparent'?el.bgColor:'#0B1220'}" style="width:32px;height:30px;border-radius:6px;border:1px solid var(--border);cursor:pointer" onchange="updateRectStyle('bgColor', this.value)">
+        <span style="font-size:10.5px;color:var(--muted-2)">شفافية:</span>
+        <input type="range" min="0" max="100" value="${Math.round((el.bgOpacity!=null?el.bgOpacity:1)*100)}" style="width:60px" oninput="updateRectStyle('bgOpacity', parseInt(this.value)/100)">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <span style="font-size:11px;color:var(--muted-2)">🔄 الدوران:</span>
+        <input type="range" min="0" max="360" value="${el.rotation||0}" style="flex:1" oninput="updateRectStyle('rotation', parseInt(this.value))">
+        <span style="font-size:10.5px;min-width:34px">${el.rotation||0}°</span>
+      </div>
+    </div>`;
+    return;
+  }
   host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span style="font-size:11px;color:var(--muted-2)">🎨 لون العنصر المحدد:</span>
@@ -8102,6 +8145,26 @@ function renderSelectedElementTools(){
       <span style="font-size:10.5px;min-width:34px">${el.rotation||0}°</span>
     </div>`:''}
   </div>`;
+}
+function updateRectText(val){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='rect') return;
+  el.text = val;
+  redrawLayoutCanvas();
+}
+function updateRectStyle(prop, val){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='rect') return;
+  el[prop] = val;
+  redrawLayoutCanvas();
+}
+function toggleRectStyle(prop){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='rect') return;
+  pushLayoutHistory();
+  el[prop] = !el[prop];
+  redrawLayoutCanvas();
+  renderSelectedElementTools();
 }
 function changeSelectedElementColor(newColor){
   const el = layoutEditor.elements[layoutEditor.selectedIndex];
@@ -8148,7 +8211,59 @@ function drawLayoutElement(ctx, el, selected){
     ctx.lineTo(el.x2-14*Math.cos(angle+0.4), el.y2-14*Math.sin(angle+0.4));
     ctx.closePath(); ctx.fill();
   }
-  else if(el.type==='rect'){ ctx.strokeRect(el.x,el.y,el.w,el.h); }
+  else if(el.type==='rect'){
+    ctx.save();
+    const cx = el.x+el.w/2, cy = el.y+el.h/2;
+    ctx.translate(cx,cy); ctx.rotate((el.rotation||0)*Math.PI/180); ctx.translate(-cx,-cy);
+    // 🎯 الخلفية (شفافة أو أي لون) — بترتسم الأول قبل الحدود والنص
+    if(el.bgColor && el.bgColor!=='transparent'){
+      ctx.globalAlpha = el.bgOpacity!=null ? el.bgOpacity : 1;
+      ctx.fillStyle = el.bgColor; ctx.fillRect(el.x,el.y,el.w,el.h);
+      ctx.globalAlpha = 1;
+    }
+    // 🎯 الحدود — لون/سمك/نمط (متصل أو متقطع) قابلين للتخصيص، بدل اللون الثابت القديم
+    ctx.strokeStyle = el.borderColor || el.color || '#FF3B30';
+    ctx.lineWidth = el.borderWidth!=null ? el.borderWidth : 2;
+    ctx.setLineDash(el.borderStyle==='dashed' ? [8,5] : []);
+    ctx.strokeRect(el.x,el.y,el.w,el.h);
+    ctx.setLineDash([]);
+    // 🎯 النص جوّه المربع — منسّق بالكامل زي Word (حجم/لون/Bold/Italic/Underline/محاذاة/Padding/التفاف تلقائي)
+    if(el.text){
+      const pad = el.padding!=null ? el.padding : 6;
+      const fs = el.fontSize || 16;
+      ctx.font = `${el.italic?'italic ':''}${el.bold?'bold ':''}${fs}px Arial`;
+      ctx.fillStyle = el.textColor || '#fff';
+      const align = el.textAlign || 'right';
+      ctx.textAlign = align==='center' ? 'center' : (align==='left' ? 'left' : 'right');
+      ctx.textBaseline = 'top';
+      const maxW = Math.max(10, el.w - pad*2);
+      const lines = [];
+      (el.text.split('\n')).forEach(paragraph=>{
+        const words = paragraph.split(' ');
+        let cur = '';
+        words.forEach(w=>{
+          const test = cur ? cur+' '+w : w;
+          if(ctx.measureText(test).width > maxW && cur){ lines.push(cur); cur = w; }
+          else cur = test;
+        });
+        lines.push(cur);
+      });
+      const lineH = fs*1.3;
+      const textX = align==='center' ? el.x+el.w/2 : (align==='left' ? el.x+pad : el.x+el.w-pad);
+      lines.forEach((line,i)=>{
+        const ly = el.y+pad+i*lineH;
+        if(ly > el.y+el.h-pad-lineH+lineH) return; // منع النص من الخروج خارج حدود المربع رأسيًا
+        ctx.fillText(line, textX, ly);
+        if(el.underline){
+          const w = ctx.measureText(line).width;
+          const ux = align==='center' ? textX-w/2 : (align==='left' ? textX : textX-w);
+          ctx.strokeStyle = el.textColor || '#fff'; ctx.lineWidth = Math.max(1, fs*0.06);
+          ctx.beginPath(); ctx.moveTo(ux, ly+fs*1.05); ctx.lineTo(ux+w, ly+fs*1.05); ctx.stroke();
+        }
+      });
+    }
+    ctx.restore();
+  }
   else if(el.type==='circle'){ ctx.beginPath(); ctx.ellipse(el.cx,el.cy,Math.abs(el.rx),Math.abs(el.ry),0,0,2*Math.PI); ctx.stroke(); }
   else if(el.type==='pin'){
     ctx.beginPath(); ctx.arc(el.x,el.y,9,0,2*Math.PI); ctx.fill();
@@ -8179,7 +8294,7 @@ function drawLayoutElement(ctx, el, selected){
     const box = layoutElementBBox(el);
     ctx.strokeStyle='#38D9C9'; ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
     ctx.strokeRect(box.x-6, box.y-6, box.w+12, box.h+12); ctx.setLineDash([]);
-    if(el.type==='image'){
+    if(el.type==='image' || el.type==='rect'){
       // مقبض تكبير/تصغير (الزاوية) + مقبض تدوير (فوق العنصر) — تحكم كامل زي المطلوب
       const rH = layoutImageHandles(el);
       ctx.fillStyle='#38D9C9';
@@ -8187,6 +8302,12 @@ function drawLayoutElement(ctx, el, selected){
       ctx.beginPath(); ctx.arc(rH.rotate.x, rH.rotate.y, 8, 0, 2*Math.PI); ctx.fill();
       ctx.strokeStyle='#38D9C9'; ctx.setLineDash([]); ctx.lineWidth=1.5;
       ctx.beginPath(); ctx.moveTo(box.x+box.w/2, box.y); ctx.lineTo(rH.rotate.x, rH.rotate.y); ctx.stroke();
+      if(el.type==='rect'){
+        // 🎯 مقابض إضافية للمربع: تغيير العرض لوحده والارتفاع لوحده بشكل مستقل عن بعض
+        ctx.fillStyle='#FFB020';
+        ctx.beginPath(); ctx.arc(rH.resizeW.x, rH.resizeW.y, 7, 0, 2*Math.PI); ctx.fill();
+        ctx.beginPath(); ctx.arc(rH.resizeH.x, rH.resizeH.y, 7, 0, 2*Math.PI); ctx.fill();
+      }
     }
   }
 }
@@ -8194,7 +8315,11 @@ function drawLayoutElement(ctx, el, selected){
 function layoutImageHandles(el){
   const cx = el.x+el.w/2, cy = el.y+el.h/2, rad = (el.rotation||0)*Math.PI/180;
   const rot = (px,py)=>{ const dx=px-cx, dy=py-cy; return { x: cx+dx*Math.cos(rad)-dy*Math.sin(rad), y: cy+dx*Math.sin(rad)+dy*Math.cos(rad) }; };
-  return { resize: rot(el.x+el.w, el.y+el.h), rotate: rot(cx, el.y-28) };
+  return {
+    resize: rot(el.x+el.w, el.y+el.h), rotate: rot(cx, el.y-28),
+    resizeW: rot(el.x+el.w, cy),   // مقبض تغيير العرض لوحده (نص الحافة اليمنى)
+    resizeH: rot(cx, el.y+el.h)    // مقبض تغيير الارتفاع لوحده (نص الحافة السفلية)
+  };
 }
 function layoutElementBBox(el){
   if(el.type==='pen'){ const xs=el.points.map(p=>p.x), ys=el.points.map(p=>p.y); return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)}; }
@@ -8542,10 +8667,14 @@ function attachLayoutCanvasEvents(canvas){
       // لو فيه عنصر صورة محدَّد بالفعل، افحص الأول لو الضغطة على مقبض تكبير أو تدوير بتاعه
       if(layoutEditor.selectedIndex>=0){
         const sel = layoutEditor.elements[layoutEditor.selectedIndex];
-        if(sel.type==='image'){
+        if(sel.type==='image' || sel.type==='rect'){
           const h = layoutImageHandles(sel);
           if(pointNearHandle(pos.x,pos.y,h.resize.x,h.resize.y)){ dragging=true; mode='resize'; start=pos; pushLayoutHistory(); return; }
           if(pointNearHandle(pos.x,pos.y,h.rotate.x,h.rotate.y)){ dragging=true; mode='rotate'; start=pos; pushLayoutHistory(); return; }
+          if(sel.type==='rect'){
+            if(pointNearHandle(pos.x,pos.y,h.resizeW.x,h.resizeW.y)){ dragging=true; mode='resizeW'; start=pos; pushLayoutHistory(); return; }
+            if(pointNearHandle(pos.x,pos.y,h.resizeH.x,h.resizeH.y)){ dragging=true; mode='resizeH'; start=pos; pushLayoutHistory(); return; }
+          }
         }
       }
       let found=-1;
@@ -8603,7 +8732,39 @@ function attachLayoutCanvasEvents(canvas){
         el.x = cx - el.w/2; el.y = cy - el.h/2;
         redrawLayoutCanvas(); return;
       }
-      if(mode==='rotate' && el.type==='image'){
+      if(mode==='resize' && el.type==='rect'){
+        // 🎯 المربع: تكبير حر من الزاوية بدون قفل النسبة — العرض والارتفاع بيتغيروا مستقلين عن بعض
+        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+        const rad = -((el.rotation||0) * Math.PI/180);
+        const dx = pos.x-cx, dy = pos.y-cy;
+        const localX = dx*Math.cos(rad) - dy*Math.sin(rad);
+        const localY = dx*Math.sin(rad) + dy*Math.cos(rad);
+        el.w = Math.max(20, localX + el.w/2);
+        el.h = Math.max(20, localY + el.h/2);
+        el.x = cx - el.w/2; el.y = cy - el.h/2;
+        redrawLayoutCanvas(); return;
+      }
+      if(mode==='resizeW' && el.type==='rect'){
+        // 🎯 تغيير العرض لوحده بس (الارتفاع يفضل زي ما هو)
+        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+        const rad = -((el.rotation||0) * Math.PI/180);
+        const dx = pos.x-cx, dy = pos.y-cy;
+        const localX = dx*Math.cos(rad) - dy*Math.sin(rad);
+        el.w = Math.max(20, localX + el.w/2);
+        el.x = cx - el.w/2;
+        redrawLayoutCanvas(); return;
+      }
+      if(mode==='resizeH' && el.type==='rect'){
+        // 🎯 تغيير الارتفاع لوحده بس (العرض يفضل زي ما هو)
+        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+        const rad = -((el.rotation||0) * Math.PI/180);
+        const dx = pos.x-cx, dy = pos.y-cy;
+        const localY = dx*Math.sin(rad) + dy*Math.cos(rad);
+        el.h = Math.max(20, localY + el.h/2);
+        el.y = cy - el.h/2;
+        redrawLayoutCanvas(); return;
+      }
+      if(mode==='rotate' && (el.type==='image' || el.type==='rect')){
         const cx = el.x+el.w/2, cy = el.y+el.h/2;
         el.rotation = Math.atan2(pos.y-cy, pos.x-cx)*180/Math.PI + 90;
         redrawLayoutCanvas(); return;
@@ -8632,7 +8793,7 @@ function attachLayoutCanvasEvents(canvas){
       const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
       pushLayoutHistory();
       if(tool==='arrow') layoutEditor.elements.push({type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color});
-      else if(tool==='rect') layoutEditor.elements.push({type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),color:layoutEditor.color});
+      else if(tool==='rect') layoutEditor.elements.push({type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),rotation:0,color:layoutEditor.color,borderColor:layoutEditor.color,borderWidth:2,borderStyle:'solid',bgColor:'transparent',bgOpacity:1,text:'',fontSize:16,bold:false,italic:false,underline:false,textColor:'#ffffff',textAlign:'right',padding:6});
       else if(tool==='circle') layoutEditor.elements.push({type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color});
       redrawLayoutCanvas();
     }
