@@ -7572,6 +7572,7 @@ function renderLayoutMarkersModal(){
       <button class="btn sm" id="zoomOutBtn" onclick="adjustLayoutZoom(-0.25)">➖</button>
       <span style="font-size:12px;min-width:44px;text-align:center" id="zoomLevelLabel">${Math.round(layoutZoom*100)}%</span>
       <button class="btn sm" id="zoomInBtn" onclick="adjustLayoutZoom(0.25)">➕</button>
+      <button class="btn sm" onclick="fitLayoutToScreen()">🎯 ملاءمة</button>
       <button class="btn sm" onclick="resetLayoutZoom()">↻ إعادة ضبط</button>
       <select class="input" style="width:auto;font-size:11px;padding:6px 8px" onchange="changeMarkerSize(this.value)">
         <option value="small" ${layoutMarkerSize==='small'?'selected':''}>علامات صغيرة</option>
@@ -7646,6 +7647,41 @@ function attachViewportPinchHandlers(){
       applyLayoutTransform();
     }
   }, {passive:false});
+  // 🎯 عجلة الماوس للتكبير حول موضع المؤشر نفسه — نفس تجربة الخريطة اليدوية بالظبط
+  vp.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const rect = vp.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left, mouseY = e.clientY - rect.top;
+    const oldZoom = layoutZoom;
+    const factor = e.deltaY < 0 ? 1.12 : (1/1.12);
+    const newZoom = Math.max(0.02, +(oldZoom*factor).toFixed(3));
+    layoutPanX = mouseX - ((mouseX - layoutPanX) / oldZoom) * newZoom;
+    layoutPanY = mouseY - ((mouseY - layoutPanY) / oldZoom) * newZoom;
+    layoutZoom = newZoom;
+    applyLayoutTransform();
+    saveLayoutViewState();
+  }, {passive:false});
+  // 🎯 السحب بالماوس لتحريك الخريطة (Pan) — بس لو الدوسة مش على علامة (Marker) نفسها
+  // عشان ميتعارضش مع سحب العلامات الموجود أصلًا (attachMarkerDragHandlers)
+  let mouseDragging=false, dragStart={x:0,y:0}, dragPanStart={x:0,y:0};
+  vp.addEventListener('mousedown', (e)=>{
+    if(e.target.closest('.layout-marker-pin')) return; // سيب سحب العلامات لمعالجه الخاص
+    mouseDragging = true; dragStart = {x:e.clientX, y:e.clientY}; dragPanStart = {x:layoutPanX, y:layoutPanY};
+    vp.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e)=>{
+    if(!mouseDragging) return;
+    layoutPanX = dragPanStart.x + (e.clientX - dragStart.x);
+    layoutPanY = dragPanStart.y + (e.clientY - dragStart.y);
+    applyLayoutTransform();
+  });
+  window.addEventListener('mouseup', ()=>{
+    if(mouseDragging){ mouseDragging=false; vp.style.cursor=''; saveLayoutViewState(); }
+  });
+}
+function fitLayoutToScreen(){
+  layoutZoom = 1; layoutPanX = 0; layoutPanY = 0;
+  applyLayoutTransform(); saveLayoutViewState();
 }
 async function composeLayoutImageWithMarkers(layout, factoryData){
   let markers = [];
@@ -8341,10 +8377,10 @@ const RACK_SWITCH_UPS_REAL_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA
 // أيقونات جاهزة مرسومة برمجيًا لكل نوع جهاز (SVG مضمَّن) — بدون فتح معرض الصور إطلاقًا
 const LAYOUT_DEVICE_ICON_BUILDERS = {
   camera: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="30" width="80" height="50" rx="8" fill="#182446" stroke="${c}" stroke-width="4"/><rect x="35" y="15" width="30" height="20" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/><circle cx="50" cy="55" r="18" fill="#0B1220" stroke="${c}" stroke-width="4"/><circle cx="50" cy="55" r="9" fill="${c}"/><circle cx="75" cy="40" r="4" fill="#FF6B6B"/></svg>`,
-  rack: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="8" width="70" height="84" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/>${[18,34,50,66,82].map(y=>`<rect x="22" y="${y}" width="56" height="10" rx="2" fill="#0B1220" stroke="${c}" stroke-width="2"/><circle cx="70" cy="${y+5}" r="2" fill="#4ADE80"/>`).join('')}</svg>`,
-  switch: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><rect x="5" y="10" width="90" height="40" rx="6" fill="#182446" stroke="${c}" stroke-width="4"/>${Array.from({length:8},(_,i)=>`<rect x="${12+i*10}" y="20" width="6" height="20" rx="1" fill="#0B1220" stroke="${c}" stroke-width="1.5"/>`).join('')}</svg>`,
+  rack: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="8" width="70" height="84" rx="4" fill="none" stroke="${c}" stroke-width="4"/>${[18,34,50,66,82].map(y=>`<rect x="22" y="${y}" width="56" height="10" rx="2" fill="none" stroke="${c}" stroke-width="2"/><circle cx="70" cy="${y+5}" r="2" fill="${c}"/>`).join('')}</svg>`,
+  switch: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60"><rect x="5" y="10" width="90" height="40" rx="6" fill="none" stroke="${c}" stroke-width="4"/>${Array.from({length:8},(_,i)=>`<rect x="${12+i*10}" y="20" width="6" height="20" rx="1" fill="none" stroke="${c}" stroke-width="1.5"/>`).join('')}</svg>`,
   server: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="15" y="10" width="70" height="80" rx="4" fill="#182446" stroke="${c}" stroke-width="4"/>${[22,42,62].map(y=>`<rect x="22" y="${y}" width="56" height="14" rx="2" fill="#0B1220" stroke="${c}" stroke-width="2"/><circle cx="70" cy="${y+7}" r="2.5" fill="#4ADE80"/><rect x="28" y="${y+4}" width="20" height="6" fill="${c}" opacity="0.5"/>`).join('')}</svg>`,
-  ups: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="18" y="15" width="64" height="70" rx="6" fill="#182446" stroke="${c}" stroke-width="4"/><path d="M55 28 L38 55 H48 L45 72 L64 45 H54 Z" fill="${c}"/></svg>`,
+  ups: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="18" y="15" width="64" height="70" rx="6" fill="none" stroke="${c}" stroke-width="4"/><path d="M55 28 L38 55 H48 L45 72 L64 45 H54 Z" fill="${c}"/></svg>`,
   antenna: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="46" y="55" width="8" height="35" fill="${c}"/><path d="M50 55 L20 20 M50 55 L80 20" stroke="${c}" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M35 25 Q50 10 65 25 M28 15 Q50 -5 72 15" stroke="${c}" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.6"/><circle cx="50" cy="55" r="6" fill="#0B1220" stroke="${c}" stroke-width="3"/></svg>`,
   govision_bullet: c => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 70">
     <!-- قاعدة التثبيت في الخلف -->
