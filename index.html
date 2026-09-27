@@ -7238,6 +7238,7 @@ function renderPdfEditorShell(l){
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
+      <button class="btn sm" onclick="duplicateSelectedLayoutElement()">📋 نسخ العنصر</button>
       <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
       <button class="btn sm" id="multiSelectToggleBtn" onclick="toggleMultiSelectMode()">☑️ تحديد</button>
       <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
@@ -8046,6 +8047,7 @@ function openLayoutEditor(layoutId){
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
       <button class="btn sm" onclick="layoutEditorUndo()">↩️ تراجع</button>
       <button class="btn sm" onclick="layoutEditorRedo()">↪️ إعادة</button>
+      <button class="btn sm" onclick="duplicateSelectedLayoutElement()">📋 نسخ العنصر</button>
       <button class="btn sm danger" onclick="deleteSelectedLayoutElement()">🗑 حذف المحدد</button>
       <button class="btn sm" id="multiSelectToggleBtn" onclick="toggleMultiSelectMode()">☑️ تحديد</button>
       <button class="btn sm" onclick="zoomLayoutEditor(0.8)">➖</button>
@@ -8201,6 +8203,7 @@ function renderSelectedElementTools(){
     </div>`;
     return;
   }
+  const isArrow = el.type==='arrow';
   const isRackSwitchUps = el.deviceType==='rack_switch_ups';
   host.innerHTML = `<div class="site-card" style="margin-bottom:8px;padding:8px">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -8209,13 +8212,26 @@ function renderSelectedElementTools(){
       ${isRackSwitchUps ? `
         <button class="btn sm ${el.color==='ORIGINAL'?'primary':''}" onclick="changeSelectedElementColor('ORIGINAL')">🖼️ الصورة الحقيقية (بدون تلوين)</button>
       `:''}
-      ${isText ? `
+    ${isText ? `
+      <div class="field" style="width:100%;margin-top:6px"><label style="font-size:10.5px">✏️ محتوى النص (تقدر تعدّله في أي وقت — Enter لسطر جديد)</label>
+        <textarea class="input" style="min-height:60px" oninput="updateTextContent(this.value)">${el.text||''}</textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--muted-2);margin-right:8px">حجم الخط:</span>
         <input type="range" min="8" max="120" value="${el.fontSize||18}" style="width:90px" oninput="changeSelectedTextFontSize(this.value)">
         <span style="font-size:10.5px;min-width:26px">${el.fontSize||18}</span>
         <button class="btn sm" style="padding:4px 8px" onclick="toggleSelectedTextBold()">${el.bold?'𝗕 Bold✓':'B Bold'}</button>
-      `:''}
+      </div>
+    `:''}
     </div>
+    ${isArrow ? `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span style="font-size:11px;color:var(--muted-2)">➡️ سمك السهم:</span>
+        <input type="range" min="1" max="20" value="${el.lineWidth||3}" style="width:100px" oninput="updateArrowLineWidth(this.value)">
+        <span style="font-size:10.5px;min-width:22px">${el.lineWidth||3}</span>
+        <button class="btn sm ${(el.lineWidth||3)>=7?'primary':''}" onclick="toggleArrowBold()">${(el.lineWidth||3)>=7?'𝗕 عريض✓':'B عريض'}</button>
+      </div>
+    `:''}
     ${isRackSwitchUps ? `<p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 دوس "الصورة الحقيقية" لعرضها بألوانها الأصلية زي ما هي، أو اختار أي لون من الدائرة اللونية فوق لتلوينها.</p>`:''}
     ${isText ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <span style="font-size:11px;color:var(--muted-2)">🔄 زاوية الدوران:</span>
@@ -8223,6 +8239,26 @@ function renderSelectedElementTools(){
       <span style="font-size:10.5px;min-width:34px">${el.rotation||0}°</span>
     </div>`:''}
   </div>`;
+}
+function updateArrowLineWidth(val){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='arrow') return;
+  el.lineWidth = parseInt(val);
+  redrawLayoutCanvas();
+}
+function toggleArrowBold(){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='arrow') return;
+  pushLayoutHistory();
+  el.lineWidth = (el.lineWidth||3)>=7 ? 3 : 10; // تبديل بين رفيع عادي وعريض واضح
+  redrawLayoutCanvas();
+  renderSelectedElementTools();
+}
+function updateTextContent(val){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='text') return;
+  el.text = val;
+  redrawLayoutCanvas();
 }
 function updateRectText(val){
   const el = layoutEditor.elements[layoutEditor.selectedIndex];
@@ -8279,14 +8315,16 @@ function changeSelectedTextRotation(deg){
   redrawLayoutCanvas();
 }
 function drawLayoutElement(ctx, el, selected){
-  ctx.strokeStyle = el.color; ctx.fillStyle = el.color; ctx.lineWidth = 3; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.strokeStyle = el.color; ctx.fillStyle = el.color; ctx.lineWidth = el.lineWidth||3; ctx.lineCap='round'; ctx.lineJoin='round';
   if(el.type==='pen'){ ctx.beginPath(); el.points.forEach((p,i)=> i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke(); }
   else if(el.type==='arrow'){
+    const lw = el.lineWidth||3;
     ctx.beginPath(); ctx.moveTo(el.x1,el.y1); ctx.lineTo(el.x2,el.y2); ctx.stroke();
     const angle = Math.atan2(el.y2-el.y1, el.x2-el.x1);
+    const headLen = 14 * Math.max(1, lw/3); // رأس السهم بيكبر تناسبيًا مع سمك الخط (تأثير "Bold" واضح بصريًا)
     ctx.beginPath(); ctx.moveTo(el.x2,el.y2);
-    ctx.lineTo(el.x2-14*Math.cos(angle-0.4), el.y2-14*Math.sin(angle-0.4));
-    ctx.lineTo(el.x2-14*Math.cos(angle+0.4), el.y2-14*Math.sin(angle+0.4));
+    ctx.lineTo(el.x2-headLen*Math.cos(angle-0.4), el.y2-headLen*Math.sin(angle-0.4));
+    ctx.lineTo(el.x2-headLen*Math.cos(angle+0.4), el.y2-headLen*Math.sin(angle+0.4));
     ctx.closePath(); ctx.fill();
   }
   else if(el.type==='rect'){
@@ -8352,9 +8390,11 @@ function drawLayoutElement(ctx, el, selected){
     ctx.save();
     ctx.translate(el.x, el.y);
     ctx.rotate((el.rotation||0)*Math.PI/180);
-    ctx.font = `${el.bold?'bold ':''}${el.fontSize||18}px Arial`;
+    const fs = el.fontSize||18;
+    ctx.font = `${el.bold?'bold ':''}${fs}px Arial`;
     ctx.textAlign='left'; ctx.textBaseline='alphabetic';
-    ctx.fillText(el.text, 0, 0);
+    // 🎯 دعم الأسطر المتعددة الحقيقي — كل \n بيتحول لسطر منفصل بارتفاع مناسب
+    (el.text||'').split('\n').forEach((line,i)=> ctx.fillText(line, 0, i*fs*1.3));
     ctx.restore();
   }
   else if(el.type==='image' && el.img){
@@ -8405,7 +8445,12 @@ function layoutElementBBox(el){
   if(el.type==='rect'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
   if(el.type==='circle'){ return {x:el.cx-el.rx,y:el.cy-el.ry,w:el.rx*2,h:el.ry*2}; }
   if(el.type==='pin'){ return {x:el.x-9,y:el.y-9,w:18,h:18}; }
-  if(el.type==='text'){ const fs=el.fontSize||18; return {x:el.x,y:el.y-fs,w:(el.text.length*fs*0.55),h:fs*1.25}; }
+  if(el.type==='text'){
+    const fs=el.fontSize||18;
+    const lines = (el.text||'').split('\n');
+    const maxLen = Math.max(...lines.map(l=>l.length), 1);
+    return {x:el.x,y:el.y-fs,w:(maxLen*fs*0.55),h:fs*1.3*lines.length};
+  }
   if(el.type==='image'){ return {x:el.x,y:el.y,w:el.w,h:el.h}; }
   return {x:0,y:0,w:0,h:0};
 }
@@ -8678,6 +8723,24 @@ async function confirmBulkDeleteMapCameras(){
     if(wasEditingPdf) await openPdfLayoutEditor(savedLayoutId); else openLayoutEditor(savedLayoutId);
   }, `${n} عنصر من الخريطة (إزالة من الخريطة فقط، مش حذف سجلات حقيقية)`, {bulkCount:n});
 }
+function duplicateSelectedLayoutElement(){
+  if(layoutEditor.selectedIndex<0){ toast('حدّد عنصرًا أولًا (أداة تحديد)'); return; }
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  pushLayoutHistory();
+  // نسخة عميقة كاملة من العنصر (كل خصائصه: النص، اللون، الحدود، الخلفية، إلخ) مع
+  // إزاحة بسيطة عن الأصل عشان تبان كنسخة منفصلة واضحة، وربطها بصورة محمّلة فعليًا لو عنصر صورة
+  const clone = JSON.parse(JSON.stringify(el, (k,v)=> k==='img' ? undefined : v));
+  const offset = 20;
+  if(clone.type==='arrow'){ clone.x1+=offset; clone.y1+=offset; clone.x2+=offset; clone.y2+=offset; }
+  else if(clone.type==='circle'){ clone.cx+=offset; clone.cy+=offset; }
+  else if(clone.type==='pen'){ clone.points = clone.points.map(p=>({x:p.x+offset,y:p.y+offset})); }
+  else { clone.x = (clone.x||0)+offset; clone.y = (clone.y||0)+offset; }
+  if(clone.type==='image' && el.img){ clone.img = el.img; } // نفس الصورة المحمّلة بالفعل (مفيش داعي نحمّلها تاني)
+  layoutEditor.elements.push(clone);
+  layoutEditor.selectedIndex = layoutEditor.elements.length-1;
+  redrawLayoutCanvas();
+  toast('✅ تم نسخ العنصر — النسخة الجديدة محدّدة دلوقتي');
+}
 function deleteSelectedLayoutElement(){
   if(layoutEditor.selectedIndex<0) { toast('حدّد عنصرًا أولًا (أداة تحديد)'); return; }
   const idx = layoutEditor.selectedIndex;
@@ -8803,8 +8866,16 @@ function attachLayoutCanvasEvents(canvas){
       redrawLayoutCanvas(); return;
     }
     if(tool==='text'){
-      const text = prompt('اكتب النص:','');
-      if(text){ pushLayoutHistory(); layoutEditor.elements.push({type:'text', x:pos.x, y:pos.y, text, color:layoutEditor.color}); redrawLayoutCanvas(); }
+      // 🎯 بدل prompt() اللي بيمنع الأسطر المتعددة (Enter بيقفل النافذة بدل سطر جديد)،
+      // بننشئ النص فورًا ونحدّده عشان تقدر تكتبه وتعدّله من اللوحة الجانبية (Textarea
+      // حقيقي بيدعم Enter لسطر جديد وتعديل الكتابة في أي وقت بعد كده)
+      pushLayoutHistory();
+      layoutEditor.elements.push({type:'text', x:pos.x, y:pos.y, text:'نص جديد', color:layoutEditor.color, fontSize:18, bold:false, rotation:0});
+      layoutEditor.selectedIndex = layoutEditor.elements.length-1;
+      layoutEditor.tool = 'select';
+      document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
+      const selBtn = document.getElementById('tool_select'); if(selBtn) selBtn.classList.add('primary');
+      redrawLayoutCanvas();
       return;
     }
     dragging=true; start=pos; mode='draw';
@@ -8899,7 +8970,7 @@ function attachLayoutCanvasEvents(canvas){
     if(['arrow','rect','circle'].includes(tool)){
       const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
       pushLayoutHistory();
-      if(tool==='arrow') layoutEditor.elements.push({type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color});
+      if(tool==='arrow') layoutEditor.elements.push({type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color,lineWidth:3});
       else if(tool==='rect') layoutEditor.elements.push({type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),rotation:0,color:layoutEditor.color,borderColor:layoutEditor.color,borderWidth:2,borderStyle:'solid',bgColor:'transparent',bgOpacity:1,text:'',fontSize:16,bold:false,italic:false,underline:false,textColor:'#ffffff',textAlign:'right',padding:6});
       else if(tool==='circle') layoutEditor.elements.push({type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color});
       redrawLayoutCanvas();
