@@ -1536,6 +1536,48 @@ async function syncFactoryCameraCounts(factoryId, deltaTotal, deltaDown){
    التحقق من كلمة المرور بيحصل فعليًا داخل قاعدة البيانات (verify_delete_password)
    عبر RPC، مش مجرد مقارنة نص في الواجهة — فمينفعش حد يتجاوزها من الـConsole.
    ============================================================================ */
+/* ============================================================================
+   🔑 تغيير كلمة مرور تسجيل الدخول — عبر Supabase Auth الحقيقي (مش كلمة مرور
+   الحذف المنفصلة تمامًا الموجودة في قسم "أمان الحذف")
+   ============================================================================ */
+function openChangeMyPasswordForm(){
+  openModal(`
+    <div class="modal-head"><h3>🔑 تغيير كلمة المرور</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11.5px;color:var(--muted-2)">هتغيّر كلمة مرور تسجيل الدخول بتاعتك (${currentSession.user.email}) — دي مختلفة تمامًا عن كلمة مرور الحذف.</p>
+    <div class="field"><label>كلمة المرور الحالية</label><input type="password" class="input" id="cmp_old"></div>
+    <div class="field"><label>كلمة المرور الجديدة</label><input type="password" class="input" id="cmp_new1"></div>
+    <div class="field"><label>تأكيد كلمة المرور الجديدة</label><input type="password" class="input" id="cmp_new2"></div>
+    <div id="cmp_error" style="color:var(--danger);font-size:12px;margin-top:4px"></div>
+    <p style="font-size:10px;color:var(--muted-2);margin-top:6px">💡 لازم تكون 6 خانات على الأقل (حد Supabase الأدنى).</p>
+    <button class="btn primary block" style="margin-top:10px" onclick="saveMyNewPassword()">💾 حفظ كلمة المرور الجديدة</button>
+  `);
+}
+async function saveMyNewPassword(){
+  const errHost = document.getElementById('cmp_error');
+  const oldPw = document.getElementById('cmp_old').value;
+  const p1 = document.getElementById('cmp_new1').value, p2 = document.getElementById('cmp_new2').value;
+  if(!oldPw){ errHost.textContent = 'أدخل كلمة المرور الحالية'; return; }
+  if(!p1 || p1.length<6){ errHost.textContent = 'كلمة المرور الجديدة لازم تكون 6 خانات على الأقل'; return; }
+  if(p1!==p2){ errHost.textContent = 'كلمة المرور الجديدة والتأكيد مش متطابقين'; return; }
+  const saveBtn = document.querySelector('button[onclick="saveMyNewPassword()"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جاري التحقق...'; }
+  try{
+    // 🎯 إعادة توثيق أولًا بكلمة المرور القديمة — نتأكد إنها صح فعليًا قبل السماح
+    // بالتغيير (حماية من إن حد يغيّر كلمة المرور من جهاز متسيب مفتوح من غير ما يعرفها)
+    const {error: reAuthErr} = await supa.auth.signInWithPassword({ email: currentSession.user.email, password: oldPw });
+    if(reAuthErr){ errHost.textContent = '❌ كلمة المرور الحالية غير صحيحة'; if(saveBtn){saveBtn.disabled=false; saveBtn.textContent='💾 حفظ كلمة المرور الجديدة';} return; }
+    if(saveBtn) saveBtn.textContent = 'جاري الحفظ...';
+    const {error} = await supa.auth.updateUser({ password: p1 });
+    if(error) throw error;
+    await logAudit('تغيير كلمة مرور الحساب', currentSession.user.email);
+    closeModal();
+    toast('✅ تم تغيير كلمة المرور بنجاح');
+  }catch(e){
+    console.error(e);
+    errHost.textContent = 'تعذّر تغيير كلمة المرور: '+(e.message||'');
+    if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 حفظ كلمة المرور الجديدة'; }
+  }
+}
 async function renderDeleteSecurityPanel(){
   const host = document.getElementById('deleteSecurityStatusHost');
   if(!host) return;
@@ -3409,6 +3451,7 @@ function renderSettingsView(){
     <div class="site-card">
       <div class="site-name" style="font-size:14px">معلومات الحساب</div>
       <p style="font-size:12.5px;color:var(--muted);margin-top:8px">الاسم: ${currentProfile.display_name}<br>الدور: ${isAdmin()?'👑 Admin':currentProfile.role}<br>البريد: ${currentSession.user.email}</p>
+      <button class="btn sm block" style="margin-top:8px" onclick="openChangeMyPasswordForm()">🔑 تغيير كلمة المرور</button>
     </div>
     <div class="btn-row">
       ${hasPerm('view_audit_log') ? `<button class="btn" onclick="goTo('audit')">🕵️ سجل التدقيق</button>` : ''}
