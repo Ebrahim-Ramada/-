@@ -5348,8 +5348,28 @@ async function renderCameraFormModal(factoryId, camId){
   try{ const {data} = await supa.from('factory_racks').select('*').eq('factory_id', factoryId).order('rack_name'); factoryRacks = data||[]; }catch(e){}
   try{ const {data} = await supa.from('camera_brands').select('*').eq('factory_id', factoryId).order('name'); brands = data||[]; }catch(e){}
   try{ const {data} = await supa.from('camera_resolutions').select('*').eq('factory_id', factoryId).order('name'); resolutions = data||[]; }catch(e){}
+  // 🎯 سجل الأعطال الكامل الخاص بهذه الكاميرا تحديدًا (لو كانت موجودة بالفعل)
+  let camFaultsHtml = '';
+  if(camId){
+    try{
+      const {data: camFaults} = await supa.from('faults').select('*').eq('camera_id', camId).order('reported_at',{ascending:false});
+      const list = camFaults||[];
+      const openCount = list.filter(f=> f.status!=='تم الإصلاح' && f.status!=='مغلق').length;
+      const closedCount = list.length - openCount;
+      camFaultsHtml = `<div class="site-card" style="margin-bottom:10px">
+        <div class="site-name" style="font-size:13px">📊 سجل الأعطال</div>
+        <p style="font-size:11.5px;color:var(--muted);margin:4px 0">إجمالي الأعطال: <b>${list.length}</b> — أعطال مفتوحة: <b style="color:var(--danger)">${openCount}</b> — أعطال مغلقة: <b style="color:var(--success)">${closedCount}</b></p>
+        ${list.length ? list.map(f=>`<div style="font-size:11px;border-top:1px solid var(--border-soft);padding-top:5px;margin-top:5px">
+          <span class="pill ${f.status==='تم الإصلاح'||f.status==='مغلق'?'ok':'bad'}">${f.status}</span>
+          <span style="color:var(--muted-2)"> — ${fmtDateAr((f.reported_at||'').slice(0,10))}${f.resolved_at?` → ${fmtDateAr(f.resolved_at.slice(0,10))}`:''}</span>
+          <div style="color:var(--muted)">${f.description||''}</div>
+        </div>`).join('') : `<p style="font-size:11px;color:var(--muted-2)">لا يوجد أعطال مسجّلة لهذه الكاميرا.</p>`}
+      </div>`;
+    }catch(e){ console.warn('تعذّر تحميل سجل أعطال الكاميرا', e); }
+  }
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا':'تعديل كاميرا'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${camFaultsHtml}
     <button class="btn sm block" style="margin-bottom:10px" onclick="openCameraTypesManager('${factoryId}', '${camId||''}')">📷 إدارة الشركات والدقات لهذا المصنع</button>
     <div class="field"><label>اسم/موقع الكاميرا</label><input class="input" id="cf_name" value="${d.camera_name}" placeholder="مثال: بوابة الملح"></div>
     <div class="row2">
@@ -5381,6 +5401,58 @@ async function renderCameraFormModal(factoryId, camId){
     <div class="field"><label>ملاحظات</label><textarea class="input" id="cf_notes">${d.notes||''}</textarea></div>
     <button class="btn primary block" onclick="saveCameraForm('${factoryId}','${isNew?'':camId}')">💾 حفظ</button>
   `);
+}
+/* ============================================================================
+   🔗 ربط تلقائي بين الكاميرات وقسم الأعطال — بدون تكرار، وبسجل تاريخي كامل
+   ============================================================================ */
+async function autoCreateFaultFromCamera(cam, factoryId){
+  try{
+    // 🎯 منع التكرار الصارم: نتأكد الأول إن مفيش عطل مفتوح بالفعل لنفس الكاميرا
+    // قبل ما نعمل أي حاجة — عشان فتح الصفحة تاني أو حفظ متكرر ميعملش عطل جديد
+    const {data: existingOpen} = await supa.from('faults').select('id')
+      .eq('camera_id', cam.id).eq('source_type','camera')
+      .not('status','in','("تم الإصلاح","مغلق")');
+    if(existingOpen && existingOpen.length){ return; } // فيه عطل مفتوح بالفعل — منعمل حاجة
+
+    const f = factoriesData.find(x=>x.id===factoryId);
+    const payload = {
+      factory_id: factoryId, device_type:'camera', device_name: cam.camera_name,
+      camera_id: cam.id, source_type:'camera',
+      fault_type: 'انقطاع كاميرا', severity: 'متوسطة', status:'مفتوح',
+      description: `تحويل تلقائي: الكاميرا "${cam.camera_name}" تحوّلت لحالة عطل`,
+      responsible: cam.responsible||'', location: cam.location||'',
+      camera_photo_url: cam.photo_url||'', reported_at: new Date().toISOString(),
+      created_by: currentProfile.id
+    };
+    let {error, data} = await supa.from('faults').insert(payload).select().single();
+    if(error && /column|schema cache/i.test(error.message||'')){
+      // fallback آمن لو عمود مش موجود لسه (قبل تشغيل schema_part41)
+      const safe = {factory_id:factoryId, device_type:'camera', device_name:cam.camera_name, camera_id:cam.id, fault_type:'انقطاع كاميرا', severity:'متوسطة', status:'مفتوح', description: payload.description, reported_at: payload.reported_at, created_by: currentProfile.id};
+      ({error, data} = await supa.from('faults').insert(safe).select().single());
+    }
+    if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); return; }
+    await logAudit('إنشاء عطل تلقائي من كاميرا', `${cam.camera_name} (${f?f.name:''})`);
+    toast(`🔴 تم إنشاء سجل عطل تلقائيًا للكاميرا "${cam.camera_name}"`);
+  }catch(e){ console.error('[AUTO FAULT] خطأ غير متوقع:', e); }
+}
+async function autoCloseFaultFromCamera(cam){
+  try{
+    // نلاقي كل الأعطال المفتوحة المرتبطة بنفس الكاميرا (المفروض واحد بس بفضل منع التكرار) ونقفلهم
+    const {data: openFaults} = await supa.from('faults').select('*')
+      .eq('camera_id', cam.id).eq('source_type','camera')
+      .not('status','in','("تم الإصلاح","مغلق")');
+    if(!openFaults || !openFaults.length) return;
+    for(const flt of openFaults){
+      const resolvedAt = new Date().toISOString();
+      const payload = { status:'تم الإصلاح', resolved_at: resolvedAt, resolved_by: currentProfile.id, resolved_by_name: currentProfile.display_name };
+      let {error} = await supa.from('faults').update(payload).eq('id', flt.id);
+      if(error && /column|schema cache/i.test(error.message||'')){
+        ({error} = await supa.from('faults').update({status:'تم الإصلاح'}).eq('id', flt.id));
+      }
+      if(!error) await logAudit('إغلاق عطل تلقائيًا (عودة الكاميرا للعمل)', cam.camera_name);
+    }
+    toast(`✅ تم إغلاق سجل العطل تلقائيًا للكاميرا "${cam.camera_name}"`);
+  }catch(e){ console.error('[AUTO FAULT CLOSE] خطأ غير متوقع:', e); }
 }
 async function saveCameraForm(factoryId, camId){
   const name = document.getElementById('cf_name').value.trim();
@@ -5426,6 +5498,10 @@ async function saveCameraForm(factoryId, camId){
       if(old){
         const wasDown = old.status!=='تعمل', isDown = newStatus!=='تعمل';
         if(wasDown!==isDown) await syncFactoryCameraCounts(factoryId, 0, isDown?1:-1);
+        // 🎯 الربط التلقائي مع قسم الأعطال — بناءً على التحوّل الفعلي في الحالة بس
+        const updatedCam = {...old, ...basePayload, ...extraFields, id:camId};
+        if(newStatus==='عطل' && old.status!=='عطل') await autoCreateFaultFromCamera(updatedCam, factoryId);
+        else if(newStatus==='تعمل' && old.status==='عطل') await autoCloseFaultFromCamera(updatedCam);
       }
     } else {
       // كاميرا جديدة: زد الإجمالي دايمًا، وزد المنقطعة كمان لو الحالة المبدئية مش "تعمل"
@@ -6009,6 +6085,12 @@ function openFaultForm(id){
   const d = f || {factory_id:factoriesData[0]?.id||'', device_type:'camera', device_name:'', fault_type:'', severity:'متوسطة', description:'', responsible:''};
   openModal(`
     <div class="modal-head"><h3>${isNew?'+ تسجيل عطل جديد':'تعديل بيانات العطل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    ${d.source_type==='camera' && d.camera_id ? `
+      <div class="site-card" style="border-color:var(--accent);margin-bottom:10px">
+        <p style="font-size:11.5px;margin:0"><b>📷 مصدر العطل: الكاميرات</b> — تم إنشاء هذا السجل تلقائيًا عند تحويل حالة الكاميرا لعطل.</p>
+        ${d.camera_photo_url? `<img src="${d.camera_photo_url}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${d.camera_photo_url}')">`:''}
+        <button class="btn sm block" style="margin-top:6px" onclick="closeModal(); goTo('cameras','${d.factory_id}')">📷 فتح الكاميرا</button>
+      </div>`:''}
     <div class="field"><label>المصنع</label><select class="input" id="ft_factory">${factoriesData.map(s=>`<option value="${s.id}" ${d.factory_id===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div>
     <div class="row2">
       <div class="field"><label>نوع الجهاز</label><select class="input" id="ft_devtype"><option value="camera" ${d.device_type==='camera'?'selected':''}>كاميرا</option><option value="screen" ${d.device_type==='screen'?'selected':''}>شاشة</option><option value="server" ${d.device_type==='server'?'selected':''}>سيرفر</option></select></div>
