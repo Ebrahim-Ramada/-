@@ -6219,13 +6219,38 @@ async function saveBulkFaultForm(factoryId){
 async function updateFaultStatus(id, newStatus){
   const f = faultsData.find(x=>x.id===id);
   if(!f) return;
+  const oldStatus = f.status; // 🎯 لازم نحفظها قبل أي تحديث — بعد التحديث ممكن ترجع القيمة الجديدة غلط لو الكائن متشارك
   const payload = {status:newStatus};
   if(newStatus==='جاري الإصلاح' && !f.response_started_at) payload.response_started_at = new Date().toISOString();
   if((newStatus==='تم الإصلاح' || newStatus==='مغلق') && !f.resolved_at) payload.resolved_at = new Date().toISOString();
   try{
     const {error} = await supa.from('faults').update(payload).eq('id', id);
     if(error) throw error;
-    await logAudit('تحديث حالة عطل', f.device_name, f.status, newStatus);
+    await logAudit('تحديث حالة عطل', f.device_name, oldStatus, newStatus);
+    // 🎯 المزامنة العكسية (Two-Way Sync): لو العطل ده ناتج من كاميرا (camera_id موجود)،
+    // تغيير حالة العطل هنا بيحدّث حالة الكاميرا الأصلية تلقائيًا — بدون تعديلها يدويًا
+    if(f.camera_id){
+      const wasOpen = oldStatus!=='تم الإصلاح' && oldStatus!=='مغلق';
+      const isNowClosed = newStatus==='تم الإصلاح' || newStatus==='مغلق';
+      const isNowReopened = !wasOpen && !isNowClosed; // اتقفل قبل كده وبيتفتح تاني
+      try{
+        const {data: cam} = await supa.from('cameras').select('*').eq('id', f.camera_id).maybeSingle();
+        if(cam){
+          if(isNowClosed && wasOpen && cam.status!=='تعمل'){
+            await supa.from('cameras').update({status:'تعمل', repair_date:new Date().toISOString(), updated_by:currentProfile.id}).eq('id', cam.id);
+            await syncFactoryCameraCounts(cam.factory_id, 0, -1);
+            await logAudit('تحديث حالة كاميرا تلقائيًا (إصلاح عطل)', cam.camera_name, 'عطل', 'تعمل');
+            toast(`📷 تم تحديث حالة الكاميرا "${cam.camera_name}" إلى تعمل تلقائيًا`);
+          } else if(isNowReopened && cam.status==='تعمل'){
+            await supa.from('cameras').update({status:'عطل', fault_date:new Date().toISOString(), updated_by:currentProfile.id}).eq('id', cam.id);
+            await syncFactoryCameraCounts(cam.factory_id, 0, 1);
+            await logAudit('تحديث حالة كاميرا تلقائيًا (إعادة فتح عطل)', cam.camera_name, 'تعمل', 'عطل');
+          }
+          const idx = camerasData.findIndex(x=>x.id===cam.id);
+          if(idx>-1) camerasData[idx] = {...camerasData[idx], status: isNowClosed?'تعمل':(isNowReopened?'عطل':camerasData[idx].status)};
+        }
+      }catch(e){ console.warn('[FAULT→CAMERA SYNC] تعذّر تحديث حالة الكاميرا:', e); }
+    }
     toast('✅ تم التحديث'); loadFaults();
   }catch(e){ console.error(e); toast('🚫 تعذّر التحديث: '+(e.message||'')); }
 }
