@@ -2658,6 +2658,7 @@ function renderUsersList(){
         <div>
           <div class="site-name" style="font-size:14px">${u.display_name}</div>
           <div class="site-meta">${u.role==='admin'?'👑 Admin (لا يمكن تغييره)':({manager:'مدير',supervisor:'مشرف',colleague:'زميل'}[u.role]||u.role)}</div>
+          <div style="font-size:11px;color:var(--muted-2);margin-top:2px;text-align:right" dir="ltr">📧 ${u.email||'—'}</div>
         </div>
         <span class="pill ${u.status==='active'?'ok':'bad'}">${u.status==='active'?'فعّال':'موقوف'}</span>
       </div>
