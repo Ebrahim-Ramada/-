@@ -143,6 +143,35 @@ tbody td:first-child{text-align:right;font-weight:700;}
 
 .bottomnav{position:fixed;bottom:0;right:0;left:0;z-index:50;background:rgba(19,27,46,.92);backdrop-filter:blur(10px);border-top:1px solid var(--border-soft);padding-bottom:var(--safe-bottom);}
 .bottomnav-inner{max-width:860px;margin:0 auto;display:flex;}
+/* 🎯 Sidebar احترافي — يظهر بس على الشاشات الكبيرة (لابتوب/كمبيوتر ≥1024px)، مع
+   الحفاظ الكامل على تجربة الموبايل الحالية (شريط علوي + تنقل سفلي) زي ما هي */
+.desktop-sidebar{display:none;}
+@media (min-width:1024px){
+  .desktop-sidebar{
+    display:flex; flex-direction:column; position:fixed; top:0; right:0; bottom:0; z-index:60;
+    width:250px; background:var(--bg-1,#0B1220); border-left:1px solid var(--border-soft);
+    transition:width .2s ease; overflow-y:auto; overflow-x:hidden;
+  }
+  .desktop-sidebar.collapsed{width:72px;}
+  .sidebar-brand{display:flex;align-items:center;gap:10px;padding:18px 16px;border-bottom:1px solid var(--border-soft);flex:none;white-space:nowrap}
+  .sidebar-brand-text{overflow:hidden;text-overflow:ellipsis}
+  .desktop-sidebar.collapsed .sidebar-brand-text{display:none}
+  .sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px}
+  .sidebar-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;color:var(--muted,#9fb0d0);font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s;text-decoration:none}
+  .sidebar-item:hover{background:rgba(56,217,201,.08);color:var(--text,#fff)}
+  .sidebar-item.active{background:rgba(56,217,201,.14);color:var(--accent,#38D9C9);font-weight:700}
+  .sidebar-item-icon{width:20px;text-align:center;flex:none;font-size:15px}
+  .desktop-sidebar.collapsed .sidebar-item-label{display:none}
+  .desktop-sidebar.collapsed .sidebar-item{justify-content:center;padding:10px}
+  .sidebar-collapse-btn{margin:8px;padding:8px;border-radius:8px;background:var(--bg-2,#111A2E);border:1px solid var(--border-soft);color:var(--muted-2);cursor:pointer;font-size:12px;flex:none}
+  /* إزاحة المحتوى الرئيسي والشريط العلوي عشان يفضلوا جنب الـSidebar مش تحته */
+  body.has-desktop-sidebar .topbar{margin-right:250px;transition:margin-right .2s ease}
+  body.has-desktop-sidebar.sidebar-collapsed .topbar{margin-right:72px}
+  body.has-desktop-sidebar .container{margin-right:250px;max-width:none;transition:margin-right .2s ease}
+  body.has-desktop-sidebar.sidebar-collapsed .container{margin-right:72px}
+  body.has-desktop-sidebar .bottomnav{display:none}
+  body.has-desktop-sidebar #viewsHost{padding-bottom:24px}
+}
 .navbtn{flex:1;background:none;border:none;color:var(--muted);padding:10px 2px 9px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;cursor:pointer;}
 .navbtn svg{width:20px;height:20px;}
 .navbtn.active{color:var(--accent);}
@@ -191,6 +220,14 @@ tbody td:first-child{text-align:right;font-weight:700;}
 <div id="authScreen" class="auth-screen" style="display:none"></div>
 
 <div id="appShell" style="display:none">
+  <nav class="desktop-sidebar" id="desktopSidebar">
+    <div class="sidebar-brand">
+      <span style="font-size:20px">🛰️</span>
+      <span class="sidebar-brand-text" style="font-weight:700;font-size:13px">غرفة المراقبة المركزية</span>
+    </div>
+    <div class="sidebar-nav" id="sidebarNavHost"></div>
+    <button class="sidebar-collapse-btn" onclick="toggleDesktopSidebar()" id="sidebarCollapseBtn">◀ طي القائمة</button>
+  </nav>
   <div class="topbar">
     <div class="topbar-inner">
       <button id="backBtn" class="topbtn" onclick="goBack()" title="رجوع" style="display:none">
@@ -819,6 +856,7 @@ function enterApp(){
   document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view===currentView));
   const reportNavBtn = document.querySelector('.navbtn[data-view="report"]');
   if(reportNavBtn) reportNavBtn.style.display = hasPerm('view_report') ? 'flex' : 'none';
+  renderDesktopSidebar();
   updateQuickLockBtn();
   try{ history.replaceState({rcView:currentView, rcCtx:currentViewCtx}, '', '#'+currentView); }catch(e){}
   if(isAppLocked()){ showLockScreen(); }
@@ -1350,6 +1388,38 @@ async function logAudit(action, details, oldValue, newValue){
 let currentView = 'dashboard';
 let currentViewCtx = null; // معرّف المصنع عند الدخول لشاشات الكاميرات/الشاشات
 document.querySelectorAll('.navbtn').forEach(btn=> btn.addEventListener('click', ()=> goTo(btn.dataset.view)));
+document.body.classList.add('has-desktop-sidebar'); // بيأثر فعليًا بس على الشاشات ≥1024px بسبب الـMedia Query
+if(localStorage.getItem('rc_sidebar_collapsed')==='1') document.body.classList.add('sidebar-collapsed');
+function toggleDesktopSidebar(){
+  const collapsed = document.body.classList.toggle('sidebar-collapsed');
+  document.getElementById('desktopSidebar').classList.toggle('collapsed', collapsed);
+  document.getElementById('sidebarCollapseBtn').textContent = collapsed ? '▶' : '◀ طي القائمة';
+  localStorage.setItem('rc_sidebar_collapsed', collapsed?'1':'0');
+}
+function renderDesktopSidebar(){
+  const host = document.getElementById('sidebarNavHost');
+  if(!host) return;
+  const items = [
+    {view:'dashboard', icon:'🏠', label:'الرئيسية'},
+    {view:'factories', icon:'🏭', label:'المصانع'},
+    {view:'faults', icon:'🔧', label:'الأعطال'},
+    {view:'lighting', icon:'💡', label:'الإضاءة'},
+    {view:'store', icon:'📦', label:'المخزن والاحتياجات'},
+    {view:'roomneeds', icon:'🛒', label:'احتياجات الغرفة'},
+    {view:'layouts', icon:'🗺️', label:'الخرائط'},
+    {view:'roomentryreports', icon:'🚪', label:'دخول غرفة التحكم'},
+    {view:'notes', icon:'📝', label:'الملاحظات'},
+    {view:'shifthandover', icon:'🔄', label:'تسليم واستلام الشيفت'},
+    {view:'reportscenter', icon:'📊', label:'مركز التقارير'},
+    {view:'archive', icon:'🗃️', label:'الأرشيف'},
+    {view:'auditlog', icon:'📋', label:'سجل العمليات', adminOnly:true},
+    {view:'settings', icon:'⚙️', label:'الإعدادات'},
+  ];
+  host.innerHTML = items.filter(it=> !it.adminOnly || isAdmin()).map(it=>
+    `<div class="sidebar-item ${currentView===it.view?'active':''}" data-view="${it.view}" onclick="goTo('${it.view}')">
+      <span class="sidebar-item-icon">${it.icon}</span><span class="sidebar-item-label">${it.label}</span>
+    </div>`).join('');
+}
 
 /* ============================================================
    نظام التنقل الكامل (Navigation History) — رجوع/عودة زي المتصفح
@@ -1374,6 +1444,7 @@ function goTo(view, ctx){
   __isNavigatingHistory = false;
   saveLastLocation();
   document.querySelectorAll('.navbtn').forEach(b=> b.classList.toggle('active', b.dataset.view===view));
+  document.querySelectorAll('.sidebar-item').forEach(b=> b.classList.toggle('active', b.dataset.view===view));
   updateBackBtn();
   renderCurrentView();
   window.scrollTo({top:0, behavior:'smooth'});
