@@ -11472,19 +11472,55 @@ async function exportSectionPicker(section, factoryId){
         raw:rows, chartImages, getImageUrl: i=> rows[i].attachment_url };
     },
     room_entry_reports: async()=>{
-      const {data} = await supa.from('control_room_entry_reports').select('*').order('report_date',{ascending:false});
+      // 🎯 إصلاح جذري: نجيب كل تقارير كل المصانع، ونبني تقرير سردي كامل لكل سجل
+      // على حدة (كل الأشخاص، كل الأحداث، نتيجة المراجعة الكاملة، كل الاعتمادات)
+      // — بدون أي LIMIT أو أول/آخر عنصر بس، وبدون دمج تقارير مختلفة مع بعض
+      const {data, error} = await supa.from('control_room_entry_reports').select('*').order('factory_id').order('report_date',{ascending:false});
+      if(error) throw error;
       const reports = data||[];
-      const rows = [];
-      reports.forEach(r=>{
-        const fname = factoriesData.find(x=>x.id===r.factory_id)?.name||'';
-        const people = (r.people&&r.people.length) ? r.people : [{name:'—',department:'—'}];
-        people.forEach(p=> rows.push({ report:r, person:p }));
+      if(!reports.length) return { title:'تقارير دخول غرفة التحكم المركزية — كل المصانع', headers:['لا توجد بيانات'], data:[[]], raw:[] };
+
+      // نبني قسم HTML سردي كامل مستقل لكل تقرير على حدة (بدون دمج تقارير مختلفة في سجل واحد)
+      const reportSections = reports.map(r=>{
+        const fname = factoriesData.find(x=>x.id===r.factory_id)?.name || 'غير محدد';
+        const people = Array.isArray(r.people) ? r.people : [];
+        const events = Array.isArray(r.events) ? r.events : [];
+        const results = Array.isArray(r.review_results) ? r.review_results : [];
+        return `
+          <div style="page-break-inside:avoid;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:18px">
+            <h2 style="margin-top:0">تقرير دخول غرفة التحكم المركزية</h2>
+            <p><b>المصنع:</b> ${fname}</p>
+            <p><b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الدخول:</b> ${r.visiting_entity||'—'}</p>
+            <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>الوقت إلى:</b> ${r.time_to||'—'}</p>
+            <h3>الأشخاص المسموح لهم بالدخول</h3>
+            ${people.length ? `<table><tr><th>م</th><th>الاسم</th><th>الإدارة/القسم</th></tr>${people.map((p,i)=>`<tr><td>${i+1}</td><td>${p.name||'—'}</td><td>${p.department||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد أشخاص مسجّلين لهذا التقرير.</p>`}
+            <h3>لمراجعة الحدث الآتي</h3>
+            ${events.length ? `<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${(e.description||'—').replace(/\n/g,'<br>')}</td><td>${e.event_datetime||'—'}</td><td>${e.location_or_camera||'—'}</td><td>${e.notes||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد أحداث مسجّلة لهذا التقرير.</p>`}
+            <h3>نتيجة المراجعة والفحص</h3>
+            ${results.length ? `<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((res,i)=>`<tr><td>${i+1}</td><td>${(res.result||'—').replace(/\n/g,'<br>')}</td><td>${(res.details||'—').replace(/\n/g,'<br>')}</td><td>${res.notes||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد نتائج مراجعة مسجّلة لهذا التقرير.</p>`}
+            <h3>الاعتمادات</h3>
+            <table><tr><th>مسؤول غرفة التحكم</th><th>المشرف</th><th>مدير الأمن</th></tr><tr><td>${r.room_officer_name||'—'}</td><td>${r.room_supervisor_name||'—'}</td><td>${r.security_manager_name||'—'}</td></tr></table>
+            ${r.notes? `<p><b>ملاحظات عامة:</b> ${r.notes.replace(/\n/g,'<br>')}</p>`:''}
+          </div>`;
       });
+      const customBodyHtml = `<h1 style="text-align:center">تقارير دخول غرفة التحكم المركزية — جميع المصانع (${reports.length} تقرير)</h1>` + reportSections.join('');
+
+      // جدول مسطّح احتياطي (لصيغ زي Excel/CSV اللي مبتدعمش التقرير السردي المخصّص) —
+      // بيشمل كل شخص في سطر مستقل مع رقم التقرير عشان تقدر تفرّق بين التقارير المختلفة
+      const flatRows = [];
+      reports.forEach((r,ridx)=>{
+        const fname = factoriesData.find(x=>x.id===r.factory_id)?.name || '';
+        const people = (r.people&&r.people.length) ? r.people : [{name:'—',department:'—'}];
+        people.forEach(p=> flatRows.push([`#${ridx+1}`, fname, fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', (r.events||[]).length, (r.review_results||[]).length, r.room_officer_name||'', r.room_supervisor_name||'', r.security_manager_name||'']));
+      });
+
       const byFactory = {}; reports.forEach(r=>{ const fn=factoriesData.find(x=>x.id===r.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
       const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي تقارير دخول الغرفة: ${reports.length}`)].filter(Boolean);
-      return { title:'تقارير دخول غرفة التحكم المركزية — كل المصانع', headers:['المصنع','التاريخ','الوقت من','إلى','جهة الزيارة','الاسم','الإدارة','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'],
-        data: rows.map(x=>{ const r=x.report, p=x.person; return [factoriesData.find(f=>f.id===r.factory_id)?.name||'', fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', r.room_officer_name||'', r.room_supervisor_name||'', r.security_manager_name||'']; }),
-        raw: rows.map(x=>x.report), chartImages };
+      return {
+        title:'تقارير دخول غرفة التحكم المركزية — كل المصانع',
+        headers:['رقم التقرير','المصنع','التاريخ','من','إلى','جهة الزيارة','اسم الشخص','الإدارة','عدد الأحداث','عدد نتائج المراجعة','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'],
+        data: flatRows, raw: reports, chartImages, customBodyHtml
+      };
     },
     cameras: async()=>{
       const {data} = await supa.from('cameras').select('*').order('camera_name');
@@ -11642,7 +11678,7 @@ async function exportSectionPicker(section, factoryId){
       if(cfg.getImageUrls){ const orig=cfg.getImageUrls; getImageUrls = (fi)=> orig(keepIdx[fi]); }
       if(cfg.getImageUrl){ const orig=cfg.getImageUrl; getImageUrl = (fi)=> orig(keepIdx[fi]); }
     }
-    const opts = { getImageUrl, getImageUrls, rawObjects: raw, chartImages: cfg.chartImages, chartData: cfg.chartData };
+    const opts = { getImageUrl, getImageUrls, rawObjects: raw, chartImages: cfg.chartImages, chartData: cfg.chartData, customBodyHtml: cfg.customBodyHtml };
     const preloadUrls = unifiedAllImageUrls(data, opts);
     if(preloadUrls.length) await urlsToDataUris(preloadUrls);
     openUnifiedExportPicker(title, cfg.headers, data, opts);
