@@ -5427,10 +5427,17 @@ async function autoCreateFaultFromCamera(cam, factoryId){
     let {error, data} = await supa.from('faults').insert(payload).select().single();
     if(error && /column|schema cache/i.test(error.message||'')){
       // fallback آمن لو عمود مش موجود لسه (قبل تشغيل schema_part41)
-      const safe = {factory_id:factoryId, device_type:'camera', device_name:cam.camera_name, camera_id:cam.id, fault_type:'انقطاع كاميرا', severity:'متوسطة', status:'مفتوح', description: payload.description, reported_at: payload.reported_at, created_by: currentProfile.id};
+      const safe = {factory_id:factoryId, device_type:'camera', device_name:cam.camera_name, camera_id:cam.id, fault_type:'انقطاع كاميرا', severity:'متوسطة', status:'مفتوح', description: payload.description, reported_at: payload.reported_at, created_by: currentProfile.id, camera_photo_url: cam.photo_url||''};
       ({error, data} = await supa.from('faults').insert(safe).select().single());
+      if(error && /column|schema cache/i.test(error.message||'')){
+        // مستوى احتياطي أخير: حتى لو عمود صورة الكاميرا نفسه مش موجود، العطل لازم يتسجّل
+        // (من غير صورة) بدل ما يفشل بالكامل — وبنطبع تحذير واضح في الـConsole للمطوّر
+        console.warn('[AUTO FAULT] عمود camera_photo_url (أو غيره) لسه مش موجود — شغّل schema_part41.sql عشان الصورة تتضمّن. العطل هيتسجّل من غيرها دلوقتي.');
+        const minimal = {factory_id:factoryId, device_type:'camera', device_name:cam.camera_name, camera_id:cam.id, fault_type:'انقطاع كاميرا', severity:'متوسطة', status:'مفتوح', description: payload.description, reported_at: payload.reported_at, created_by: currentProfile.id};
+        ({error, data} = await supa.from('faults').insert(minimal).select().single());
+      }
     }
-    if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); return; }
+    if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); toast('🚫 تعذّر إنشاء العطل التلقائي: '+(error.message||'')); return; }
     await logAudit('إنشاء عطل تلقائي من كاميرا', `${cam.camera_name} (${f?f.name:''})`);
     toast(`🔴 تم إنشاء سجل عطل تلقائيًا للكاميرا "${cam.camera_name}"`);
   }catch(e){ console.error('[AUTO FAULT] خطأ غير متوقع:', e); }
@@ -8964,7 +8971,7 @@ function openLayoutEditor(layoutId){
   try{ if(l.edit_state) restoredElements = typeof l.edit_state==='string' ? JSON.parse(l.edit_state) : l.edit_state; }catch(e){ restoredElements = []; }
   let savedView = {zoom:1, panX:0, panY:0};
   try{ const raw = localStorage.getItem('rc_manualmap_view_'+layoutId); if(raw) savedView = JSON.parse(raw); }catch(e){}
-  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'select', color:'#FF3B30', zoom:savedView.zoom||1, panX:savedView.panX||0, panY:savedView.panY||0, selectedIndex:-1, multiSelectMode:false, multiSelected:new Set(), hadElementsOnOpen: restoredElements.length>0 };
+  layoutEditor = { layoutId, factoryId:l.factory_id, elements:restoredElements, history:[], redoStack:[], tool:'select', color:'#FF3B30', zoom:savedView.zoom||1, panX:savedView.panX||0, panY:savedView.panY||0, mapRotation: l.map_rotation||0, selectedIndex:-1, multiSelectMode:false, multiSelected:new Set(), hadElementsOnOpen: restoredElements.length>0 };
   // الرسم دائمًا فوق الخلفية الأصلية الحقيقية (وليس فوق آخر صورة مُصدَّرة) — يمنع تراكم الجودة السيئة
   // ويضمن إن العناصر المستعادة تتوضع بشكل صحيح فوق نفس الخلفية اللي اتحفظت بالنسبة ليها
   const bgUrl = l.original_file_url || l.file_url;
@@ -8972,9 +8979,18 @@ function openLayoutEditor(layoutId){
     <div class="modal-head"><h3>✏️ تعديل الخريطة: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     ${restoredElements.length ? `<p style="font-size:10.5px;color:var(--success);margin-top:-6px">✅ تم استرجاع ${restoredElements.length} عنصر من آخر تعديل محفوظ.</p>`:''}
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="layoutToolbar">
-      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص']].map(([t,l2])=>
+      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص'],['maprotate','🔄 تدوير الخريطة']].map(([t,l2])=>
         `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
       <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
+    </div>
+    <div id="mapRotationToolsHost" style="display:${layoutEditor.tool==='maprotate'?'flex':'none'};flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px;padding:8px;background:var(--bg-2);border-radius:10px">
+      <span style="font-size:11px;color:var(--muted-2)">🔄 امسك واسحب على الخريطة لتدويرها بحرية، أو اختار زاوية جاهزة:</span>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        ${[0,45,90,180,270].map(a=>`<button class="btn sm" onclick="setLayoutMapRotation(${a})">${a}°</button>`).join('')}
+      </div>
+      <input type="range" min="0" max="360" value="${layoutEditor.mapRotation||0}" style="flex:1;min-width:100px" oninput="setLayoutMapRotation(parseFloat(this.value))">
+      <span id="layoutRotationLabel" style="font-size:11px;min-width:36px">${Math.round(layoutEditor.mapRotation||0)}°</span>
+      <button class="btn sm danger" onclick="resetLayoutMapRotation()">↺ إعادة ضبط الدوران</button>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">
       <button class="btn sm" onclick="addLayoutDeviceIcon('camera')">📷 كاميرا</button>
@@ -9555,6 +9571,8 @@ function setLayoutTool(t){
   layoutEditor.tool = t; layoutEditor.selectedIndex = -1;
   document.querySelectorAll('#layoutToolbar button').forEach(b=>b.classList.remove('primary'));
   const btn = document.getElementById('tool_'+t); if(btn) btn.classList.add('primary');
+  const rotHost = document.getElementById('mapRotationToolsHost');
+  if(rotHost) rotHost.style.display = t==='maprotate' ? 'flex' : 'none';
   redrawLayoutCanvas();
 }
 function layoutElementsForHistory(){
@@ -9701,10 +9719,51 @@ function deleteSelectedLayoutElement(){
 function applyLayoutEditorTransform(){
   const canvas = document.getElementById('layoutEditCanvas');
   if(!canvas) return;
-  canvas.style.transform = `translate(${layoutEditor.panX}px,${layoutEditor.panY}px) scale(${layoutEditor.zoom})`;
+  const rot = layoutEditor.mapRotation||0;
+  // 🎯 الدوران بيتطبّق كـView Transform بحت على عنصر الكانفاس نفسه — البيانات والعناصر
+  // جوّه الكانفاس متأثرتش خالص، وZoom/Pan بيفضلوا شغّالين طبيعي فوق الدوران ده
+  canvas.style.transform = `translate(${layoutEditor.panX}px,${layoutEditor.panY}px) rotate(${rot}deg) scale(${layoutEditor.zoom})`;
   const label = document.getElementById('layoutZoomLabel');
   if(label) label.textContent = Math.round(layoutEditor.zoom*100)+'%';
+  const rotLabel = document.getElementById('layoutRotationLabel');
+  if(rotLabel) rotLabel.textContent = Math.round(rot)+'°';
   try{ localStorage.setItem('rc_manualmap_view_'+layoutEditor.layoutId, JSON.stringify({zoom:layoutEditor.zoom, panX:layoutEditor.panX, panY:layoutEditor.panY})); }catch(e){}
+}
+function setLayoutMapRotation(deg){
+  layoutEditor.mapRotation = ((deg%360)+360)%360; // نخلي القيمة دايمًا بين 0 و360
+  applyLayoutEditorTransform();
+  saveLayoutMapRotation();
+}
+function resetLayoutMapRotation(){ setLayoutMapRotation(0); }
+async function saveLayoutMapRotation(){
+  // 🎯 حفظ زاوية الدوران في قاعدة البيانات (مش localStorage بس) عشان ترجع نفسها
+  // على أي جهاز تاني وبعد تسجيل الخروج والدخول تاني
+  try{
+    await supa.from('factory_layouts').update({map_rotation: layoutEditor.mapRotation}).eq('id', layoutEditor.layoutId);
+    const l = layoutsData.find(x=>x.id===layoutEditor.layoutId); if(l) l.map_rotation = layoutEditor.mapRotation;
+  }catch(e){ console.warn('تعذّر حفظ زاوية دوران الخريطة:', e); }
+}
+let __mapRotateDragging = false, __mapRotateStartAngle = 0, __mapRotateStartValue = 0;
+function startLayoutMapRotateDrag(clientX, clientY){
+  const canvas = document.getElementById('layoutEditCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left+rect.width/2, cy = rect.top+rect.height/2;
+  __mapRotateStartAngle = Math.atan2(clientY-cy, clientX-cx)*180/Math.PI;
+  __mapRotateStartValue = layoutEditor.mapRotation||0;
+  __mapRotateDragging = true;
+}
+function moveLayoutMapRotateDrag(clientX, clientY){
+  if(!__mapRotateDragging) return;
+  const canvas = document.getElementById('layoutEditCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left+rect.width/2, cy = rect.top+rect.height/2;
+  const currentAngle = Math.atan2(clientY-cy, clientX-cx)*180/Math.PI;
+  const delta = currentAngle - __mapRotateStartAngle;
+  layoutEditor.mapRotation = ((__mapRotateStartValue + delta)%360+360)%360;
+  applyLayoutEditorTransform();
+}
+function endLayoutMapRotateDrag(){
+  if(__mapRotateDragging){ __mapRotateDragging = false; saveLayoutMapRotation(); }
 }
 function zoomLayoutEditor(factor){
   layoutEditor.zoom = Math.max(0.02, layoutEditor.zoom*factor);
@@ -9769,6 +9828,12 @@ function attachLayoutCanvasEvents(canvas){
     evt.preventDefault();
     const pos = getCanvasPos(canvas, evt);
     const tool = layoutEditor.tool;
+    if(tool==='maprotate'){
+      const c = getClientXY(evt);
+      startLayoutMapRotateDrag(c.x, c.y);
+      dragging = true; mode = 'maprotate';
+      return;
+    }
     if(layoutEditor.multiSelectMode){
       // وضع التحديد المتعدد: دوسة على أي عنصر بتحدّده/تلغي تحديده — مفيش سحب أو تعديل تاني
       for(let i=layoutEditor.elements.length-1;i>=0;i--){
@@ -9830,6 +9895,11 @@ function attachLayoutCanvasEvents(canvas){
   function move(evt){
     if(!dragging) return;
     evt.preventDefault();
+    if(mode==='maprotate'){
+      const c = getClientXY(evt);
+      moveLayoutMapRotateDrag(c.x, c.y);
+      return;
+    }
     if(mode==='pan'){
       const c = getClientXY(evt);
       layoutEditor.panX = panStart.panX + (c.x - panStart.x);
@@ -9911,7 +9981,9 @@ function attachLayoutCanvasEvents(canvas){
   }
   function up(evt){
     if(!dragging) return;
+    const endedMode = mode;
     dragging=false; mode=null;
+    if(endedMode==='maprotate'){ endLayoutMapRotateDrag(); return; }
     const tool = layoutEditor.tool;
     if(['arrow','rect','circle'].includes(tool)){
       const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
