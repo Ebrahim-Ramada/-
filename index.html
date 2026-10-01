@@ -491,6 +491,141 @@ body.on-dashboard #alertsBox{display:none;}
   .fcard-uptime{flex-direction:column;gap:4px;}
 }
 
+
+/* ==================================================================
+   🗺️ خريطة المصانع التفاعلية (الرئيسية) — إضافة جديدة فقط، لا تغيّر أي شيء قائم
+   ================================================================== */
+.fmap-panel{padding:0;overflow:hidden;margin-bottom:16px;display:flex;flex-direction:column;}
+.fmap-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;flex-wrap:wrap;border-bottom:1px solid var(--border-soft);}
+.fmap-head h2{margin:0;font-size:16px;font-weight:800;display:flex;align-items:center;gap:8px;}
+.fmap-head h2 svg{color:var(--accent);}
+.fmap-tabs{display:flex;gap:6px;flex-wrap:wrap;}
+.fmap-tab{display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border-radius:10px;border:1px solid var(--border);background:var(--bg-2);color:var(--muted);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s;}
+.fmap-tab svg{width:15px;height:15px;}
+.fmap-tab:hover{border-color:var(--accent);color:var(--text);}
+.fmap-tab.on{background:color-mix(in srgb,var(--accent) 18%,var(--bg-2));border-color:var(--accent);color:var(--text);}
+.fmap-tab:focus-visible,.fmap-node:focus-visible,.fmap-ctrl button:focus-visible,.fmap-row:focus-visible{outline:2px solid #7FB2FF;outline-offset:2px;}
+
+.fmap-stage{position:relative;height:clamp(350px,58vw,600px);overflow:hidden;background:#07101E;container-type:size;touch-action:pan-y;user-select:none;-webkit-user-select:none;direction:ltr;
+  --u:clamp(.8px,.25cqw,1.25px);--k:1;}
+.fmap-stage.zoomed{touch-action:none;cursor:grab;}
+.fmap-stage.zoomed:active{cursor:grabbing;}
+.fmap-world{position:absolute;inset:0;transform-origin:0 0;will-change:transform;}
+.fmap-bg{position:absolute;inset:0;background:
+  radial-gradient(120% 90% at 50% 45%,rgba(20,44,78,.0),rgba(4,9,20,.30)),
+  var(--fmap-bg,linear-gradient(140deg,#0F2036,#0A1626 55%,#0C1B2B)) center/cover no-repeat;}
+.fmap-stage.net .fmap-bg{background:
+  radial-gradient(60% 55% at 50% 50%,rgba(47,123,255,.20),transparent 70%),
+  linear-gradient(rgba(90,140,230,.10) 1px,transparent 1px) 0 0/34px 34px,
+  linear-gradient(90deg,rgba(90,140,230,.10) 1px,transparent 1px) 0 0/34px 34px,
+  #06102A;}
+.fmap-links{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;}
+.fmap-links path{fill:none;vector-effect:non-scaling-stroke;stroke-linecap:round;}
+.fmap-links .glow{stroke-width:8;opacity:.22;}
+.fmap-links .core{stroke-width:2.2;opacity:.95;}
+.fmap-links .flow{stroke:#fff;stroke-width:2.2;opacity:.75;stroke-dasharray:3 26;animation:fmapFlow 1.6s linear infinite;}
+.fmap-links .ok{stroke:#3DE06B;} .fmap-links .warn{stroke:#F5B13C;} .fmap-links .bad{stroke:#FF5C5C;}
+.fmap-links .core.bad{stroke-dasharray:7 6;}
+@keyframes fmapFlow{to{stroke-dashoffset:-29;}}
+
+.fmap-node{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;background:none;border:0;padding:0;margin:0;cursor:pointer;color:#fff;font-family:inherit;-webkit-tap-highlight-color:transparent;direction:rtl;}
+.fmap-ico{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;width:calc(var(--u)*46*var(--k));height:calc(var(--u)*46*var(--k));border-radius:calc(var(--u)*13*var(--k));
+  background:linear-gradient(160deg,var(--c1),var(--c2));border:1.5px solid rgba(255,255,255,.35);box-shadow:0 0 0 3px color-mix(in srgb,var(--c1) 25%,transparent),0 8px 18px -6px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.35);margin-bottom:calc(var(--u)*-7*var(--k));transition:transform .18s ease;}
+.fmap-ico svg{width:60%;height:60%;}
+.fmap-lbl{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:1px;width:max-content;min-width:calc(var(--u)*92*var(--k));max-width:calc(var(--u)*128*var(--k));padding:calc(var(--u)*10*var(--k)) calc(var(--u)*9*var(--k)) calc(var(--u)*6*var(--k));border-radius:calc(var(--u)*10*var(--k));
+  background:rgba(7,14,34,.90);border:1px solid rgba(120,160,235,.28);box-shadow:0 8px 20px -8px rgba(0,0,0,.85);transition:border-color .18s,background .18s;}
+.fmap-lbl b{font-family:'Tajawal','IBM Plex Sans Arabic',sans-serif;font-weight:800;font-size:calc(var(--u)*14.5*var(--k));line-height:1.25;text-align:center;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fmap-lbl i{font-style:normal;display:inline-flex;align-items:center;gap:4px;font-size:calc(var(--u)*10.6*var(--k));font-weight:700;white-space:nowrap;line-height:1.35;}
+.fmap-lbl i svg{width:1.15em;height:1.15em;flex:none;}
+.fmap-lbl i.bad{color:#FF6B6B;} .fmap-lbl i.ok{color:#3FE0A0;} .fmap-lbl i.na{color:#8CA0C4;}
+.fmap-node:hover .fmap-ico,.fmap-node:focus-visible .fmap-ico{transform:translateY(-3px) scale(1.07);}
+.fmap-node:hover .fmap-lbl{border-color:rgba(160,200,255,.7);background:rgba(10,22,52,.96);}
+.fmap-node:active .fmap-ico{transform:scale(.95);}
+.fmap-node.alert .fmap-ico::after{content:"";position:absolute;inset:-5px;border-radius:inherit;border:2px solid #FF5C5C;opacity:0;animation:fmapPulse 2.2s ease-out infinite;}
+@keyframes fmapPulse{0%{opacity:.75;transform:scale(.9);}100%{opacity:0;transform:scale(1.35);}}
+.fmap-node.hub{z-index:3;--c1:#22B5C4;--c2:#0E6C80;}
+.fmap-node.hub .fmap-ico{width:calc(var(--u)*56*var(--k));height:calc(var(--u)*56*var(--k));}
+.fmap-node.hub .fmap-lbl{border-color:rgba(61,224,107,.65);box-shadow:0 0 0 1px rgba(61,224,107,.2),0 0 18px -4px rgba(61,224,107,.6);max-width:none;padding-inline:calc(var(--u)*13*var(--k));}
+.fmap-node.hub .fmap-lbl b{font-size:calc(var(--u)*15.5*var(--k));}
+.fmap-node.c0{--c1:#3E8BFF;--c2:#1650C9;} .fmap-node.c1{--c1:#3CC465;--c2:#157A38;} .fmap-node.c2{--c1:#F7A04A;--c2:#C8611A;}
+.fmap-node.c3{--c1:#2CC4BB;--c2:#0F7873;} .fmap-node.c4{--c1:#9B6BFF;--c2:#5B2FC4;} .fmap-node.c5{--c1:#F0689A;--c2:#B02A60;}
+
+/* وضع ترتيب المصانع (سحب وإفلات) */
+.fmap-stage.editing{touch-action:none;box-shadow:inset 0 0 0 2px #F5B13C;}
+.fmap-stage.editing .fmap-node{cursor:grab;touch-action:none;}
+.fmap-stage.editing .fmap-node .fmap-lbl{border-style:dashed;border-color:rgba(245,177,60,.75);}
+.fmap-stage.editing .fmap-node.alert .fmap-ico::after{animation:none;opacity:0;}
+.fmap-node.sel{z-index:6;}
+.fmap-node.sel .fmap-lbl{border-style:solid!important;border-color:#F5B13C!important;box-shadow:0 0 0 2px rgba(245,177,60,.45),0 8px 20px -8px #000;}
+.fmap-node.dragging{z-index:7;cursor:grabbing!important;}
+.fmap-node.dragging .fmap-ico{transform:scale(1.12);}
+.fmap-tab.edit{background:color-mix(in srgb,#F5B13C 22%,var(--bg-2));border-color:#F5B13C;}
+.fmap-edit{padding:10px 14px;border-top:1px solid var(--border-soft);background:color-mix(in srgb,#F5B13C 7%,transparent);display:flex;flex-direction:column;gap:10px;}
+.fe-msg{font-size:12px;color:var(--muted);line-height:1.7;}
+.fe-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 14px;padding:10px;border-radius:12px;background:var(--bg-2);border:1px solid var(--border-soft);}
+.fe-name{font-family:'Tajawal';font-size:14px;flex:1 1 100%;color:var(--amber);}
+.fe-f{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);flex:1 1 150px;min-width:0;}
+.fe-f select{width:100%;}
+.fe-step{display:flex;align-items:center;gap:8px;}
+.fe-step .btn{width:38px;height:36px;justify-content:center;font-size:18px;padding:0;}
+.fe-step b{min-width:48px;text-align:center;font-family:'Tajawal';font-size:14px;color:var(--text);}
+.fe-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.fmap-ctrl{position:absolute;top:10px;left:10px;z-index:5;display:flex;flex-direction:column;border-radius:10px;overflow:hidden;border:1px solid rgba(120,160,235,.3);background:rgba(7,14,34,.88);box-shadow:0 8px 20px -10px #000;}
+.fmap-ctrl button{width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:none;border:0;border-bottom:1px solid rgba(120,160,235,.2);color:#E9EEFB;cursor:pointer;padding:0;}
+.fmap-ctrl button:last-child{border-bottom:0;}
+.fmap-ctrl button:hover{background:rgba(47,123,255,.3);}
+.fmap-ctrl svg{width:17px;height:17px;}
+.fmap-compass{position:absolute;right:10px;bottom:10px;z-index:4;width:46px;height:46px;border-radius:50%;background:rgba(7,14,34,.85);border:1px solid rgba(160,200,255,.5);display:flex;align-items:center;justify-content:center;color:#CFE0FF;pointer-events:none;}
+.fmap-compass svg{width:30px;height:30px;}
+.fmap-hint{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:4;padding:5px 11px;border-radius:999px;background:rgba(7,14,34,.82);border:1px solid rgba(120,160,235,.25);color:#B9C8E8;font-size:11px;white-space:nowrap;pointer-events:none;direction:rtl;}
+.fmap-empty{position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;color:#B9C8E8;font-size:13px;text-align:center;padding:20px;direction:rtl;}
+
+.fmap-foot{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:10px 14px;border-top:1px solid var(--border-soft);font-size:11.5px;color:var(--muted);}
+.fmap-foot b{color:var(--text);font-family:'Tajawal';font-size:13px;}
+.fmap-foot span{display:inline-flex;align-items:center;gap:6px;}
+.fmap-foot i{width:8px;height:8px;border-radius:50%;display:inline-block;}
+
+.fmap-list{padding:10px 12px;display:flex;flex-direction:column;gap:8px;max-height:600px;overflow-y:auto;}
+.fmap-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--bg-2);border:1px solid var(--border-soft);cursor:pointer;color:var(--text);font-family:inherit;text-align:right;width:100%;}
+.fmap-row:hover{border-color:var(--accent);}
+.fmap-row .ri{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:#fff;background:linear-gradient(160deg,var(--c1),var(--c2));}
+.fmap-row.c0{--c1:#3E8BFF;--c2:#1650C9;} .fmap-row.c1{--c1:#3CC465;--c2:#157A38;} .fmap-row.c2{--c1:#F7A04A;--c2:#C8611A;}
+.fmap-row.c3{--c1:#2CC4BB;--c2:#0F7873;} .fmap-row.c4{--c1:#9B6BFF;--c2:#5B2FC4;} .fmap-row.c5{--c1:#F0689A;--c2:#B02A60;}
+.fmap-row .rn{font-family:'Tajawal';font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fmap-row .rm{font-size:11px;color:var(--muted);margin-top:2px;}
+.fmap-row .rb{height:5px;border-radius:3px;background:var(--border-soft);margin-top:6px;overflow:hidden;}
+.fmap-row .rb > div{height:100%;border-radius:3px;}
+
+.fmap-panel.fmap-full{position:fixed;inset:0;z-index:90;margin:0;border-radius:0;border:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--panel);}
+.fmap-panel.fmap-full .fmap-stage{flex:1;height:auto;min-height:0;touch-action:none;--u:clamp(.8px,.25cqmin,1.5px);}
+.fmap-panel.fmap-full .fmap-list{flex:1;max-height:none;}
+body:has(.fmap-full){overflow:hidden;}
+
+.fmd-top{display:flex;align-items:center;gap:16px;margin-bottom:6px;}
+.fmd-list{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;font-size:12.5px;}
+.fmd-list > div{display:flex;align-items:center;gap:8px;color:var(--muted);}
+.fmd-list i{width:9px;height:9px;border-radius:50%;flex:none;}
+.fmd-list b{margin-right:auto;color:var(--text);font-family:'Tajawal';font-size:14px;}
+.fmd-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+.fmd-sec{font-size:12px;color:var(--accent);margin:14px 0 4px;font-weight:800;}
+.fmd-txt{font-size:12px;color:var(--muted);line-height:1.8;margin:0;white-space:pre-wrap;word-break:break-word;}
+.fmd-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:14px;}
+.fmd-actions .btn{justify-content:center;}
+.fmd-actions .btn.primary{grid-column:1/-1;padding:11px;}
+
+@media(max-width:520px){
+  .fmap-head{padding:10px 12px;}
+  .fmap-tab{padding:6px 9px;font-size:11.5px;}
+  .fmap-compass{width:38px;height:38px;} .fmap-compass svg{width:24px;height:24px;}
+  .fmap-ctrl{flex-direction:row;top:8px;left:8px;}
+  .fmap-ctrl button{width:32px;height:32px;border-bottom:0;border-right:1px solid rgba(120,160,235,.2);}
+  .fmap-ctrl button:last-child{border-right:0;}
+}
+@media (prefers-reduced-motion:reduce){
+  .fmap-links .flow{animation:none;display:none;}
+  .fmap-node.alert .fmap-ico::after{animation:none;opacity:.6;}
+  .fmap-ico{transition:none;}
+}
 </style>
 </head>
 <body>
@@ -2314,6 +2449,469 @@ function updateTopbarUser(){
   updateTopbarClock();
 }
 
+/* ============================================================
+   🗺️ خريطة المصانع التفاعلية (نظرة عامة على المصانع)
+   - إضافة جديدة فقط: بتقرأ من نفس factoriesData / computeFactory بدون أي تعديل على البيانات
+   - الخلفية بتترسم مرة واحدة على Canvas بدقة عالية وتتحفظ في الذاكرة (سريعة وخفيفة ومن غير إنترنت)
+   - كل مصنع زر حقيقي: الضغط عليه يفتح تفاصيله
+   ============================================================ */
+let fmapMode = (function(){ try{ return localStorage.getItem('rc_fmap_mode') || 'map'; }catch(e){ return 'map'; } })();
+let fmapFull = false;
+let fmapMoved = false;
+const fmapT = { s:1, x:0, y:0 };
+/* ترتيب الخريطة المحفوظ على الجهاز: أماكن المصانع + كل خط متصل بإيه + سُمك كل خط */
+let fmapEdit = false, fmapSel = null;
+let fmapCfg = (function(){
+  try{ const c=JSON.parse(localStorage.getItem('rc_fmap_cfg')||'{}'); return {pos:c.pos||{}, link:c.link||{}, w:c.w||{}}; }
+  catch(e){ return {pos:{}, link:{}, w:{}}; }
+})();
+function fmapSaveCfg(){ try{ localStorage.setItem('rc_fmap_cfg', JSON.stringify(fmapCfg)); }catch(e){} }
+function fmapPosOf(id, fallback){ const p=fmapCfg.pos[id]; return (p && isFinite(p.x) && isFinite(p.y)) ? p : fallback; }
+/* الخط بتاع المصنع رايح فين: اختيار المستخدم، وإلا الافتراضي (المخزن المركزي ← جهينة، والباقي ← الشبكة المركزية) */
+function fmapLinkTarget(s, sites){
+  const c=fmapCfg.link[s.id];
+  if(c==='none' || c==='__hub') return c;
+  if(c && String(c)!==String(s.id) && sites.some(x=>String(x.id)===String(c))) return c;
+  if(/المخزن\s*المركز/.test(s.name||'')){ const j=sites.find(x=>/جهين/.test(x.name||'') && x.id!==s.id); if(j) return j.id; }
+  return '__hub';
+}
+function fmapLinkW(id){ const w=Number(fmapCfg.w[id]); return isFinite(w)&&w>0 ? w : 1; }
+function fmapPositions(sites){
+  const pts=fmapLayout(sites.length), map={ __hub: fmapPosOf('__hub',{x:50,y:50}) };
+  sites.forEach((s,i)=>{ map[s.id]=fmapPosOf(s.id, pts[i]); });
+  return map;
+}
+function fmapLinksSvg(sites, pos){
+  return sites.map((s,i)=>{
+    const tg=fmapLinkTarget(s,sites); if(tg==='none') return '';
+    const a=pos[tg]||pos.__hub, p=pos[s.id], w=fmapLinkW(s.id);
+    const mx=(a.x+p.x)/2, my=(a.y+p.y)/2, dx=p.x-a.x, dy=p.y-a.y, bend=(i%2?1:-1)*0.16;
+    const d=`M${a.x.toFixed(2)} ${a.y.toFixed(2)} Q${(mx-dy*bend).toFixed(2)} ${(my+dx*bend).toFixed(2)} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+    const sel = fmapEdit && String(fmapSel)===String(s.id);
+    return `<path class="glow ok" d="${d}" style="stroke-width:${(8*w).toFixed(1)}${sel?';opacity:.5':''}"/><path class="core ok" d="${d}" style="stroke-width:${(2.2*w).toFixed(1)}"/><path class="flow" d="${d}" style="stroke-width:${(2.2*w).toFixed(1)};animation-delay:-${(i*0.37).toFixed(2)}s"/>`;
+  }).join('');
+}
+const FMAP_ICONS = {
+  full:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  exit:'<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  minus:'<path d="M5 12h14"/>',
+  reset:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  hub:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h3M13 7h3M8 11h3M13 11h3M10 21v-5h4v5"/>',
+  net:'<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5V12M12 12l-5.5 5M12 12l5.5 5"/>',
+  compass:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>'
+};
+function fmapIc(name, size){
+  const s = size||18;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FMAP_ICONS[name]||IC[name]||''}</svg>`;
+}
+
+/* خلفية القمر الصناعي: مرسومة برمجيًا (Vector → Canvas) مرة واحدة فقط ثم تُستخدم كصورة جاهزة */
+function fmapBuildBg(){
+  if(window.__fmapBgStarted) return;
+  window.__fmapBgStarted = true;
+  try{
+    const W=1800, H=1200, c=document.createElement('canvas'); c.width=W; c.height=H;
+    const g=c.getContext('2d');
+    let seed=20260426; const R=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
+    const pick=a=>a[Math.floor(R()*a.length)];
+    g.fillStyle='#1B2838'; g.fillRect(0,0,W,H);
+    g.save(); g.translate(W/2,H/2); g.rotate(-0.46);
+    const D=Math.hypot(W,H)/2+80;
+    g.fillStyle='#2A3A4D'; g.fillRect(-D,-D,2*D,2*D);            // شبكة الشوارع (الفراغات بين البلوكات)
+    const roofs=['#5C6876','#737D88','#4B596A','#8C8676','#687480','#566170','#9A958A','#40505F'];
+    let y=-D;
+    while(y<D){
+      const bh=44+R()*78; let x=-D-R()*60;
+      while(x<D){
+        const bw=54+R()*120;
+        const zone=0.62+0.38*(0.5+0.5*Math.sin(x/330+1.3)*Math.cos(y/290-0.7));   // تباين الأحياء
+        const t=R();
+        if(t<0.07){                                     // حديقة / مساحة خضراء
+          g.fillStyle='#14291F'; g.fillRect(x,y,bw,bh);
+          g.fillStyle='rgba(34,70,48,.9)';
+          for(let i=0;i<bw*bh/160;i++){ g.beginPath(); g.arc(x+R()*bw,y+R()*bh,1.5+R()*3,0,6.3); g.fill(); }
+        } else if(t<0.20){                              // منطقة صناعية: أسطح كبيرة
+          g.fillStyle='#1A2431'; g.fillRect(x,y,bw,bh);
+          const n=1+Math.floor(R()*3); const w=(bw-8)/n;
+          for(let i=0;i<n;i++){
+            const rx=x+4+i*w, rw=w-5, rh=bh-10-R()*bh*0.3;
+            g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(rx+3,y+8,rw,rh);
+            g.globalAlpha=zone; g.fillStyle=pick(roofs); g.fillRect(rx,y+5,rw,rh);
+            g.fillStyle='rgba(255,255,255,.10)';
+            for(let k=1;k<rw/9;k++) g.fillRect(rx+k*9,y+5,1,rh);
+            g.globalAlpha=1;
+          }
+        } else if(t<0.27){                              // أرض فضاء
+          g.fillStyle=pick(['#33312B','#2C2F2E','#3A372D']); g.fillRect(x,y,bw,bh);
+        } else {                                        // مباني سكنية صغيرة
+          g.fillStyle='#141D29'; g.fillRect(x,y,bw,bh);
+          const cw=10+R()*8, ch=10+R()*8;
+          for(let by=y+3; by<y+bh-ch*0.6; by+=ch+2){
+            for(let bx=x+3; bx<x+bw-cw*0.6; bx+=cw+2){
+              if(R()<0.14) continue;
+              const w2=Math.min(cw*(0.7+R()*0.3), x+bw-bx-2), h2=Math.min(ch*(0.7+R()*0.3), y+bh-by-2);
+              g.fillStyle='rgba(0,0,0,.5)'; g.fillRect(bx+1.6,by+1.6,w2,h2);
+              g.globalAlpha=zone*(0.6+R()*0.4); g.fillStyle=pick(roofs); g.fillRect(bx,by,w2,h2);
+              g.globalAlpha=1;
+            }
+          }
+        }
+        x+=bw+(R()<0.12?18:7);
+      }
+      y+=bh+(R()<0.16?20:7);
+    }
+    g.restore();
+    // طرق رئيسية ومحاور قطرية
+    const road=(pts,w)=>{
+      g.lineCap='round'; g.lineJoin='round';
+      [['rgba(10,16,26,.9)',w+4],['#4A5A6E',w],['rgba(190,205,225,.35)',1.2]].forEach(([col,lw])=>{
+        g.strokeStyle=col; g.lineWidth=lw; g.beginPath(); g.moveTo(pts[0],pts[1]);
+        if(pts.length===6) g.quadraticCurveTo(pts[2],pts[3],pts[4],pts[5]); else g.lineTo(pts[2],pts[3]);
+        g.stroke();
+      });
+    };
+    road([-40,H*0.30,W+40,H*0.16],13); road([W*0.18,-40,W*0.62,H+40],12); road([-40,H*0.86,W*0.5,H*0.60,W+40,H*0.72],14);
+    road([W*0.80,-40,W*0.70,H*0.5,W*0.92,H+40],10); road([-40,H*0.55,W*0.42,H+40],9); road([W*0.45,-40,W+40,H*0.48],9);
+    // درجة لون ليلية + تعتيم الأطراف + حُبيبات خفيفة
+    g.fillStyle='rgba(6,22,52,.30)'; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation='overlay'; g.fillStyle='rgba(40,110,150,.35)'; g.fillRect(0,0,W,H); g.globalCompositeOperation='source-over';
+    const v=g.createRadialGradient(W/2,H/2,H*0.25,W/2,H/2,W*0.72);
+    v.addColorStop(0,'rgba(3,8,20,0)'); v.addColorStop(1,'rgba(3,8,20,.62)');
+    g.fillStyle=v; g.fillRect(0,0,W,H);
+    for(let i=0;i<9000;i++){ g.fillStyle=R()<0.5?'rgba(255,255,255,.035)':'rgba(0,0,0,.08)'; g.fillRect(R()*W,R()*H,1.5,1.5); }
+    c.toBlob(b=>{
+      if(!b) return;
+      const url=URL.createObjectURL(b);
+      document.documentElement.style.setProperty('--fmap-bg',`url("${url}")`);
+    },'image/jpeg',0.9);
+  }catch(e){ console.warn('fmap bg', e); }
+}
+
+/* توزيع المصانع حول الشبكة المركزية (بالنِّسَب المئوية — يتكيّف مع أي عدد وأي مقاس شاشة) */
+function fmapLayout(n){
+  const pts=[]; if(!n) return pts;
+  const two = n>10;
+  for(let i=0;i<n;i++){
+    const a = (-90 + i*360/n) * Math.PI/180;
+    const f = two && i%2===1 ? 0.62 : 1;
+    pts.push({ x: 50 + 35.5*f*Math.cos(a), y: 50 + (two?36:33.5)*f*Math.sin(a) });
+  }
+  return pts;
+}
+function fmapScale(n){ return n<=6?1 : n<=8?0.9 : n<=10?0.8 : n<=14?0.7 : 0.6; }
+function fmapHealth(s){ return !s.camerasTotal ? 'na' : (s.camUptime>=95?'ok':(s.camUptime>=90?'warn':'bad')); }
+function fmapIsStore(s){ return /مخزن|مستودع/.test(s.name||''); }
+function fmapTransformCss(){ return `transform:translate(${fmapT.x}px,${fmapT.y}px) scale(${fmapT.s})`; }
+
+function renderFactoryMapPanel(sitesArg){
+  const sites = sitesArg || factoriesData.map(computeFactory);
+  if(!document.getElementById('fmapPanel')){ fmapFull=false; fmapEdit=false; fmapSel=null; fmapT.s=1; fmapT.x=0; fmapT.y=0; }
+  fmapBuildBg();
+  const t = computeTotals(sites);
+  const n = sites.length, pts = fmapLayout(n), k = fmapScale(n);
+  const downSites = sites.filter(s=>s.camerasDown>0).length;
+  const tab = (m, icon, label)=>`<button class="fmap-tab ${fmapMode===m?'on':''}" onclick="fmapSetMode('${m}')" aria-pressed="${fmapMode===m}">${fmapIc(icon,15)}${label}</button>`;
+  const isNet = fmapMode==='net';
+
+  let body;
+  if(fmapMode==='status'){
+    const ranked=[...sites].map((s,i)=>({s,i})).sort((a,b)=>b.s.camerasDown-a.s.camerasDown);
+    body = `<div class="fmap-list">${n===0 ? `<div class="empty">لا توجد مصانع مسجّلة بعد.</div>` : ranked.map(({s,i})=>{
+      const h=fmapHealth(s);
+      return `<button class="fmap-row c${i%6}" onclick="openFmapFactory('${s.id}')">
+        <span class="ri">${fmapIc(fmapIsStore(s)?'box':'factory',20)}</span>
+        <span style="min-width:0"><div class="rn">${dbEsc(s.name)}</div>
+          <div class="rm">📷 ${s.camerasUp}/${s.camerasTotal} كاميرا · 🖥️ ${s.screensUp}/${s.screens} شاشة</div>
+          <div class="rb"><div style="width:${Math.min(100,s.camUptime)}%;background:${dbHealthColor(s.camUptime)}"></div></div></span>
+        <span class="pill ${h==='ok'?'ok':(h==='warn'?'warn':(h==='bad'?'bad':''))}">${!s.camerasTotal?'لا بيانات':(s.camerasDown===0?'سليم':s.camerasDown+' متوقفة')}</span>
+      </button>`; }).join('')}</div>`;
+  } else {
+    const pos = fmapPositions(sites);
+    const links = fmapLinksSvg(sites, pos);
+    const nodes = sites.map((s,i)=>{
+      const p=pos[s.id], down=s.camerasDown>0;
+      const line = isNet
+        ? `<i class="${!s.camerasTotal?'na':(down?'bad':'ok')}">${s.camerasTotal? `${s.camUptime.toFixed(1).replace('.0','')}% · ${s.camerasUp}/${s.camerasTotal}` : 'لا توجد بيانات'}</i>`
+        : (!s.camerasTotal ? `<i class="na">لا توجد بيانات</i>`
+          : `<i class="${down?'bad':'ok'}">${fmapIc(down?'alert':'check',12)}${s.camerasDown} كاميرا متوقفة</i>`);
+      return `<button class="fmap-node c${i%6} ${down?'alert':''} ${fmapEdit&&String(fmapSel)===String(s.id)?'sel':''}" data-fid="${s.id}" style="left:${p.x.toFixed(2)}%;top:${p.y.toFixed(2)}%" onclick="fmapNodeClick('${s.id}')" aria-label="${dbEsc(s.name)} — ${s.camerasDown} كاميرا متوقفة. اضغط لعرض التفاصيل">
+        <span class="fmap-ico">${fmapIc(fmapIsStore(s)?'box':'factory',24)}</span>
+        <span class="fmap-lbl"><b>${dbEsc(s.name)}</b>${line}</span>
+      </button>`;
+    }).join('');
+    body = `
+    <div class="fmap-stage ${isNet?'net':''} ${fmapT.s>1.01?'zoomed':''} ${fmapEdit?'editing':''}" id="fmapStage" style="--k:${k}">
+      <div class="fmap-world" id="fmapWorld" style="${fmapTransformCss()}">
+        <div class="fmap-bg"></div>
+        <svg class="fmap-links" id="fmapLinks" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${links}</svg>
+        ${nodes}
+        <button class="fmap-node hub" data-fid="__hub" style="left:${pos.__hub.x.toFixed(2)}%;top:${pos.__hub.y.toFixed(2)}%" onclick="fmapNodeClick('__hub')" aria-label="الشبكة المركزية — اضغط لعرض الملخص">
+          <span class="fmap-ico">${fmapIc('hub',28)}</span>
+          <span class="fmap-lbl"><b>الشبكة المركزية</b>${isNet?`<i class="ok">${n} مواقع متصلة</i>`:''}</span>
+        </button>
+      </div>
+      ${n===0 ? `<div class="fmap-empty">لا توجد مصانع مسجّلة بعد — ${isAdmin()?'أضف مصنعًا من شاشة المصانع ليظهر على الخريطة':'انتظر إضافة البيانات من الأدمن'}</div>` : ''}
+      <div class="fmap-ctrl">
+        <button onclick="fmapToggleFull()" title="${fmapFull?'خروج من ملء الشاشة':'ملء الشاشة'}" aria-label="${fmapFull?'خروج من ملء الشاشة':'ملء الشاشة'}">${fmapIc(fmapFull?'exit':'full')}</button>
+        <button onclick="fmapZoomBtn(1.35)" title="تكبير" aria-label="تكبير">${fmapIc('plus')}</button>
+        <button onclick="fmapZoomBtn(1/1.35)" title="تصغير" aria-label="تصغير">${fmapIc('minus')}</button>
+        <button onclick="fmapReset()" title="إعادة الضبط" aria-label="إعادة ضبط الخريطة">${fmapIc('reset')}</button>
+      </div>
+      <div class="fmap-compass" aria-hidden="true">${fmapIc('compass',30)}</div>
+    </div>${fmapEdit ? fmapEditBarHtml(sites) : ''}`;
+  }
+
+  return `
+  <section class="panel fmap-panel ${fmapFull?'fmap-full':''}" id="fmapPanel">
+    <div class="fmap-head">
+      <h2>${ic('map')} نظرة عامة على المصانع</h2>
+      <div class="fmap-tabs">
+        ${tab('map','map','الخريطة')}
+        ${tab('net','net','شبكة الاتصال')}
+        ${tab('status','factory','حالة المصانع')}
+        ${fmapMode!=='status' && n>0 ? `<button class="fmap-tab ${fmapEdit?'on edit':''}" onclick="fmapToggleEdit()" aria-pressed="${fmapEdit}">${ic(fmapEdit?'check':'edit',15)}${fmapEdit?'تم':'ترتيب المصانع'}</button>` : ''}
+        ${fmapFull && fmapMode==='status' ? `<button class="fmap-tab" onclick="fmapToggleFull()">${fmapIc('exit',15)}إغلاق</button>` : ''}
+      </div>
+    </div>
+    ${body}
+    <div class="fmap-foot">
+      <span><b>${n}</b> مواقع</span>
+      <span><i style="background:var(--success)"></i><b>${t.camerasUp}</b> كاميرا تعمل</span>
+      <span><i style="background:var(--danger)"></i><b>${t.camerasDown}</b> متوقفة${downSites?` في ${downSites} ${downSites===1?'موقع':'مواقع'}`:''}</span>
+      <span><i style="background:var(--accent)"></i><b>${t.screensUp}/${t.screens}</b> شاشة تعمل</span>
+      ${n>0 && fmapMode!=='status' && !fmapEdit ? `<span style="margin-inline-start:auto;color:var(--muted-2)">اضغط على أي مصنع لعرض تفاصيله</span>` : ''}
+    </div>
+  </section>`;
+}
+function fmapEditBarHtml(sites){
+  const s = sites.find(x=>String(x.id)===String(fmapSel));
+  let row = `<div class="fe-msg">✋ اسحب أي مصنع (أو الشبكة المركزية) إلى مكانه — الحفظ تلقائي. اضغط على مصنع لتعديل الخط الأخضر الخاص به.</div>`;
+  if(s){
+    const tg = fmapLinkTarget(s, sites), w = fmapLinkW(s.id);
+    row += `<div class="fe-row">
+      <b class="fe-name">${dbEsc(s.name)}</b>
+      <label class="fe-f"><span>الخط يتصل بـ</span>
+        <select class="input" onchange="fmapSetLink('${s.id}', this.value)">
+          <option value="__hub" ${tg==='__hub'?'selected':''}>الشبكة المركزية</option>
+          ${sites.filter(x=>x.id!==s.id).map(x=>`<option value="${x.id}" ${String(tg)===String(x.id)?'selected':''}>${dbEsc(x.name)}</option>`).join('')}
+          <option value="none" ${tg==='none'?'selected':''}>بدون خط</option>
+        </select></label>
+      <div class="fe-f"><span>حجم الخط</span>
+        <div class="fe-step">
+          <button class="btn sm" onclick="fmapSetW('${s.id}',-1)" aria-label="تصغير الخط" ${w<=0.4?'disabled':''}>−</button>
+          <b>${Math.round(w*100)}%</b>
+          <button class="btn sm" onclick="fmapSetW('${s.id}',1)" aria-label="تكبير الخط" ${w>=4?'disabled':''}>+</button>
+        </div></div>
+    </div>`;
+  }
+  return `<div class="fmap-edit">${row}
+    <div class="fe-actions">
+      <button class="btn primary sm" onclick="fmapToggleEdit()">✔ تم — حفظ الترتيب</button>
+      <button class="btn sm danger" onclick="fmapResetCfg()">إرجاع الترتيب الافتراضي</button>
+    </div></div>`;
+}
+function fmapToggleEdit(){
+  fmapEdit=!fmapEdit; fmapSel=null;
+  if(fmapEdit){ fmapT.s=1; fmapT.x=0; fmapT.y=0; }
+  else { fmapSaveCfg(); if(typeof toast==='function') toast('✅ تم حفظ ترتيب الخريطة'); }
+  fmapRefresh();
+}
+function fmapSetLink(id, v){ fmapCfg.link[id]=v; fmapSaveCfg(); fmapRefresh(); }
+function fmapSetW(id, dir){
+  const steps=[0.4,0.6,0.8,1,1.3,1.6,2,2.5,3,4];
+  let i=steps.reduce((b,v,k)=> Math.abs(v-fmapLinkW(id))<Math.abs(steps[b]-fmapLinkW(id))?k:b, 0);
+  i=Math.max(0,Math.min(steps.length-1,i+dir));
+  fmapCfg.w[id]=steps[i]; fmapSaveCfg(); fmapRefresh();
+}
+function fmapResetCfg(){
+  if(!confirm('إرجاع أماكن المصانع والخطوط للوضع الافتراضي؟')) return;
+  fmapCfg={pos:{},link:{},w:{}}; fmapSel=null; fmapSaveCfg(); fmapRefresh();
+}
+function fmapRedrawLinks(){
+  const svg=document.getElementById('fmapLinks'); if(!svg) return;
+  const sites=factoriesData.map(computeFactory);
+  svg.innerHTML = fmapLinksSvg(sites, fmapPositions(sites));
+}
+function fmapRefresh(){
+  const el=document.getElementById('fmapPanel');
+  if(el) el.outerHTML = renderFactoryMapPanel();
+}
+function fmapSetMode(m){
+  fmapMode=m; try{ localStorage.setItem('rc_fmap_mode', m); }catch(e){}
+  fmapRefresh();
+}
+function fmapToggleFull(){
+  fmapFull=!fmapFull; fmapT.s=1; fmapT.x=0; fmapT.y=0;
+  fmapRefresh();
+}
+function fmapApply(){
+  const st=document.getElementById('fmapStage'), w=document.getElementById('fmapWorld');
+  if(!st||!w) return;
+  const W=st.clientWidth, H=st.clientHeight;
+  fmapT.s=Math.max(1,Math.min(4,fmapT.s));
+  fmapT.x=Math.min(0,Math.max(W*(1-fmapT.s),fmapT.x));
+  fmapT.y=Math.min(0,Math.max(H*(1-fmapT.s),fmapT.y));
+  w.style.transform=`translate(${fmapT.x}px,${fmapT.y}px) scale(${fmapT.s})`;
+  st.classList.toggle('zoomed', fmapT.s>1.01);
+}
+function fmapZoomAt(newS, px, py){
+  newS=Math.max(1,Math.min(4,newS));
+  const r=newS/fmapT.s;
+  fmapT.x = px - (px - fmapT.x)*r;
+  fmapT.y = py - (py - fmapT.y)*r;
+  fmapT.s = newS;
+  fmapApply();
+}
+function fmapZoomBtn(f){
+  const st=document.getElementById('fmapStage'); if(!st) return;
+  const w=document.getElementById('fmapWorld');
+  if(w){ w.style.transition='transform .2s ease'; setTimeout(()=>{ w.style.transition=''; },220); }
+  fmapZoomAt(fmapT.s*f, st.clientWidth/2, st.clientHeight/2);
+}
+function fmapReset(){
+  const w=document.getElementById('fmapWorld');
+  if(w){ w.style.transition='transform .2s ease'; setTimeout(()=>{ w.style.transition=''; },220); }
+  fmapT.s=1; fmapT.x=0; fmapT.y=0; fmapApply();
+}
+function fmapNodeClick(id){
+  if(fmapMoved){ fmapMoved=false; return; }   // كان سحب/تحريك للخريطة مش ضغطة
+  if(fmapEdit){ fmapSel = (id==='__hub' || String(fmapSel)===String(id)) ? null : id; fmapRefresh(); return; }
+  if(id==='__hub') openFmapHub(); else openFmapFactory(id);
+}
+/* سحب + تكبير بإصبعين + عجلة الماوس — مستمعين مرة واحدة على مستوى الصفحة (الخريطة بتتعاد رسمها مع كل تحديث) */
+(function(){
+  const P=new Map(); let drag=null, pinch=null, nd=null;
+  const stageOf=e=> e.target && e.target.closest ? e.target.closest('.fmap-stage') : null;
+  const rel=(st,x,y)=>{ const r=st.getBoundingClientRect(); return {x:x-r.left, y:y-r.top}; };
+  document.addEventListener('pointerdown', e=>{
+    const st=stageOf(e); if(!st || e.target.closest('.fmap-ctrl')) return;
+    P.set(e.pointerId,{x:e.clientX,y:e.clientY}); fmapMoved=false;
+    const nodeEl = fmapEdit ? e.target.closest('.fmap-node') : null;
+    if(nodeEl && P.size===1){
+      nd={ pid:e.pointerId, el:nodeEl, id:nodeEl.dataset.fid, x:e.clientX, y:e.clientY, ox:parseFloat(nodeEl.style.left)||50, oy:parseFloat(nodeEl.style.top)||50 };
+      drag=null; return;
+    }
+    if(P.size===1) drag={x:e.clientX,y:e.clientY,ox:fmapT.x,oy:fmapT.y};
+    else if(P.size===2){ const [a,b]=[...P.values()]; pinch={d:Math.hypot(a.x-b.x,a.y-b.y)||1, s:fmapT.s}; drag=null; }
+  });
+  document.addEventListener('pointermove', e=>{
+    if(!P.has(e.pointerId)) return;
+    P.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    const st=document.getElementById('fmapStage'); if(!st) return;
+    if(nd && nd.pid===e.pointerId){
+      const dx=e.clientX-nd.x, dy=e.clientY-nd.y;
+      if(!fmapMoved && Math.abs(dx)+Math.abs(dy)<=6) return;
+      fmapMoved=true;
+      const W=st.clientWidth*fmapT.s, H=st.clientHeight*fmapT.s;
+      const x=Math.max(5,Math.min(95, nd.ox+dx/W*100)), y=Math.max(6,Math.min(94, nd.oy+dy/H*100));
+      nd.el.style.left=x.toFixed(2)+'%'; nd.el.style.top=y.toFixed(2)+'%'; nd.el.classList.add('dragging');
+      fmapCfg.pos[nd.id]={x:+x.toFixed(2), y:+y.toFixed(2)};
+      fmapRedrawLinks();
+      return;
+    }
+    if(P.size>=2 && pinch){
+      const [a,b]=[...P.values()]; const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+      const c=rel(st,(a.x+b.x)/2,(a.y+b.y)/2);
+      fmapMoved=true; fmapZoomAt(pinch.s*d/pinch.d, c.x, c.y);
+    } else if(drag && fmapT.s>1.01){
+      const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+      if(Math.abs(dx)+Math.abs(dy)>6) fmapMoved=true;
+      if(fmapMoved){ fmapT.x=drag.ox+dx; fmapT.y=drag.oy+dy; fmapApply(); }
+    }
+  });
+  const end=e=>{
+    if(!P.has(e.pointerId)) return;
+    P.delete(e.pointerId);
+    if(nd && nd.pid===e.pointerId){ nd.el.classList.remove('dragging'); if(fmapMoved) fmapSaveCfg(); nd=null; }
+    if(P.size<2) pinch=null;
+    if(P.size===1){ const a=[...P.values()][0]; drag={x:a.x,y:a.y,ox:fmapT.x,oy:fmapT.y}; }
+    if(P.size===0) drag=null;
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+  document.addEventListener('wheel', e=>{
+    const st=stageOf(e); if(!st) return;
+    if(!(e.ctrlKey || fmapFull || fmapT.s>1.01)) return;   // في الوضع العادي العجلة بتفضل لتمرير الصفحة
+    e.preventDefault();
+    const p=rel(st,e.clientX,e.clientY);
+    fmapZoomAt(fmapT.s*(e.deltaY<0?1.15:1/1.15), p.x, p.y);
+  }, {passive:false});
+  document.addEventListener('keydown', e=>{
+    if(e.key==='Escape' && fmapEdit){ fmapToggleEdit(); return; }
+    if(e.key==='Escape' && fmapFull && !document.getElementById('modalBg').classList.contains('open')) fmapToggleFull();
+  });
+  window.addEventListener('resize', ()=>{ if(document.getElementById('fmapStage')) fmapApply(); });
+})();
+
+/* نافذة تفاصيل المصنع — تُفتح عند الضغط على أي مصنع في الخريطة */
+function fmapGo(view, id){ closeModal(); fmapFull=false; goTo(view, id); }
+function openFmapFactory(id){
+  const f = factoriesData.find(x=>String(x.id)===String(id));
+  if(!f) return;
+  const s = computeFactory(f), h = fmapHealth(s);
+  const types = (typeof factoryTypeCountsMap!=='undefined' && factoryTypeCountsMap[s.id]) || [];
+  const downList = Array.isArray(s.down_list) ? s.down_list.filter(Boolean) : [];
+  const statusPill = !s.camerasTotal ? `<span class="pill">لا توجد بيانات</span>`
+    : `<span class="pill ${h}">${s.camerasDown===0?'سليم — كل الكاميرات تعمل':s.camerasDown+' كاميرا متوقفة'}</span>`;
+  openModal(`
+    <div class="modal-head"><h3>🏭 ${dbEsc(s.name)}</h3><button class="x-close" onclick="closeModal()" aria-label="إغلاق">✕</button></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-6px 0 12px">${statusPill}${s.is_central_hub?`<span class="pill" style="color:var(--accent)">🏛️ مقر الغرفة المركزية</span>`:''}</div>
+    <div class="fmd-top">
+      ${dbDonut(s.camUptime, 112, 13, dbHealthColor(s.camUptime), fmtPct2(s.camUptime).replace('.00',''), 'تشغيل الكاميرات')}
+      <div class="fmd-list">
+        <div><i style="background:var(--success)"></i><span>كاميرات تعمل</span><b>${s.camerasUp}</b></div>
+        <div><i style="background:var(--danger)"></i><span>كاميرات متوقفة</span><b>${s.camerasDown}</b></div>
+        <div><i style="background:var(--success)"></i><span>شاشات تعمل</span><b>${s.screensUp}</b></div>
+        <div><i style="background:var(--danger)"></i><span>شاشات متوقفة</span><b>${s.screensDown}</b></div>
+      </div>
+    </div>
+    <div class="mini-grid">
+      <div class="mini"><div class="n">${s.camerasTotal}</div><div class="t">إجمالي الكاميرات</div></div>
+      <div class="mini"><div class="n">${s.screens}</div><div class="t">إجمالي الشاشات</div></div>
+      <div class="mini"><div class="n" style="color:${dbHealthColor(s.camUptime)}">${fmtPct2(s.camUptime).replace('.00','')}</div><div class="t">تشغيل الكاميرات</div></div>
+      <div class="mini"><div class="n" style="color:${dbHealthColor(s.scrUptime)}">${fmtPct2(s.scrUptime).replace('.00','')}</div><div class="t">تشغيل الشاشات</div></div>
+    </div>
+    ${types.length ? `<div class="fmd-sec">📷 أنواع الكاميرات</div><div class="fmd-chips">${types.map(c=>`<span class="pill">${c.count} ${dbEsc([c.brand,c.resolution,c.camera_type].filter(Boolean).join(' ')||'كاميرا')}</span>`).join('')}</div>` : ''}
+    ${downList.length ? `<div class="fmd-sec">⚠️ أماكن الكاميرات المتوقفة</div><div class="fmd-chips">${downList.map(x=>`<span class="pill bad">${dbEsc(x)}</span>`).join('')}</div>` : ''}
+    ${s.root_causes ? `<div class="fmd-sec">الأسباب</div><p class="fmd-txt">${dbEsc(s.root_causes)}</p>` : ''}
+    ${s.actions ? `<div class="fmd-sec">الإجراءات</div><p class="fmd-txt">${dbEsc(s.actions)}</p>` : ''}
+    ${s.updated_at ? `<p style="font-size:10.5px;color:var(--muted-2);margin:12px 0 0">آخر تحديث: ${new Date(s.updated_at).toLocaleString('en-GB',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</p>` : ''}
+    <div class="fmd-actions">
+      <button class="btn primary" onclick="fmapGo('cameras','${s.id}')">${ic('factory',16)} فتح المصنع</button>
+      ${s.camerasDown>0 ? `<button class="btn" onclick="closeModal(); fmapFull=false; fmapRefresh(); openDownCamerasDetail('${s.id}')">${ic('cameraOff',16)} الكاميرات المتوقفة</button>` : ''}
+      <button class="btn" onclick="fmapGo('screens','${s.id}')">${ic('monitor',16)} الشاشات</button>
+      <button class="btn" onclick="fmapGo('network','${s.id}')">${ic('server',16)} الشبكة</button>
+      ${isAdmin() ? `<button class="btn" onclick="fmapFull=false; fmapRefresh(); openFactoryForm('${s.id}')">${ic('edit',16)} تعديل البيانات</button>` : ''}
+    </div>
+  `);
+}
+function openFmapHub(){
+  const sites = factoriesData.map(computeFactory), t = computeTotals(sites);
+  const bad = sites.filter(s=>s.camerasDown>0).sort((a,b)=>b.camerasDown-a.camerasDown);
+  openModal(`
+    <div class="modal-head"><h3>🏛️ الشبكة المركزية</h3><button class="x-close" onclick="closeModal()" aria-label="إغلاق">✕</button></div>
+    <div class="fmd-top">
+      ${dbDonut(t.camUptime, 112, 13, dbHealthColor(t.camUptime), fmtPct2(t.camUptime).replace('.00',''), 'تشغيل الكاميرات')}
+      <div class="fmd-list">
+        <div><i style="background:var(--accent)"></i><span>المواقع المتصلة</span><b>${t.count}</b></div>
+        <div><i style="background:var(--success)"></i><span>كاميرات تعمل</span><b>${t.camerasUp}</b></div>
+        <div><i style="background:var(--danger)"></i><span>كاميرات متوقفة</span><b>${t.camerasDown}</b></div>
+        <div><i style="background:var(--success)"></i><span>شاشات تعمل</span><b>${t.screensUp}/${t.screens}</b></div>
+      </div>
+    </div>
+    ${bad.length ? `<div class="fmd-sec">مواقع بها كاميرات متوقفة</div>${bad.map(s=>`
+      <div class="site-card" style="padding:9px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer" onclick="openFmapFactory('${s.id}')">
+        <b style="font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${dbEsc(s.name)}</b><span class="pill bad" style="flex:none">${s.camerasDown} متوقفة من ${s.camerasTotal}</span>
+      </div>`).join('')}` : `<div class="alist-empty" style="margin-top:8px">${ic('check')} كل الكاميرات في جميع المواقع تعمل</div>`}
+    <div class="fmd-actions">
+      <button class="btn primary" onclick="fmapFull=false; fmapRefresh(); openCentralNetworkMap()">🌐 الخريطة المركزية للشبكة (الأبراج والروابط)</button>
+      <button class="btn" onclick="fmapGo('factories')">${ic('factory',16)} كل المصانع</button>
+      <button class="btn" onclick="fmapGo('compare')">${ic('compare',16)} مقارنة المصانع</button>
+    </div>
+  `);
+}
+
 function renderDashboard(){
   const sites = factoriesData.map(computeFactory);
   const t = computeTotals(sites);
@@ -2353,6 +2951,8 @@ function renderDashboard(){
       </div>
       <div class="db-status ${sysState}"><span class="led"></span>${sysText}<span style="color:var(--accent);display:flex">${ic('pulse',18)}</span></div>
     </div>
+
+    ${renderFactoryMapPanel(sites)}
 
     <div class="db-kpis">
       ${kpi('k-blue','camera','إجمالي الكاميرات', t.camerasTotal, `تعمل ${fmtPct2(t.camUptime)}`, "goTo('factories')")}
