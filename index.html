@@ -10104,23 +10104,28 @@ async function initLayoutCanvas(imgUrl){
     layoutEditor.elements = migration.elements;
     layoutEditor.canvasRefW = canvas.width; layoutEditor.canvasRefH = canvas.height;
     if(migration.migrated){ toast('🔧 تم تثبيت أماكن العناصر تلقائيًا بعد تحديث نظام الخريطة — كل حاجة في مكانها الصح'); }
-    // 🎯 إرجاع تلقائي للخرائط اللي اتأثرت بمشكلة الحذف القديمة: لو العناصر متزاحة لبرّه حدود الخريطة
-    // بنفس معامل التكبير الغلط، بنرجّعها لمكانها الطبيعي ونحفظ التصحيح نهائيًا
+    // معامل الفرق بين مقاس الخريطة الحالي والمقاس القديم (1000px) — أساس كل تصحيحات الأماكن
     layoutEditor.fixFactor = canvas.width / Math.min(1000, img.width);
-    (function autoRepairShiftedElements(){
+    layoutEditor.autoFixNote = '';
+    // 🎯 إرجاع العناصر "المصغّرة المتجمّعة في ركن الخريطة" لمكانها الطبيعي:
+    // دي بصمة واضحة لعناصر اتقسمت أماكنها وأحجامها بالغلط على معامل المقاس. التصحيح هنا لكل عنصر
+    // على حدة (مش للكل مرة واحدة)، وفي الذاكرة فقط — مفيش حاجة بتتحفظ غير لما المستخدم يضغط "حفظ التعديل"
+    (function autoRestoreShrunkElements(){
       const k = layoutEditor.fixFactor;
-      if(!(k > 1.05) || !layoutEditor.elements.length) return;
-      const out = els=>{ const x = layoutElementsExtent(els); return x.maxX > canvas.width*1.03 || x.maxY > canvas.height*1.03; };
-      if(!out(layoutEditor.elements)) return;
-      let fixed = layoutEditor.elements, steps = 0;
-      while(out(fixed) && steps < 4){ fixed = rescaleLayoutElements(fixed, 1/k, 1/k); steps++; }
-      if(out(fixed)) return;   // مش نفس نمط المشكلة — مانلمسش حاجة
-      layoutEditor.elements = fixed;
-      toast('🔧 تم إرجاع عناصر الخريطة لمكانها الطبيعي');
-      const clean = layoutElementsForHistory();
-      persistLayoutEditState(layoutEditor.layoutId, clean, canvas.width, canvas.height).then(r=>{
-        if(lRec && r.ok){ lRec.edit_state = clean; if(r.refSaved){ lRec.edit_state_ref_w = canvas.width; lRec.edit_state_ref_h = canvas.height; } }
-      });
+      if(!(k >= 1.5)) return;
+      let rounds = 0, total = 0;
+      while(rounds < 3){
+        const idx = shrunkLayoutElementIndexes(layoutEditor.elements, canvas.width, canvas.height, k);
+        if(!idx) break;
+        if(rounds===0) pushLayoutHistory();
+        const set = new Set(idx);
+        layoutEditor.elements = layoutEditor.elements.map((el,n)=> set.has(n) ? rescaleLayoutElements([el], k, k)[0] : el);
+        total = Math.max(total, idx.length); rounds++;
+      }
+      if(rounds){
+        layoutEditor.autoFixNote = `تم إرجاع ${total} عنصر لمكانه وحجمه الطبيعي تلقائيًا. راجع الخريطة، ولو مظبوطة اضغط «حفظ التعديل» لتثبيتها.`;
+        toast('🔧 تم إرجاع عناصر الخريطة لمكانها الطبيعي — اضغط «حفظ التعديل» لتثبيتها');
+      }
     })();
     renderLayoutFixTools();
     // تحميل صور الأجهزة المستعادة (كاميرا/راك/سويتش) من عناصر تم استرجاعها من حفظ سابق
@@ -10157,33 +10162,89 @@ async function initLayoutCanvas(imgUrl){
   img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل');
   img.src = safeSrc;
 }
-/* 🧭 أداة يدوية احتياطية: لو خريطة عناصرها لسه متزاحة (ومفيش طريقة أكيدة لاكتشافها تلقائيًا)،
-   الأدمن يقدر يرجّعها بضغطة — والتراجع (Undo) شغال عليها، ومفيش حاجة بتتحفظ غير لما يضغط "حفظ التعديل" */
+/* نقطة ارتكاز كل عنصر (لمعرفة مكانه بالنسبة لحدود الخريطة) */
+function layoutElementAnchor(e){
+  if(!e) return null;
+  if(e.type==='arrow') return { x:Math.max(e.x1,e.x2), y:Math.max(e.y1,e.y2) };
+  if(e.type==='circle') return { x:e.cx, y:e.cy };
+  if(e.type==='pen'){ const p=e.points||[]; if(!p.length) return null; return { x:Math.max(...p.map(q=>q.x)), y:Math.max(...p.map(q=>q.y)) }; }
+  if(e.type==='image' || e.type==='rect') return { x:e.x+(e.w||0)/2, y:e.y+(e.h||0)/2 };
+  return { x:e.x, y:e.y };
+}
+/* بيرجّع فهارس العناصر "المصغّرة" لو البصمة واضحة: أغلب العناصر متجمّعة في ركن الخريطة (أعلى اليسار
+   بنسبة 1/k) وأيقوناتها أصغر من الحجم الطبيعي. غير كده بيرجّع null ومابيلمسش حاجة. */
+function shrunkLayoutElementIndexes(elements, W, H, k){
+  if(!(k >= 1.5) || !elements || elements.length < 3) return null;
+  const bx = W/k*1.03, by = H/k*1.03, idx = [];
+  elements.forEach((e,i)=>{ const a = layoutElementAnchor(e); if(a && a.x <= bx && a.y <= by) idx.push(i); });
+  if(idx.length < 3 || idx.length < elements.length*0.7) return null;
+  const ws = idx.map(i=>elements[i]).filter(e=>e.type==='image' && e.w>0).map(e=>e.w).sort((a,b)=>a-b);
+  if(ws.length && ws[Math.floor(ws.length/2)] > 90*0.75) return null;   // الأيقونات بحجمها الطبيعي → مش مصغّرة
+  return idx;
+}
+function outOfBoundsLayoutElementIndexes(){
+  const c = document.getElementById('layoutEditCanvas'); if(!c) return [];
+  const idx = [];
+  layoutEditor.elements.forEach((e,i)=>{ const a = layoutElementAnchor(e); if(a && (a.x > c.width*1.01 || a.y > c.height*1.01)) idx.push(i); });
+  return idx;
+}
+/* 🧭 أدوات تصحيح أماكن العناصر: كل ضغطة ليها تراجع (Undo)، ومفيش حاجة بتتحفظ غير بعد "حفظ التعديل" */
 function renderLayoutFixTools(){
   const vp = document.getElementById('layoutEditViewport');
   if(!vp || !isAdmin() || layoutEditor.isPdf) return;
   const k = layoutEditor.fixFactor;
   let host = document.getElementById('layoutFixToolsHost');
   if(!(k > 1.05) || !layoutEditor.elements.length){ if(host) host.remove(); return; }
-  if(!host){ host = document.createElement('details'); host.id = 'layoutFixToolsHost'; host.style.cssText = 'margin-bottom:8px;font-size:11.5px'; vp.parentNode.insertBefore(host, vp); }
-  host.innerHTML = `<summary style="cursor:pointer;color:var(--muted)">🧭 العناصر مش في مكانها؟ (تصحيح الأماكن)</summary>
-    <div class="site-card" style="padding:8px;margin-top:6px">
-      <p style="font-size:11px;color:var(--muted-2);margin:0 0 6px">لو كل العناصر متحركة من مكانها بعد حذف سابق، اضغط "إرجاع" وشوف النتيجة على الخريطة. لو مظبوطة اضغط "حفظ التعديل"، ولو لأ اضغط "عكس".</p>
-      <div class="btn-row">
-        <button class="btn sm primary" onclick="applyLayoutFixScale(false)">↩️ إرجاع العناصر لمكانها</button>
-        <button class="btn sm" onclick="applyLayoutFixScale(true)">↪️ عكس</button>
+  if(!host){ host = document.createElement('div'); host.id = 'layoutFixToolsHost'; host.style.cssText = 'margin-bottom:8px;font-size:11.5px'; vp.parentNode.insertBefore(host, vp); }
+  const outN = outOfBoundsLayoutElementIndexes().length;
+  const kTxt = (Math.round(k*100)/100);
+  const wasOpen = !!host.querySelector('details[open]');
+  host.innerHTML = `
+    ${layoutEditor.autoFixNote ? `<div class="site-card" style="padding:9px 11px;margin-bottom:6px;border-color:var(--success)">
+      <div style="font-size:12px;color:var(--success);font-weight:700">🔧 ${layoutEditor.autoFixNote}</div>
+      <button class="btn sm" style="margin-top:6px" onclick="layoutEditorUndo(); layoutEditor.autoFixNote=''; renderLayoutFixTools()">↩️ تراجع عن الإرجاع التلقائي</button>
+    </div>` : ''}
+    ${outN ? `<div class="site-card" style="padding:9px 11px;margin-bottom:6px;border-color:var(--amber)">
+      <div style="font-size:12px;color:var(--amber);font-weight:700">⚠️ يوجد ${outN} عنصر خارج حدود الخريطة (غير ظاهر)</div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn sm primary" onclick="fixOutOfBoundsLayoutElements()">↩️ إرجاعها داخل الخريطة لمكانها</button>
       </div>
-    </div>`;
+    </div>` : ''}
+    <details ${wasOpen?'open':''}><summary style="cursor:pointer;color:var(--muted)">🧭 العناصر مش في مكانها؟ (تصحيح يدوي)</summary>
+      <div class="site-card" style="padding:8px;margin-top:6px">
+        <p style="font-size:11px;color:var(--muted-2);margin:0 0 6px">اختر حسب اللي شايفه على الخريطة، وشوف النتيجة فورًا. لو النتيجة مش مظبوطة اضغط الزر العكسي. التثبيت بيتم فقط بعد «حفظ التعديل».</p>
+        <div class="btn-row">
+          <button class="btn sm primary" onclick="applyLayoutFixScale(true)">🔎 العناصر صغيرة ومتجمّعة في ركن ← كبّرها ورجّعها (×${kTxt})</button>
+          <button class="btn sm" onclick="applyLayoutFixScale(false)">العناصر كبيرة ومتباعدة ← صغّرها (÷${kTxt})</button>
+        </div>
+      </div>
+    </details>`;
 }
-function applyLayoutFixScale(inverse){
+function applyLayoutFixScale(enlarge){
   const k = layoutEditor.fixFactor;
   if(!(k > 1.05) || !layoutEditor.elements.length) return;
   pushLayoutHistory();
-  const f = inverse ? k : 1/k;
+  const f = enlarge ? k : 1/k;
   layoutEditor.elements = rescaleLayoutElements(layoutEditor.elements, f, f);
   layoutEditor.selectedIndex = -1; layoutEditor.multiSelected = new Set();
-  redrawLayoutCanvas();
-  toast(inverse ? '↪️ تم عكس التصحيح' : '↩️ تم إرجاع العناصر — راجع الخريطة ثم اضغط "حفظ التعديل"');
+  layoutEditor.autoFixNote = '';
+  reloadImageElementsAfterHistoryChange(); redrawLayoutCanvas(); renderLayoutFixTools();
+  toast((enlarge ? '🔎 تم تكبير أماكن العناصر' : 'تم تصغير أماكن العناصر') + ' — راجع الخريطة ثم اضغط «حفظ التعديل»');
+}
+function fixOutOfBoundsLayoutElements(){
+  const c = document.getElementById('layoutEditCanvas'), k = layoutEditor.fixFactor;
+  if(!c || !(k > 1.05)) return;
+  const idx = outOfBoundsLayoutElementIndexes(); if(!idx.length) return;
+  pushLayoutHistory();
+  let fixed = 0;
+  idx.forEach(i=>{
+    let el = layoutEditor.elements[i], n = 0, a = layoutElementAnchor(el);
+    while(a && (a.x > c.width*1.01 || a.y > c.height*1.01) && n < 4){ el = rescaleLayoutElements([el], 1/k, 1/k)[0]; a = layoutElementAnchor(el); n++; }
+    if(a && a.x <= c.width*1.01 && a.y <= c.height*1.01){ layoutEditor.elements[i] = el; fixed++; }
+  });
+  layoutEditor.selectedIndex = -1; layoutEditor.multiSelected = new Set();
+  reloadImageElementsAfterHistoryChange(); redrawLayoutCanvas(); renderLayoutFixTools();
+  toast(`↩️ تم إرجاع ${fixed} عنصر داخل الخريطة — راجعها ثم اضغط «حفظ التعديل»`);
 }
 function redrawLayoutCanvas(){
   const canvas = document.getElementById('layoutEditCanvas'); if(!canvas) return;
