@@ -946,12 +946,14 @@ function openImageLightbox(url){
 }
 function openGalleryLightbox(urls, index){
   __lbGallery = urls; __lbIndex = index||0; __lbScale = 1;
+  __lbCaptions = Array.isArray(arguments[2]) ? arguments[2] : null;
   renderLightboxImage();
   document.getElementById('lightbox').classList.add('open');
 }
 function renderLightboxImage(){
   const img = document.getElementById('lightboxImg');
   img.src = __lbGallery[__lbIndex]; img.style.transform = 'scale(1)';
+  __lbX = 0; __lbY = 0; lbApplyTransform(); lbRenderCaption();
   const multi = __lbGallery.length > 1;
   document.getElementById('lightboxPrev').style.display = multi ? 'block' : 'none';
   document.getElementById('lightboxNext').style.display = multi ? 'block' : 'none';
@@ -972,8 +974,136 @@ function closeLightbox(e){
   __lbGallery = null;
 }
 function zoomLightbox(factor){
-  __lbScale = Math.max(0.5, Math.min(4, __lbScale*factor));
+  __lbScale = Math.max(0.5, Math.min(LB_MAX_SCALE, __lbScale*factor));
   document.getElementById('lightboxImg').style.transform = `scale(${__lbScale})`;
+  if(__lbScale<=1){ __lbX=0; __lbY=0; }
+  lbApplyTransform(true);
+}
+/* ============================================================
+   🔍 تكبير وتحريك الصور داخل الـLightbox (إضافة):
+   - الكمبيوتر: بكرة الماوس للتكبير/التصغير عند مكان المؤشر + سحب بالماوس في كل الاتجاهات + دبل كليك
+   - الموبايل: تكبير/تصغير بإصبعين + تحريك بإصبع + دبل تاب
+   الصورة بتتعرض من ملفها الأصلي نفسه (بدون أي نسخة مصغّرة) فالتكبير بيظهر التفاصيل بجودتها الكاملة
+   ============================================================ */
+const LB_MAX_SCALE = 16;
+let __lbX = 0, __lbY = 0, __lbCaptions = null;
+function lbApplyTransform(animate){
+  const img = document.getElementById('lightboxImg'); if(!img) return;
+  // منع الصورة من الخروج تمامًا برّه الشاشة
+  const w = img.offsetWidth*__lbScale, h = img.offsetHeight*__lbScale;
+  const mx = Math.max(0, w/2 + window.innerWidth/2 - 80), my = Math.max(0, h/2 + window.innerHeight/2 - 80);
+  __lbX = Math.max(-mx, Math.min(mx, __lbX)); __lbY = Math.max(-my, Math.min(my, __lbY));
+  img.style.transition = animate ? 'transform .18s ease' : 'none';
+  img.style.transform = `translate(${__lbX}px,${__lbY}px) scale(${__lbScale})`;
+  img.style.cursor = 'grab';
+  const z = document.getElementById('lightboxZoomPct'); if(z) z.textContent = Math.round(__lbScale*100)+'%';
+}
+function lbZoomAt(newScale, clientX, clientY){
+  newScale = Math.max(0.5, Math.min(LB_MAX_SCALE, newScale));
+  const px = clientX - window.innerWidth/2, py = clientY - window.innerHeight/2;   // الصورة متمركزة في منتصف الشاشة
+  const r = newScale/__lbScale;
+  __lbX = px - (px-__lbX)*r; __lbY = py - (py-__lbY)*r; __lbScale = newScale;
+  if(__lbScale<=1){ __lbX=0; __lbY=0; }
+  lbApplyTransform();
+}
+function lbResetView(){ __lbScale=1; __lbX=0; __lbY=0; lbApplyTransform(true); }
+function lbRenderCaption(){
+  const c = document.getElementById('lightboxCaption'); if(!c) return;
+  const t = __lbCaptions && __lbCaptions[__lbIndex];
+  c.textContent = t||''; c.style.display = t ? 'block' : 'none';
+}
+(function(){
+  const lb = document.getElementById('lightbox'), img = document.getElementById('lightboxImg');
+  if(!lb || !img) return;
+  img.draggable = false;
+  img.style.touchAction = 'none'; img.style.userSelect = 'none'; img.style.webkitUserSelect = 'none';
+  lb.style.touchAction = 'none'; lb.style.overflow = 'hidden';
+  // عناصر إضافية: اسم الخريطة + نسبة التكبير + زر إعادة الضبط
+  const cap = document.createElement('div');
+  cap.id = 'lightboxCaption';
+  cap.style.cssText = 'position:absolute;bottom:calc(72px + var(--safe-bottom));left:50%;transform:translateX(-50%);max-width:86%;color:#fff;font-size:12.5px;font-weight:700;background:rgba(0,0,0,.55);padding:5px 14px;border-radius:20px;display:none;z-index:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none';
+  lb.appendChild(cap);
+  lb.querySelectorAll('.lightbox-close,.lightbox-nav-btn').forEach(b=>{ b.style.background='rgba(0,0,0,.6)'; });
+  const ctrls = lb.querySelector('.lightbox-zoom-controls');
+  if(ctrls){
+    ctrls.style.background='rgba(0,0,0,.6)'; ctrls.style.padding='6px 10px'; ctrls.style.borderRadius='30px'; ctrls.style.alignItems='center';
+    const pct = document.createElement('span');
+    pct.id = 'lightboxZoomPct';
+    pct.style.cssText = 'align-self:center;min-width:52px;text-align:center;color:#fff;font-size:12px;font-weight:700;direction:ltr';
+    pct.textContent = '100%';
+    const rst = document.createElement('button');
+    rst.textContent = '⟲'; rst.title = 'إعادة الحجم الأصلي'; rst.setAttribute('aria-label','إعادة الحجم الأصلي');
+    rst.onclick = ()=> lbResetView();
+    ctrls.insertBefore(pct, ctrls.children[1]||null);
+    ctrls.appendChild(rst);
+  }
+  const P = new Map(); let drag=null, pinch=null, moved=false, lastTap=0, dragEnd=0;
+  lb.addEventListener('wheel', e=>{
+    if(!lb.classList.contains('open')) return;
+    e.preventDefault();
+    lbZoomAt(__lbScale*Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0018)), e.clientX, e.clientY);
+  }, {passive:false});
+  img.addEventListener('pointerdown', e=>{
+    if(e.pointerType==='mouse' && e.button!==0) return;
+    e.preventDefault();
+    try{ img.setPointerCapture(e.pointerId); }catch(_){}
+    P.set(e.pointerId,{x:e.clientX,y:e.clientY}); moved=false;
+    if(P.size===1){ drag={x:e.clientX,y:e.clientY,ox:__lbX,oy:__lbY}; img.style.cursor='grabbing'; }
+    else if(P.size===2){ const [a,b]=[...P.values()]; pinch={d:Math.hypot(a.x-b.x,a.y-b.y)||1, s:__lbScale}; drag=null; }
+  });
+  img.addEventListener('pointermove', e=>{
+    if(!P.has(e.pointerId)) return;
+    P.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(P.size>=2 && pinch){
+      const [a,b]=[...P.values()]; const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+      moved=true; lbZoomAt(pinch.s*d/pinch.d, (a.x+b.x)/2, (a.y+b.y)/2);
+    } else if(drag){
+      const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+      if(Math.abs(dx)+Math.abs(dy)>4) moved=true;
+      if(moved){ __lbX=drag.ox+dx; __lbY=drag.oy+dy; lbApplyTransform(); }
+    }
+  });
+  const end = e=>{
+    if(!P.has(e.pointerId)) return;
+    P.delete(e.pointerId);
+    try{ img.releasePointerCapture(e.pointerId); }catch(_){}
+    if(P.size<2) pinch=null;
+    if(P.size===1){ const a=[...P.values()][0]; drag={x:a.x,y:a.y,ox:__lbX,oy:__lbY}; }
+    if(P.size===0){
+      drag=null; img.style.cursor='grab'; if(moved) dragEnd=Date.now();
+      // دبل كليك / دبل تاب: تكبير سريع عند النقطة أو رجوع للحجم الأصلي
+      if(!moved && e.type==='pointerup'){
+        const now=Date.now();
+        if(now-lastTap<320){ lastTap=0; if(__lbScale>1.05) lbResetView(); else lbZoomAt(3, e.clientX, e.clientY); }
+        else lastTap=now;
+      }
+    }
+  };
+  img.addEventListener('pointerup', end);
+  img.addEventListener('pointercancel', end);
+  // السحب اللي بينتهي برّه الصورة ما يقفلش العارض بالغلط
+  lb.addEventListener('click', e=>{ if(moved && Date.now()-dragEnd<350){ e.stopPropagation(); } moved=false; }, true);
+  document.addEventListener('keydown', e=>{
+    if(!lb.classList.contains('open')) return;
+    if(e.key==='Escape') closeLightbox();
+    else if(e.key==='ArrowLeft') navLightbox(1);
+    else if(e.key==='ArrowRight') navLightbox(-1);
+    else if(e.key==='+' || e.key==='=') zoomLightbox(1.25);
+    else if(e.key==='-') zoomLightbox(0.8);
+    else if(e.key==='0') lbResetView();
+  });
+  window.addEventListener('resize', ()=>{ if(lb.classList.contains('open')) lbApplyTransform(); });
+})();
+/* فتح كل صور خرائط مصنع معيّن مباشرة من قسم "الخرائط" (زر الصور بجانب اسم المصنع) */
+async function openFactoryLayoutImages(factoryId){
+  try{
+    const {data, error} = await supa.from('factory_layouts').select('id, layout_name, file_url, file_type, created_at').eq('factory_id', factoryId).order('created_at',{ascending:false});
+    if(error) throw error;
+    const imgs = (data||[]).filter(l=> l.file_type!=='pdf' && l.file_url);
+    if(!imgs.length){ toast('لا توجد صور خرائط لهذا المصنع'); return; }
+    const f = factoriesData.find(x=>x.id===factoryId);
+    openGalleryLightbox(imgs.map(l=>l.file_url), 0, imgs.map(l=> `${f?f.name+' — ':''}${l.layout_name||''}`));
+  }catch(e){ console.warn(e); toast('🚫 تعذّر تحميل صور الخرائط'); }
 }
 
 /* ============================================================
@@ -8969,7 +9099,7 @@ async function loadLayoutsFactoryPicker(){
           <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:none">
             ${c===null ? '' : (c.total===0 ? `<span class="pill">لا توجد خرائط</span>` : `
               <span class="pill ok">🗺️ ${c.total} ${c.total===1?'خريطة':'خرائط'}</span>
-              ${c.image?`<span class="pill">🖼️ ${c.image}</span>`:''}${c.pdf?`<span class="pill">📄 ${c.pdf}</span>`:''}`)}
+              ${c.image?`<button class="pill" style="cursor:pointer;font-family:inherit;background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:var(--accent);color:var(--text);font-weight:700;padding:5px 11px" title="عرض صور خرائط المصنع" aria-label="عرض صور خرائط ${dbEsc(f.name)}" onclick="event.stopPropagation(); openFactoryLayoutImages('${f.id}')" onkeydown="event.stopPropagation()">🖼️ ${c.image} ${c.image===1?'صورة':'صور'}</button>`:''}${c.pdf?`<span class="pill">📄 ${c.pdf}</span>`:''}`)}
           </div>
         </div>
       </div>`;
