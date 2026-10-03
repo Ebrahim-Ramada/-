@@ -9960,6 +9960,36 @@ function rescaleLayoutElements(elements, sx, sy){
  * عشان تفضل بالظبط في نفس مكانها الجغرافي على الخريطة — بدون أي تدخل يدوي.
  * naturalW/naturalH: أبعاد الصورة الأصلية الحقيقية (ثابتة دايمًا، مرجع موثوق).
  */
+/* حفظ عناصر الخريطة + أبعاد المرجع مع بعض دايمًا (مع رجوع آمن لو أعمدة الأبعاد مش موجودة في القاعدة) */
+async function persistLayoutEditState(layoutId, elements, refW, refH){
+  let refSaved = false, error = null;
+  try{
+    if(refW && refH){
+      const r = await supa.from('factory_layouts').update({ edit_state: elements, edit_state_ref_w: refW, edit_state_ref_h: refH }).eq('id', layoutId);
+      error = r.error; refSaved = !r.error;
+    }
+    if(!refSaved){
+      const r2 = await supa.from('factory_layouts').update({ edit_state: elements }).eq('id', layoutId);
+      error = r2.error;
+    }
+  }catch(e){ error = e; }
+  if(error) console.warn('تعذّر حفظ عناصر الخريطة', error);
+  return { ok: !error, refSaved };
+}
+/* أبعد نقطة فعلية للعناصر (يمين/أسفل) — بنستخدمها لمعرفة الإحداثيات مقاسة على أي أبعاد */
+function layoutElementsExtent(elements){
+  let maxX = 0, maxY = 0;
+  const add = (x,y)=>{ if(isFinite(x) && x>maxX) maxX = x; if(isFinite(y) && y>maxY) maxY = y; };
+  (elements||[]).forEach(e=>{
+    if(!e) return;
+    if(e.type==='arrow'){ add(e.x1,e.y1); add(e.x2,e.y2); }
+    else if(e.type==='circle'){ add(e.cx,e.cy); }
+    else if(e.type==='pen'){ (e.points||[]).forEach(p=>add(p.x,p.y)); }
+    else if(e.type==='image' || e.type==='rect'){ add(e.x + (e.w||0)/2, e.y + (e.h||0)/2); }
+    else add(e.x,e.y);
+  });
+  return { maxX, maxY };
+}
 function migrateLayoutElementsIfNeeded(elements, refW, refH, currentW, currentH, naturalW, naturalH){
   if(!elements.length) return { elements, migrated:false };
   if(refW && refH && refW===currentW && refH===currentH) return { elements, migrated:false };
@@ -9967,7 +9997,13 @@ function migrateLayoutElementsIfNeeded(elements, refW, refH, currentW, currentH,
   // المعروفة تاريخيًا في التطبيق قبل تعديلات الجودة الأخيرة كانت: حد أقصى 1000px
   let oldW, oldH;
   if(refW && refH){ oldW = refW; oldH = refH; }
-  else { oldW = Math.min(1000, naturalW); oldH = Math.round(naturalH*(oldW/naturalW)); }
+  else {
+    oldW = Math.min(1000, naturalW); oldH = Math.round(naturalH*(oldW/naturalW));
+    // 🎯 حماية: لو فيه عنصر واقع برّه حدود المقاس القديم (1000px) يبقى العناصر دي محفوظة أصلًا
+    // على المقاس الحالي (زي اللي اتحفظ بعد الحذف من غير أبعاد مرجعية) — ممنوع إعادة قياسها تاني
+    const ext = layoutElementsExtent(elements);
+    if(ext.maxX > oldW*1.02 || ext.maxY > oldH*1.02) return { elements, migrated:false };
+  }
   if(oldW===currentW && oldH===currentH) return { elements, migrated:false };
   const sx = currentW/oldW, sy = currentH/oldH;
   return { elements: rescaleLayoutElements(elements, sx, sy), migrated:true };
@@ -10068,6 +10104,25 @@ async function initLayoutCanvas(imgUrl){
     layoutEditor.elements = migration.elements;
     layoutEditor.canvasRefW = canvas.width; layoutEditor.canvasRefH = canvas.height;
     if(migration.migrated){ toast('🔧 تم تثبيت أماكن العناصر تلقائيًا بعد تحديث نظام الخريطة — كل حاجة في مكانها الصح'); }
+    // 🎯 إرجاع تلقائي للخرائط اللي اتأثرت بمشكلة الحذف القديمة: لو العناصر متزاحة لبرّه حدود الخريطة
+    // بنفس معامل التكبير الغلط، بنرجّعها لمكانها الطبيعي ونحفظ التصحيح نهائيًا
+    layoutEditor.fixFactor = canvas.width / Math.min(1000, img.width);
+    (function autoRepairShiftedElements(){
+      const k = layoutEditor.fixFactor;
+      if(!(k > 1.05) || !layoutEditor.elements.length) return;
+      const out = els=>{ const x = layoutElementsExtent(els); return x.maxX > canvas.width*1.03 || x.maxY > canvas.height*1.03; };
+      if(!out(layoutEditor.elements)) return;
+      let fixed = layoutEditor.elements, steps = 0;
+      while(out(fixed) && steps < 4){ fixed = rescaleLayoutElements(fixed, 1/k, 1/k); steps++; }
+      if(out(fixed)) return;   // مش نفس نمط المشكلة — مانلمسش حاجة
+      layoutEditor.elements = fixed;
+      toast('🔧 تم إرجاع عناصر الخريطة لمكانها الطبيعي');
+      const clean = layoutElementsForHistory();
+      persistLayoutEditState(layoutEditor.layoutId, clean, canvas.width, canvas.height).then(r=>{
+        if(lRec && r.ok){ lRec.edit_state = clean; if(r.refSaved){ lRec.edit_state_ref_w = canvas.width; lRec.edit_state_ref_h = canvas.height; } }
+      });
+    })();
+    renderLayoutFixTools();
     // تحميل صور الأجهزة المستعادة (كاميرا/راك/سويتش) من عناصر تم استرجاعها من حفظ سابق
     (function loadMapElementImagesFast(){
       // 🎯 إصلاح جذري لبطء فتح الخريطة: (1) مشاركة نفس الصورة المحمّلة بين العناصر
@@ -10101,6 +10156,34 @@ async function initLayoutCanvas(imgUrl){
   };
   img.onerror = ()=> toast('⚠️ تعذّر تحميل صورة الخريطة للتعديل');
   img.src = safeSrc;
+}
+/* 🧭 أداة يدوية احتياطية: لو خريطة عناصرها لسه متزاحة (ومفيش طريقة أكيدة لاكتشافها تلقائيًا)،
+   الأدمن يقدر يرجّعها بضغطة — والتراجع (Undo) شغال عليها، ومفيش حاجة بتتحفظ غير لما يضغط "حفظ التعديل" */
+function renderLayoutFixTools(){
+  const vp = document.getElementById('layoutEditViewport');
+  if(!vp || !isAdmin() || layoutEditor.isPdf) return;
+  const k = layoutEditor.fixFactor;
+  let host = document.getElementById('layoutFixToolsHost');
+  if(!(k > 1.05) || !layoutEditor.elements.length){ if(host) host.remove(); return; }
+  if(!host){ host = document.createElement('details'); host.id = 'layoutFixToolsHost'; host.style.cssText = 'margin-bottom:8px;font-size:11.5px'; vp.parentNode.insertBefore(host, vp); }
+  host.innerHTML = `<summary style="cursor:pointer;color:var(--muted)">🧭 العناصر مش في مكانها؟ (تصحيح الأماكن)</summary>
+    <div class="site-card" style="padding:8px;margin-top:6px">
+      <p style="font-size:11px;color:var(--muted-2);margin:0 0 6px">لو كل العناصر متحركة من مكانها بعد حذف سابق، اضغط "إرجاع" وشوف النتيجة على الخريطة. لو مظبوطة اضغط "حفظ التعديل"، ولو لأ اضغط "عكس".</p>
+      <div class="btn-row">
+        <button class="btn sm primary" onclick="applyLayoutFixScale(false)">↩️ إرجاع العناصر لمكانها</button>
+        <button class="btn sm" onclick="applyLayoutFixScale(true)">↪️ عكس</button>
+      </div>
+    </div>`;
+}
+function applyLayoutFixScale(inverse){
+  const k = layoutEditor.fixFactor;
+  if(!(k > 1.05) || !layoutEditor.elements.length) return;
+  pushLayoutHistory();
+  const f = inverse ? k : 1/k;
+  layoutEditor.elements = rescaleLayoutElements(layoutEditor.elements, f, f);
+  layoutEditor.selectedIndex = -1; layoutEditor.multiSelected = new Set();
+  redrawLayoutCanvas();
+  toast(inverse ? '↪️ تم عكس التصحيح' : '↩️ تم إرجاع العناصر — راجع الخريطة ثم اضغط "حفظ التعديل"');
 }
 function redrawLayoutCanvas(){
   const canvas = document.getElementById('layoutEditCanvas'); if(!canvas) return;
@@ -10685,8 +10768,12 @@ async function confirmBulkDeleteMapCameras(){
       layoutEditor.pdfPagesElements[layoutEditor.pdfCurrentPage] = cleanElements;
       await supa.from('factory_layouts').update({ pdf_edit_state: layoutEditor.pdfPagesElements }).eq('id', savedLayoutId);
     } else {
-      await supa.from('factory_layouts').update({ edit_state: cleanElements }).eq('id', savedLayoutId);
-      const l = layoutsData.find(x=>x.id===savedLayoutId); if(l) l.edit_state = cleanElements;
+      // 🎯 إصلاح جذري: لازم نحفظ مع العناصر أبعاد الكانفاس اللي إحداثياتها مقاسة عليها (edit_state_ref_w/h).
+      // قبل كده الحذف كان بيحفظ العناصر من غير الأبعاد دي، فعند فتح الخريطة تاني النظام كان بيفتكرها
+      // بيانات قديمة ويعيد قياسها غلط → كل العناصر تتحرك من مكانها.
+      const persisted = await persistLayoutEditState(savedLayoutId, cleanElements, layoutEditor.canvasRefW, layoutEditor.canvasRefH);
+      const l = layoutsData.find(x=>x.id===savedLayoutId);
+      if(l){ l.edit_state = cleanElements; if(persisted.refSaved || !l.edit_state_ref_w){ l.edit_state_ref_w = layoutEditor.canvasRefW; l.edit_state_ref_h = layoutEditor.canvasRefH; } }
     }
     await logAudit('حذف جماعي لعناصر من الخريطة اليدوية', `${n} عنصر (${labels}) من خريطة ${layoutsData.find(x=>x.id===savedLayoutId)?.layout_name||''} — إزالة من الخريطة فقط، أي سجلات حقيقية مرتبطة لم تتأثر`);
     // نافذة كلمة المرور استبدلت محتوى مودال المحرر بالكامل — نعيد فتحه تاني عشان
