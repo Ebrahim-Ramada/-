@@ -10023,7 +10023,7 @@ function openLayoutEditor(layoutId){
     <div class="modal-head"><h3>✏️ تعديل الخريطة: ${l.layout_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     ${restoredElements.length ? `<p style="font-size:10.5px;color:var(--success);margin-top:-6px">✅ تم استرجاع ${restoredElements.length} عنصر من آخر تعديل محفوظ.</p>`:''}
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="layoutToolbar">
-      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص'],['barbedwire','🧱 السلك الشائك'],['maprotate','🔄 تدوير الخريطة']].map(([t,l2])=>
+      ${[['select','↖️ تحديد'],['pen','✏️ رسم حر'],['arrow','➡️ سهم'],['rect','▭ مربع'],['circle','⭕ دائرة'],['pin','📍 علامة'],['text','🔤 نص'],['barbedwire','🧱 السلك الشائك'],['barbedwire2','🧱 السلك الشائك 2'],['maprotate','🔄 تدوير الخريطة']].map(([t,l2])=>
         `<button class="btn sm ${layoutEditor.tool===t?'primary':''}" id="tool_${t}" onclick="setLayoutTool('${t}')">${l2}</button>`).join('')}
       <input type="color" id="layoutColor" value="#FF3B30" style="width:36px;height:32px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer" onchange="layoutEditor.color=this.value">
     </div>
@@ -10534,6 +10534,17 @@ function layoutPathPointsAt(points, spacing, startOffset){
   }
   return out;
 }
+function offsetPathPerpendicular(points, offset){
+  if(offset===0) return points;
+  const out = [];
+  for(let i=0;i<points.length;i++){
+    const prev = points[i-1]||points[i], next = points[i+1]||points[i];
+    const angle = Math.atan2(next.y-prev.y, next.x-prev.x);
+    const perp = angle + Math.PI/2;
+    out.push({ x: points[i].x + Math.cos(perp)*offset, y: points[i].y + Math.sin(perp)*offset });
+  }
+  return out;
+}
 function drawBarbedWireElement(ctx, el){
   const points = el.points||[];
   if(points.length < 2) return;
@@ -10546,6 +10557,10 @@ function drawBarbedWireElement(ctx, el){
   const wireColor = unified ? el.color : (el.wireColor||el.color||'#8a8a8a');
   const loopColor = unified ? el.color : (el.loopColor||el.color||'#8a8a8a');
   const barbColor = unified ? el.color : (el.barbColor||el.color||'#5a5a5a');
+  // 🎯 دعم الطبقات المتعددة — "السلك الشائك 2" افتراضيًا 3 طبقات ملتفة حوالين بعض
+  // (زي السلك الحقيقي المُجدَّل من عدة شرائط)، بإزاحة عمودية بسيطة عن المسار الأساسي
+  const layers = Math.max(1, el.layers||1);
+  const layerGap = loopSize*0.6;
   ctx.save();
   ctx.globalAlpha = el.opacity!=null ? el.opacity : 1;
   // دوران العنصر بالكامل حوالين مركزه لو محدَّد (بنفس منطق باقي عناصر الخريطة)
@@ -10554,23 +10569,26 @@ function drawBarbedWireElement(ctx, el){
     const cx=(Math.min(...xs)+Math.max(...xs))/2, cy=(Math.min(...ys)+Math.max(...ys))/2;
     ctx.translate(cx,cy); ctx.rotate(el.rotation*Math.PI/180); ctx.translate(-cx,-cy);
   }
-  // 1) الخط الأساسي (Wire Core) — خط متموّج بسيط يمثّل السلك الملفوف
-  ctx.strokeStyle = wireColor; ctx.lineWidth = Math.max(1, thickness*0.4); ctx.lineCap='round';
-  ctx.beginPath(); points.forEach((p,i)=> i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
-  // 2) الحلقات الحلزونية (Spiral/Ring Loops) — حلقات متتابعة ومنتظمة بطول كل المسار،
-  //    بتدّي شكل "السلك الشائك الحلقي" الاحترافي (5D/7D) بدل خط عادي بسيط
-  const loopPts = layoutPathPointsAt(points, loopSpacing, loopSpacing/2);
-  loopPts.forEach(pt=>{
-    // ظل خفيف أولًا لإحساس بالعمق (Depth/Highlight)، بعدين الحلقة نفسها فوقه
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = Math.max(1, thickness*0.3);
-    ctx.beginPath(); ctx.ellipse(pt.x+1, pt.y+1, loopSize/2, loopSize/2.6, pt.angle, 0, Math.PI*2); ctx.stroke();
-    ctx.strokeStyle = loopColor; ctx.lineWidth = Math.max(1, thickness*0.35);
-    ctx.beginPath(); ctx.ellipse(pt.x, pt.y, loopSize/2, loopSize/2.6, pt.angle, 0, Math.PI*2); ctx.stroke();
-  });
-  // 3) الأشواك الحادة (Sharp Barbs) — شوكتين متقاطعتين عند كل نقطة، عمودي على اتجاه المسار تلقائيًا
-  const barbPts = layoutPathPointsAt(points, barbSpacing, barbSpacing/3);
-  ctx.strokeStyle = barbColor; ctx.lineWidth = Math.max(1, thickness*0.3);
-  barbPts.forEach(pt=>{
+  for(let L=0; L<layers; L++){
+    // توزيع الطبقات بالتساوي حوالين المسار الأساسي: طبقة في النص، والباقي فوق وتحت بالتبادل
+    const offset = layers===1 ? 0 : (L - (layers-1)/2) * layerGap;
+    const layerPoints = offsetPathPerpendicular(points, offset);
+    // 1) الخط الأساسي (Wire Core) لهذه الطبقة
+    ctx.strokeStyle = wireColor; ctx.lineWidth = Math.max(1, thickness*0.4); ctx.lineCap='round';
+    ctx.beginPath(); layerPoints.forEach((p,i)=> i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
+    // 2) الحلقات الحلزونية (Spiral/Ring Loops) لهذه الطبقة — متتابعة ومنتظمة بطول المسار كله
+    const loopPts = layoutPathPointsAt(layerPoints, loopSpacing, loopSpacing/2 + L*2); // إزاحة بسيطة في التوقيت عشان الطبقات ما تتطابقش حرفيًا فوق بعض
+    loopPts.forEach(pt=>{
+      // ظل خفيف أولًا لإحساس بالعمق (Depth/Highlight)، بعدين الحلقة نفسها فوقه
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = Math.max(1, thickness*0.3);
+      ctx.beginPath(); ctx.ellipse(pt.x+1, pt.y+1, loopSize/2, loopSize/2.6, pt.angle, 0, Math.PI*2); ctx.stroke();
+      ctx.strokeStyle = loopColor; ctx.lineWidth = Math.max(1, thickness*0.35);
+      ctx.beginPath(); ctx.ellipse(pt.x, pt.y, loopSize/2, loopSize/2.6, pt.angle, 0, Math.PI*2); ctx.stroke();
+    });
+    // 3) الأشواك الحادة (Sharp Barbs) لهذه الطبقة — شوكتين متقاطعتين عند كل نقطة
+    const barbPts = layoutPathPointsAt(layerPoints, barbSpacing, barbSpacing/3 + L*2);
+    ctx.strokeStyle = barbColor; ctx.lineWidth = Math.max(1, thickness*0.3);
+    barbPts.forEach(pt=>{
     const perp = pt.angle + Math.PI/2;
     [0.5, -0.5].forEach(sign=>{
       const bx = pt.x + Math.cos(perp)*barbSize*sign, by = pt.y + Math.sin(perp)*barbSize*sign;
@@ -10580,7 +10598,8 @@ function drawBarbedWireElement(ctx, el){
       ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx-4*Math.cos(tipAngle-0.5), by-4*Math.sin(tipAngle-0.5)); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx-4*Math.cos(tipAngle+0.5), by-4*Math.sin(tipAngle+0.5)); ctx.stroke();
     });
-  });
+    });
+  } // end for(layers)
   ctx.restore();
 }
 function drawLayoutElement(ctx, el, selected){
@@ -10682,7 +10701,7 @@ function drawLayoutElement(ctx, el, selected){
     const box = layoutElementBBox(el);
     ctx.strokeStyle='#38D9C9'; ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
     ctx.strokeRect(box.x-6, box.y-6, box.w+12, box.h+12); ctx.setLineDash([]);
-    if(el.type==='image' || el.type==='rect'){
+    if(el.type==='image' || el.type==='rect' || el.type==='barbedwire'){
       // مقبض تكبير/تصغير (الزاوية) + مقبض تدوير (فوق العنصر) — تحكم كامل زي المطلوب
       const rH = layoutImageHandles(el);
       ctx.fillStyle='#38D9C9';
@@ -10701,12 +10720,16 @@ function drawLayoutElement(ctx, el, selected){
 }
 // مقابض التحكم لعنصر الصورة: مقبض تكبير في الزاوية، ومقبض تدوير فوق العنصر (بيتحركوا مع دوران العنصر نفسه)
 function layoutImageHandles(el){
-  const cx = el.x+el.w/2, cy = el.y+el.h/2, rad = (el.rotation||0)*Math.PI/180;
+  // للعناصر اللي مالهاش x/y/w/h مباشرة (زي السلك الشائك اللي بيتسجّل كمسار نقاط)،
+  // بنستخدم حدوده المحسوبة بدل كده — عشان يشتغل بنفس نظام التحكم زي أي عنصر تاني
+  const b = (el.x!=null && el.w!=null) ? el : layoutElementBBox(el);
+  const ex = b.x, ey = b.y, ew = b.w, eh = b.h;
+  const cx = ex+ew/2, cy = ey+eh/2, rad = (el.rotation||0)*Math.PI/180;
   const rot = (px,py)=>{ const dx=px-cx, dy=py-cy; return { x: cx+dx*Math.cos(rad)-dy*Math.sin(rad), y: cy+dx*Math.sin(rad)+dy*Math.cos(rad) }; };
   return {
-    resize: rot(el.x+el.w, el.y+el.h), rotate: rot(cx, el.y-28),
-    resizeW: rot(el.x+el.w, cy),   // مقبض تغيير العرض لوحده (نص الحافة اليمنى)
-    resizeH: rot(cx, el.y+el.h)    // مقبض تغيير الارتفاع لوحده (نص الحافة السفلية)
+    resize: rot(ex+ew, ey+eh), rotate: rot(cx, ey-28),
+    resizeW: rot(ex+ew, cy),   // مقبض تغيير العرض لوحده (نص الحافة اليمنى)
+    resizeH: rot(cx, ey+eh)    // مقبض تغيير الارتفاع لوحده (نص الحافة السفلية)
   };
 }
 function layoutElementBBox(el){
@@ -10891,7 +10914,14 @@ function setLayoutTool(t){
 function layoutElementsForHistory(){
   const cleaned = layoutEditor.elements
     .filter(el=> el != null) // إزالة أي فجوة/عنصر فارغ في المصفوفة (سبب محتمل لفقد البيانات)
-    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,deviceType:el.deviceType,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el);
+    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,deviceType:el.deviceType,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el)
+    .map(el=>{
+      // 🛡️ تنظيف دفاعي: أي خصائص مؤقتة داخلية (بادئة __ زي __resizeStartBBox وقت
+      // التكبير الحي) ممنوع تتسرّب لقاعدة البيانات تحت أي ظرف
+      const clean = {};
+      Object.keys(el).forEach(k=>{ if(!k.startsWith('__')) clean[k] = el[k]; });
+      return clean;
+    });
   // ضمان نهائي: نمرّر البيانات عبر JSON فعليًا (تسلسل ثم فك تسلسل) عشان نتأكد 100% إنها
   // بيانات JSON نظيفة قابلة للتخزين فعلًا، وليست تحتوي على أي مرجع كائن غير قابل للتسلسل
   // بصمت (زي عنصر DOM أو Circular Reference) كان ممكن يسبب فقد البيانات عند الحفظ الفعلي
@@ -11165,9 +11195,9 @@ function attachLayoutCanvasEvents(canvas){
       // لو فيه عنصر صورة محدَّد بالفعل، افحص الأول لو الضغطة على مقبض تكبير أو تدوير بتاعه
       if(layoutEditor.selectedIndex>=0){
         const sel = layoutEditor.elements[layoutEditor.selectedIndex];
-        if(sel.type==='image' || sel.type==='rect'){
+        if(sel.type==='image' || sel.type==='rect' || sel.type==='barbedwire'){
           const h = layoutImageHandles(sel);
-          if(pointNearHandle(pos.x,pos.y,h.resize.x,h.resize.y)){ dragging=true; mode='resize'; start=pos; pushLayoutHistory(); return; }
+          if(pointNearHandle(pos.x,pos.y,h.resize.x,h.resize.y)){ dragging=true; mode = sel.type==='barbedwire' ? 'resizeBarbedWire' : 'resize'; start=pos; pushLayoutHistory(); return; }
           if(pointNearHandle(pos.x,pos.y,h.rotate.x,h.rotate.y)){ dragging=true; mode='rotate'; start=pos; pushLayoutHistory(); return; }
           if(sel.type==='rect'){
             if(pointNearHandle(pos.x,pos.y,h.resizeW.x,h.resizeW.y)){ dragging=true; mode='resizeW'; start=pos; pushLayoutHistory(); return; }
@@ -11275,9 +11305,29 @@ function attachLayoutCanvasEvents(canvas){
         el.y = cy - el.h/2;
         redrawLayoutCanvas(); return;
       }
-      if(mode==='rotate' && (el.type==='image' || el.type==='rect')){
-        const cx = el.x+el.w/2, cy = el.y+el.h/2;
+      if(mode==='rotate' && (el.type==='image' || el.type==='rect' || el.type==='barbedwire')){
+        const b = el.type==='barbedwire' ? layoutElementBBox(el) : el;
+        const cx = b.x+b.w/2, cy = b.y+b.h/2;
         el.rotation = Math.atan2(pos.y-cy, pos.x-cx)*180/Math.PI + 90;
+        redrawLayoutCanvas(); return;
+      }
+      if(mode==='resizeBarbedWire' && el.type==='barbedwire'){
+        // 🎯 تكبير/تصغير السلك الشائك بنفس فكرة تكبير الكاميرا بالظبط: المركز يفضل
+        // ثابت، وكل أبعاد السلك المرئية (طول المسار + سمك الخط + حجم الحلقات
+        // والأشواك + المسافات بينهم) بتكبر/تصغر مع بعض بنفس النسبة بالظبط —
+        // عشان الشكل النهائي يفضل متناسق تمامًا زي ما كان، بس أكبر أو أصغر
+        const b0 = el.__resizeStartBBox || (el.__resizeStartBBox = layoutElementBBox(el));
+        const el0 = el.__resizeStartSnapshot || (el.__resizeStartSnapshot = JSON.parse(JSON.stringify({points:el.points, thickness:el.thickness, loopSize:el.loopSize, loopSpacing:el.loopSpacing, barbSize:el.barbSize, barbSpacing:el.barbSpacing})));
+        const cx = b0.x+b0.w/2, cy = b0.y+b0.h/2;
+        const startDist = Math.hypot(start.x-cx, start.y-cy) || 1;
+        const currentDist = Math.hypot(pos.x-cx, pos.y-cy);
+        const scale = Math.max(0.05, currentDist/startDist); // بلا حدود — ممكن يصغّر لحد ما يكاد يختفي أو يكبّر بدرجة كبيرة
+        el.points = el0.points.map(p=> ({ x: cx + (p.x-cx)*scale, y: cy + (p.y-cy)*scale }));
+        el.thickness = Math.max(0.3, el0.thickness*scale);
+        el.loopSize = Math.max(2, el0.loopSize*scale);
+        el.loopSpacing = Math.max(2, el0.loopSpacing*scale);
+        el.barbSize = Math.max(1, el0.barbSize*scale);
+        el.barbSpacing = Math.max(2, el0.barbSpacing*scale);
         redrawLayoutCanvas(); return;
       }
       const dx = pos.x-dragOffset.x, dy = pos.y-dragOffset.y; dragOffset=pos;
@@ -11298,24 +11348,31 @@ function attachLayoutCanvasEvents(canvas){
     else if(tool==='circle') drawLayoutElement(ctx, {type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color}, false);
     // 🎯 معاينة حية للسلك الشائك أثناء السحب — بنفس التصميم النهائي بالظبط (حلقات
     // وأشواك حقيقية)، مش خط مؤقت بيتحول فجأة لشكل مختلف بعد ما تسيب الماوس
-    else if(tool==='barbedwire') drawBarbedWireElement(ctx, {type:'barbedwire', points:[start,pos], color:layoutEditor.color, unifiedColor:true, thickness:3, loopSize:16, loopSpacing:14, barbSize:9, barbSpacing:22, opacity:1});
+    else if(tool==='barbedwire') drawBarbedWireElement(ctx, {type:'barbedwire', points:[start,pos], color:layoutEditor.color, unifiedColor:true, thickness:3, loopSize:16, loopSpacing:14, barbSize:9, barbSpacing:22, opacity:1, layers:1});
+    else if(tool==='barbedwire2') drawBarbedWireElement(ctx, {type:'barbedwire', points:[start,pos], color:layoutEditor.color, unifiedColor:true, thickness:3, loopSize:16, loopSpacing:14, barbSize:9, barbSpacing:22, opacity:1, layers:3});
   }
   function up(evt){
     if(!dragging) return;
     const endedMode = mode;
     dragging=false; mode=null;
     if(endedMode==='maprotate'){ endLayoutMapRotateDrag(); return; }
+    if(endedMode==='resizeBarbedWire'){
+      const el = layoutEditor.elements[layoutEditor.selectedIndex];
+      if(el){ delete el.__resizeStartBBox; delete el.__resizeStartSnapshot; }
+    }
     const tool = layoutEditor.tool;
-    if(['arrow','rect','circle','barbedwire'].includes(tool)){
+    if(['arrow','rect','circle','barbedwire','barbedwire2'].includes(tool)){
       const pos = getCanvasPos(canvas, evt.changedTouches?{clientX:evt.changedTouches[0].clientX,clientY:evt.changedTouches[0].clientY}:evt);
       pushLayoutHistory();
       if(tool==='arrow') layoutEditor.elements.push({type:'arrow',x1:start.x,y1:start.y,x2:pos.x,y2:pos.y,color:layoutEditor.color,lineWidth:3});
       else if(tool==='rect') layoutEditor.elements.push({type:'rect',x:Math.min(start.x,pos.x),y:Math.min(start.y,pos.y),w:Math.abs(pos.x-start.x),h:Math.abs(pos.y-start.y),rotation:0,color:layoutEditor.color,borderColor:layoutEditor.color,borderWidth:2,borderStyle:'solid',bgColor:'transparent',bgOpacity:1,text:'',fontSize:16,bold:false,italic:false,underline:false,textColor:'#ffffff',textAlign:'right',padding:6});
       else if(tool==='circle') layoutEditor.elements.push({type:'circle',cx:(start.x+pos.x)/2,cy:(start.y+pos.y)/2,rx:Math.abs(pos.x-start.x)/2,ry:Math.abs(pos.y-start.y)/2,color:layoutEditor.color});
-      else if(tool==='barbedwire'){
+      else if(tool==='barbedwire' || tool==='barbedwire2'){
         // 🎯 طول السلك بيتحدد تلقائيًا حسب المسافة المرسومة بالظبط — من غير أي قص أو تقريب
+        // "السلك الشائك 2" بنفس كل الخصائص بالظبط، الفرق الوحيد: 3 طبقات افتراضيًا بدل طبقة واحدة
         layoutEditor.elements.push({
           type:'barbedwire', points:[{x:start.x,y:start.y},{x:pos.x,y:pos.y}], rotation:0, layer:layoutEditor.elements.length,
+          layers: tool==='barbedwire2' ? 3 : 1,
           color:layoutEditor.color, unifiedColor:true, wireColor:layoutEditor.color, loopColor:layoutEditor.color, barbColor:layoutEditor.color,
           thickness:3, loopSize:16, loopSpacing:14, barbSize:9, barbSpacing:22, opacity:1
         });
