@@ -2006,6 +2006,7 @@ function renderDesktopSidebar(){
     {view:'layouts', icon:'map', label:'الخرائط'},
     {view:'roomentryreports', icon:'door', label:'دخول غرفة التحكم'},
     {view:'notes', icon:'note', label:'الملاحظات'},
+    {view:'fencereports', icon:'shield', label:'تأمين الأسوار'},
     {view:'shifthandover', icon:'swap', label:'تسليم واستلام الشيفت'},
     {view:'report', icon:'report', label:'التقرير', perm:'view_report'},
     {view:'reportscenter', icon:'chart', label:'مركز التقارير'},
@@ -2148,6 +2149,7 @@ function renderCurrentView(){
     host.innerHTML = renderNotesPlaceholder();
     loadNotes();
   }
+  else if(currentView==='fencereports') { host.innerHTML = renderFenceReportsView(); frLoadList(); }
   else if(currentView==='fencesections') {
     host.innerHTML = renderFenceSectionsPlaceholder(currentViewCtx);
     loadFenceSections(currentViewCtx);
@@ -3125,6 +3127,7 @@ function renderDashboard(){
             ${tile('t-green','battery','UPS',"goTo('upsstats')")}
             ${tile('t-navy','door','تقرير دخول غرفة التحكم المركزية',"goTo('roomentryreports')")}
             ${tile('t-violet','note','الملاحظات',"goTo('notes')")}
+            ${tile('t-navy','shield','تأمين الأسوار',"goTo('fencereports')")}
             ${tile('t-blue','switch','Switches',"goTo('switchesstats')")}
             ${tile('t-navy','server','Racks',"goTo('racksstats')")}
             ${tile('t-green','cameraPlus','الكاميرات التي تم إضافتها',"goTo('addedcameras')")}
@@ -15556,6 +15559,833 @@ function deleteOnCall(id){
   confirmDeleteWithPassword(async ()=>{
     await supa.from('oncall_schedule').delete().eq('id',id); toast('تم الحذف'); openOnCallManager(); loadOnCallCard();
   }, 'سجل مناوبة');
+}
+
+
+/* ============================================================================
+   🧱 تقارير تأمين الأسوار (السلك الشائك) — المتفق عليه مقابل المنفذ فعلياً
+   محرك واحد يرسم الشرائح (مشهد بإحداثيات بالبوصة) ثم 4 مخرجات متطابقة التصميم:
+   معاينة + PowerPoint (عناصر قابلة للتعديل) + PDF + Word
+   ============================================================================ */
+const FR_W = 13.333, FR_H = 7.5;
+const FR_C = {dark:'1B2227', slate:'2F4550', mid:'4A5A63', light:'EEF1F3', orange:'E08A00', green:'2E8B57', red:'C0392B', grey:'7D8F99', line:'B0BEC5', track:'DCE2E5', white:'FFFFFF'};
+const FR_FONT = 'Cairo, Tajawal, "Segoe UI", Arial, Tahoma, sans-serif';
+const FR_FOOT = 'المتفق عليه مقابل المنفذ فعلياً';
+
+/* ---------- حسابات ---------- */
+function frNum(v){
+  const n = Number(v); if(!isFinite(n)) return '0';
+  return String(Math.round(n*100)/100);
+}
+function frPct(v){ return String(Math.round(v*10)/10); }
+function frSiteCalc(s, i){
+  const name = (s.name||'').trim() || ('موقع '+(i+1));
+  const noPlan = !!s.noPlan || s.agreed===''||s.agreed==null;
+  const agreed = noPlan ? null : (Number(s.agreed)||0);
+  const executed = Number(s.executed)||0;
+  let kind, diff;
+  if(agreed==null){ kind='extra'; diff = executed; }
+  else { diff = Math.round((executed-agreed)*100)/100; kind = diff>0?'over':(diff<0?'under':'match'); }
+  const pct = (agreed!=null && agreed>0) ? executed/agreed*100 : null;
+  return {name, agreed, executed, kind, diff, pct, notes:(s.notes||'').trim(), photos:(s.photos||[]).filter(Boolean).slice(0,4)};
+}
+function frCalc(rep){
+  const sites = (rep.sites||[]).map(frSiteCalc);
+  const sum = a => Math.round(a.reduce((x,y)=>x+y,0)*100)/100;
+  const planned = sites.filter(s=>s.agreed!=null);
+  const over = sites.filter(s=>s.kind==='over'), under = sites.filter(s=>s.kind==='under');
+  const extra = sites.filter(s=>s.kind==='extra'), match = sites.filter(s=>s.kind==='match');
+  const totalAgreed = sum(planned.map(s=>s.agreed));
+  const totalExec = sum(sites.map(s=>s.executed));
+  const net = Math.round((totalExec-totalAgreed)*100)/100;
+  return { sites, planned, over, under, extra, match, totalAgreed, totalExec, net,
+    overSum: sum(over.map(s=>s.diff)), underSum: sum(under.map(s=>-s.diff)), extraSum: sum(extra.map(s=>s.executed)),
+    pct: totalAgreed>0 ? totalExec/totalAgreed*100 : (totalExec>0?100:0) };
+}
+const FR_WORDS = {1:'واحد',2:'اثنان',3:'ثلاثة',4:'أربعة',5:'خمسة',6:'ستة',7:'سبعة',8:'ثمانية',9:'تسعة',10:'عشرة'};
+function frSitesCount(n, acc){ // عدد المواقع بصياغة عربية سليمة
+  if(n===1) return 'موقع واحد';
+  if(n===2) return acc ? 'موقعين' : 'موقعان';
+  if(n>=3 && n<=10) return FR_WORDS[n]+' مواقع';
+  return n+' موقعاً';
+}
+const FR_KIND = {
+  over:{word:'زيادة', color:FR_C.orange}, under:{word:'نقص', color:FR_C.red},
+  match:{word:'مطابق', color:FR_C.green}, extra:{word:'إضافي', color:FR_C.slate}
+};
+function frSiteTitle(c){
+  if(c.kind==='over') return `موقع ${c.name} : زيادة ${frNum(c.diff)} متر عن المتفق عليه`;
+  if(c.kind==='under') return `موقع ${c.name} : نقص ${frNum(-c.diff)} متر عن المتفق عليه`;
+  if(c.kind==='match') return `موقع ${c.name} : مطابق للمتفق عليه (${frNum(c.executed)} متر)`;
+  return `موقع ${c.name} : تركيب ${frNum(c.executed)} متر إضافية`;
+}
+function frDiffText(c){
+  if(c.kind==='over') return `زيادة ${frNum(c.diff)} م`;
+  if(c.kind==='under') return `نقص ${frNum(-c.diff)} م`;
+  if(c.kind==='match') return 'مطابق';
+  return `إضافي ${frNum(c.executed)} م`;
+}
+function frHighlights(rep, k){
+  if((rep.highlights||'').trim()) return rep.highlights.trim().split('\n').map(x=>x.trim()).filter(Boolean);
+  const out = [];
+  k.sites.forEach(c=>{
+    if(c.kind==='extra') out.push(`${c.name}: تم تركيب ${frNum(c.executed)} م إضافية.`);
+    else {
+      const tail = c.kind==='over' ? `، بزيادة ${frNum(c.diff)} م` : c.kind==='under' ? `، بنقص ${frNum(-c.diff)} م` : '، مطابق للمتفق عليه';
+      out.push(`${c.name}: ${frNum(c.executed)} م من ${frNum(c.agreed)} م (${c.pct==null?'—':frPct(c.pct)+'%'})${tail}.`);
+    }
+  });
+  return out;
+}
+
+/* ---------- قياس النص وملاءمته ---------- */
+let __frMeasureCtx = null;
+function frMeasure(){ if(!__frMeasureCtx){ __frMeasureCtx = document.createElement('canvas').getContext('2d'); } return __frMeasureCtx; }
+function frWrap(ctx, text, maxW){
+  const lines = [];
+  String(text==null?'':text).split('\n').forEach(par=>{
+    const words = par.split(/\s+/).filter(Boolean);
+    if(!words.length){ lines.push(''); return; }
+    let cur = '';
+    words.forEach(w=>{
+      const t = cur ? cur+' '+w : w;
+      if(cur && ctx.measureText(t).width > maxW){ lines.push(cur); cur = w; } else cur = t;
+    });
+    lines.push(cur);
+  });
+  return lines;
+}
+// أكبر حجم خط (نقطة) لا يتخطى حدود الصندوق — بنفس النتيجة في كل المخرجات
+function frFit(text, w, h, size, bold, minSize, lh){
+  const ctx = frMeasure(), S = 96; lh = lh||1.3; minSize = minSize||Math.max(7, size*0.55);
+  for(let sz=size; sz>=minSize; sz-=0.5){
+    ctx.font = `${bold?'700':'400'} ${sz/72*S}px ${FR_FONT}`; ctx.direction='rtl';
+    const lines = frWrap(ctx, text, w*S);
+    if(lines.length*sz/72*lh <= h+0.001) return sz;
+  }
+  return minSize;
+}
+
+/* ---------- بناء مشهد الشرائح ---------- */
+function frBuildSlides(rep, imgs){
+  const k = frCalc(rep), slides = [];
+  const title = (rep.title||'').trim() || 'تقرير تأمين الأسوار';
+  const footer = `${title} | ${FR_FOOT}`;
+  const R = (x,y,w,h,fill,o)=>Object.assign({t:'rect',x,y,w,h,fill},o||{});
+  const T = (text,x,y,w,h,size,color,o)=>{
+    o = o||{}; const bold = !!o.bold;
+    const sz = o.noFit ? size : frFit(text,w,h,size,bold,o.min,o.lh);
+    return Object.assign({t:'text',text:String(text),x,y,w,h,size:sz,color,bold,align:'right',valign:'middle',lh:1.3},o,{size:sz});
+  };
+  const newSlide = (bg)=>{ const s={bg:bg||'FFFFFF',ops:[]}; slides.push(s); return s; };
+  const addTitle = (s, text)=> s.ops.push(T(text,0.6,0.4,12.13,1.0,text.length>46?26:30,FR_C.dark,{bold:true,min:18}));
+  const addFooter = (s)=>{
+    s.ops.push(T(footer,0.6,6.95,12.13,0.3,9,FR_C.mid,{noFit:true,valign:'middle'}));
+    s.ops.push({t:'text',text:String(slides.length),x:0.6,y:6.95,w:1.0,h:0.3,size:10,color:FR_C.mid,bold:false,align:'left',valign:'middle',lh:1.3,num:true});
+  };
+
+  /* 1) الغلاف */
+  let s = newSlide(FR_C.dark);
+  s.ops.push({t:'ellipse',x:11.43,y:0.95,w:1.3,h:1.3,fill:FR_C.orange});
+  s.ops.push({t:'icon',kind:'wire',x:11.68,y:1.2,w:0.8,h:0.8,color:'FFFFFF'});
+  s.ops.push(T(title,0.6,2.55,12.13,1.5,44,'FFFFFF',{valign:'bottom',min:24}));
+  s.ops.push(T((rep.subtitle||'').trim()||'مقارنة الكميات المتفق عليها بالكميات المنفذة فعلياً',0.6,4.15,12.13,1.0,22,'B0BEC5',{valign:'top',min:14}));
+  if((rep.toName||'').trim()) s.ops.push(T(`مقدم إلى: ${rep.toName.trim()}`,0.6,5.75,12.13,0.4,16,'FFFFFF',{noFit:true}));
+  const prep = [];
+  if((rep.preparedBy||'').trim()) prep.push(`إعداد:  ${rep.preparedBy.trim()}`);
+  if((rep.dateLabel||'').trim()) prep.push(`التاريخ: ${rep.dateLabel.trim()}`);
+  if(prep.length) s.ops.push(T(prep.join('  |  '),0.6,6.2,12.13,0.4,14,'B0BEC5',{noFit:true}));
+
+  /* 2) ملخص الأرقام */
+  s = newSlide();
+  const t2 = k.net===0 ? `تم تنفيذ ${frNum(k.totalExec)} متر، مطابق لإجمالي المتفق عليه`
+    : k.net>0 ? `تم تنفيذ ${frNum(k.totalExec)} متر، بزيادة ${frNum(k.net)} متر عن إجمالي المتفق عليه`
+    : `تم تنفيذ ${frNum(k.totalExec)} متر، بنقص ${frNum(-k.net)} متر عن إجمالي المتفق عليه`;
+  addTitle(s, t2);
+  const netColor = k.net===0 ? FR_C.green : (k.net>0 ? FR_C.orange : FR_C.red);
+  const kpis = [
+    {x:8.95, fill:FR_C.light, lab:'المتفق عليه', val:frNum(k.totalAgreed), lc:FR_C.mid, vc:FR_C.dark, uc:FR_C.mid},
+    {x:4.78, fill:FR_C.dark, lab:'المنفذ فعلياً', val:frNum(k.totalExec), lc:'DDE3E6', vc:'FFFFFF', uc:'DDE3E6'},
+    {x:0.6, fill:netColor, lab:'صافي الفرق', val:(k.net>0?'+':'')+frNum(k.net), lc:'FFFFFF', vc:'FFFFFF', uc:'FFFFFF'}
+  ];
+  kpis.forEach(c=>{
+    s.ops.push(R(c.x,1.75,3.78,2.7,c.fill,{r:0.1}));
+    s.ops.push(T(c.lab,c.x+0.3,1.95,3.18,0.45,16,c.lc,{align:'center',noFit:true}));
+    s.ops.push(T(c.val,c.x+0.3,2.45,3.18,1.2,c.val.length>6?48:66,c.vc,{align:'center',bold:true,noFit:true}));
+    s.ops.push(T('متر',c.x+0.3,3.7,3.18,0.45,16,c.uc,{align:'center',noFit:true}));
+  });
+  s.ops.push(T(`نسبة التنفيذ الإجمالية ${frPct(k.pct)}%`,0.6,4.9,12.13,0.45,16,FR_C.dark,{bold:true,noFit:true}));
+  s.ops.push(R(0.6,5.45,12.13,0.32,FR_C.track,{r:0.16}));
+  const fillW = Math.max(0.32, 12.13*Math.min(100,k.pct)/100);
+  s.ops.push(R(0.6+12.13-fillW,5.45,fillW,0.32,FR_C.orange,{r:0.16}));
+  const parts = [];
+  if(k.over.length) parts.push(`${k.over.length} بزيادة عن المتفق عليه`);
+  if(k.under.length) parts.push(`${frSitesCount(k.under.length)} بنقص`);
+  if(k.match.length) parts.push(`${k.match.length} مطابقة للمتفق عليه`);
+  let sumLine = `من ${frSitesCount(k.sites.length)}: ` + (parts.join('، ') || '—');
+  if(k.extra.length) sumLine += `${parts.length?'، و':' '}${frNum(k.extraSum)} م تم تركيبها ${k.extra.length===1?'بموقع '+k.extra[0].name:'في '+frSitesCount(k.extra.length,true)+' إضافية'}.`;
+  else sumLine += '.';
+  s.ops.push(T(sumLine,0.6,5.95,12.13,0.8,14,FR_C.dark,{valign:'top',min:10}));
+  addFooter(s);
+
+  /* 3) جدول المقارنة (يتقسم على أكثر من شريحة لو المواقع كتيرة) */
+  const PER = 8, pages = Math.max(1, Math.ceil(k.sites.length/PER));
+  for(let p=0;p<pages;p++){
+    s = newSlide(); addTitle(s, 'المقارنة التفصيلية لكل موقع' + (pages>1?` (${p+1}/${pages})`:''));
+    const rows = [];
+    const H = (t)=>({text:t,fill:FR_C.dark,color:'FFFFFF',bold:true,size:16});
+    rows.push(['الحالة','نسبة التنفيذ','الفرق','المنفذ فعلياً','المتفق عليه','الموقع'].map(H));
+    k.sites.slice(p*PER,p*PER+PER).forEach(c=>{
+      const kd = FR_KIND[c.kind];
+      rows.push([
+        {text:kd.word,fill:kd.color,color:'FFFFFF',bold:true,size:14},
+        {text:c.pct==null?'—':frPct(c.pct)+'%',fill:'FFFFFF',color:FR_C.dark,size:14},
+        {text:c.kind==='match'?'0':(c.diff>0?'+':'−')+frNum(Math.abs(c.diff)),fill:'FFFFFF',color:c.kind==='under'?FR_C.red:(c.kind==='over'?FR_C.orange:FR_C.dark),bold:true,size:14},
+        {text:frNum(c.executed),fill:'FFFFFF',color:FR_C.dark,bold:true,size:14},
+        {text:c.agreed==null?'—':frNum(c.agreed),fill:'FFFFFF',color:FR_C.dark,size:14},
+        {text:c.name,fill:'FFFFFF',color:FR_C.dark,size:14,align:'right'}
+      ]);
+    });
+    if(p===pages-1){
+      const nk = k.net===0?'مطابق':(k.net>0?'زيادة':'نقص');
+      rows.push([
+        {text:nk,fill:FR_C.light,color:k.net===0?FR_C.green:(k.net>0?FR_C.orange:FR_C.red),bold:true,size:14},
+        {text:frPct(k.pct)+'%',fill:FR_C.light,color:FR_C.dark,bold:true,size:14},
+        {text:k.net===0?'0':(k.net>0?'+':'−')+frNum(Math.abs(k.net)),fill:FR_C.light,color:k.net===0?FR_C.green:(k.net>0?FR_C.orange:FR_C.red),bold:true,size:14},
+        {text:frNum(k.totalExec),fill:FR_C.light,color:FR_C.dark,bold:true,size:14},
+        {text:frNum(k.totalAgreed),fill:FR_C.light,color:FR_C.dark,bold:true,size:14},
+        {text:'الإجمالي',fill:FR_C.light,color:FR_C.dark,bold:true,size:14,align:'right'}
+      ]);
+    }
+    s.ops.push({t:'table',x:0.6,y:1.7,colW:[1.7,1.8,1.7,2.1,2.1,2.73],rowH:0.52,rows});
+    let foot = 'الكميات بالمتر الطولي. نسبة التنفيذ = المنفذ فعلياً ÷ المتفق عليه.';
+    if(k.extra.length) foot += ` ${k.extra.map(e=>e.name).join(' و')} غير مدرج ضمن الكميات المتفق عليها.`;
+    s.ops.push(T(foot,0.6,6.15,12.13,0.5,10,FR_C.mid,{valign:'top',min:8}));
+    addFooter(s);
+  }
+
+  /* 4) الرسم البياني + أبرز الملاحظات */
+  s = newSlide();
+  const big = k.planned.filter(c=>c.diff!==0).sort((a,b)=>Math.abs(b.diff)-Math.abs(a.diff))[0];
+  addTitle(s, big ? `${big.name} تسجل أكبر فرق بين المتفق عليه والمنفذ`
+    : (k.planned.length ? 'الكميات المنفذة مطابقة للمتفق عليه في جميع المواقع' : 'الكميات المنفذة بكل موقع'));
+  const rev = k.sites.slice().reverse();
+  s.ops.push({t:'bar',x:0.6,y:1.6,w:8.1,h:5.1,title:'الكمية بالمتر الطولي',
+    cats:rev.map(c=>c.name),
+    s1:{name:'المتفق عليه',color:FR_C.grey,values:rev.map(c=>c.agreed==null?0:c.agreed)},
+    s2:{name:'المنفذ فعلياً',color:FR_C.orange,values:rev.map(c=>c.executed)}});
+  s.ops.push(R(9.1,1.6,3.63,5.1,FR_C.light,{r:0.1}));
+  s.ops.push(T('أبرز الملاحظات',9.4,1.8,3.03,0.5,20,FR_C.dark,{bold:true,noFit:true}));
+  const hl = frHighlights(rep,k).join('\n');
+  s.ops.push(T(hl,9.4,2.4,3.03,4.1,12,FR_C.mid,{valign:'top',min:8,lh:1.55}));
+  addFooter(s);
+
+  /* 5) ملخص الزيادة والنقص والإضافي */
+  s = newSlide();
+  const addN = k.over.length + k.extra.length, addSum = Math.round((k.overSum+k.extraSum)*100)/100;
+  let t5;
+  if(k.under.length && addN) t5 = `نقص ${frNum(k.underSum)} متراً في ${frSitesCount(k.under.length,true)} يقابله ${frNum(addSum)} متراً زيادة في ${frSitesCount(addN,true)} أخرى`;
+  else if(k.under.length) t5 = `نقص ${frNum(k.underSum)} متراً في ${frSitesCount(k.under.length,true)}`;
+  else if(addN) t5 = `زيادة ${frNum(addSum)} متراً في ${frSitesCount(addN,true)}`;
+  else t5 = 'جميع المواقع مطابقة للمتفق عليه';
+  addTitle(s, t5);
+  const cards = [
+    {x:8.95,col:FR_C.red,icon:'down',head:'مواقع بها نقص',list:k.under.map(c=>`${c.name}: نقص ${frNum(-c.diff)} م (${frPct(c.pct)}%)`),tot:`إجمالي النقص: ${frNum(k.underSum)} م`},
+    {x:4.78,col:FR_C.orange,icon:'up',head:'مواقع بها زيادة',list:k.over.map(c=>`${c.name}: زيادة ${frNum(c.diff)} م (${frPct(c.pct)}%)`),tot:`إجمالي الزيادة: ${frNum(k.overSum)} م`},
+    {x:0.6,col:FR_C.slate,icon:'plus',head:'موقع إضافي',list:k.extra.map(c=>`${c.name}: تم تركيب ${frNum(c.executed)} م`),tot:`إجمالي الإضافي: ${frNum(k.extraSum)} م`}
+  ];
+  cards.forEach(c=>{
+    s.ops.push(R(c.x,1.7,3.78,4.2,FR_C.light,{r:0.1}));
+    s.ops.push({t:'ellipse',x:c.x+2.78,y:1.95,w:0.7,h:0.7,fill:c.col});
+    s.ops.push({t:'icon',kind:c.icon,x:c.x+2.93,y:2.1,w:0.4,h:0.4,color:'FFFFFF'});
+    s.ops.push(T(c.head,c.x+0.3,1.95,2.28,0.7,18,FR_C.dark,{bold:true,noFit:true}));
+    s.ops.push(T(c.list.length?c.list.join('\n'):'لا يوجد',c.x+0.3,2.95,3.18,1.9,14,c.list.length?FR_C.mid:FR_C.grey,{valign:'top',min:9,lh:1.6}));
+    s.ops.push(T(c.tot,c.x+0.3,5.0,3.18,0.6,18,c.col,{bold:true,min:12}));
+  });
+  const t5b = k.net===0 ? `صافي الفرق: صفر. إجمالي المنفذ ${frNum(k.totalExec)} متر يطابق إجمالي المتفق عليه.`
+    : `صافي الفرق: ${frNum(Math.abs(k.net))} متر ${k.net>0?'زيادة':'نقص'}. إجمالي المنفذ ${frNum(k.totalExec)} متر مقابل ${frNum(k.totalAgreed)} متر متفق عليها.`;
+  s.ops.push(T(t5b,0.6,6.15,12.13,0.5,14,FR_C.dark,{bold:true,min:10}));
+  addFooter(s);
+
+  /* 6…) شريحة لكل موقع */
+  k.sites.forEach((c,idx)=>{
+    s = newSlide(); addTitle(s, frSiteTitle(c));
+    const kd = FR_KIND[c.kind];
+    const box = (y,fill,lab,val,lc,vc,vsz)=>{
+      s.ops.push(R(8.93,y,3.8,1.2,fill,{r:0.1}));
+      s.ops.push(T(lab,9.18,y+0.12,3.3,0.35,12,lc,{noFit:true}));
+      s.ops.push(T(val,9.18,y+0.5,3.3,0.6,vsz||28,vc,{bold:true,min:16}));
+    };
+    box(1.65,FR_C.light,'المتفق عليه',c.agreed==null?'غير مدرج':frNum(c.agreed)+' م',FR_C.mid,FR_C.dark);
+    box(3.0,FR_C.dark,'المنفذ فعلياً',frNum(c.executed)+' م','DDE3E6','FFFFFF');
+    box(4.35,kd.color,c.pct==null?'الفرق':`الفرق  |  نسبة التنفيذ ${frPct(c.pct)}%`,frDiffText(c),'FFFFFF','FFFFFF');
+    if(c.notes) s.ops.push(T(`ملاحظات: ${c.notes}`,8.93,5.75,3.8,1.0,14,FR_C.mid,{valign:'top',min:9}));
+    // شبكة الصور
+    const X0=0.6, Y0=1.65, W=7.93, Hh=4.95, g=0.15, n=c.photos.length;
+    const colW=(W-g)/2, rowH=(Hh-g)/2, xr=X0+colW+g, xl=X0;
+    let cells=[];
+    if(n===1) cells=[[X0,Y0,W,Hh]];
+    else if(n===2) cells=[[xr,Y0,colW,Hh],[xl,Y0,colW,Hh]];
+    else if(n===3) cells=[[xr,Y0,colW,Hh],[xl,Y0,colW,rowH],[xl,Y0+rowH+g,colW,rowH]];
+    else if(n>=4) cells=[[xr,Y0,colW,rowH],[xl,Y0,colW,rowH],[xr,Y0+rowH+g,colW,rowH],[xl,Y0+rowH+g,colW,rowH]];
+    if(!n){
+      s.ops.push(R(X0,Y0,W,Hh,FR_C.light,{r:0.1}));
+      s.ops.push(T('لا توجد صور مرفقة بهذا الموقع',X0,Y0,W,Hh,18,FR_C.grey,{align:'center',noFit:true}));
+    }
+    cells.forEach((cl,i)=> s.ops.push({t:'img',x:cl[0],y:cl[1],w:cl[2],h:cl[3],url:c.photos[i]}));
+    addFooter(s);
+  });
+  return slides;
+}
+
+/* ---------- الصور: تحميل وقص (cover) ---------- */
+const __frImgEl = {}, __frCrop = {};
+function frLoadImg(uri){
+  if(!uri) return Promise.resolve(null);
+  if(__frImgEl[uri]) return __frImgEl[uri];
+  return __frImgEl[uri] = new Promise(res=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=uri; });
+}
+async function frCropData(url, w, h, dpi){
+  const uri = (typeof __imgDataCache!=='undefined' && __imgDataCache[url]) || url;
+  const key = url+'|'+w+'|'+h+'|'+dpi;
+  if(__frCrop[key]) return __frCrop[key];
+  const im = await frLoadImg(uri); if(!im) return null;
+  const cw = Math.round(w*dpi), ch = Math.round(h*dpi);
+  const cv = document.createElement('canvas'); cv.width=cw; cv.height=ch;
+  const c = cv.getContext('2d');
+  const sc = Math.max(cw/im.width, ch/im.height), sw = cw/sc, sh = ch/sc;
+  c.drawImage(im,(im.width-sw)/2,(im.height-sh)/2,sw,sh,0,0,cw,ch);
+  return __frCrop[key] = cv.toDataURL('image/jpeg',0.88);
+}
+async function frPrepareImages(slides, dpi){
+  for(const s of slides) for(const o of s.ops) if(o.t==='img'){ o.data = o.url ? await frCropData(o.url,o.w,o.h,dpi) : null; }
+}
+
+/* ---------- أيقونات (مرسومة بالكود) ---------- */
+function frDrawIcon(ctx, kind, x, y, w, h, color){
+  ctx.save(); ctx.translate(x,y); ctx.scale(w/24,h/24);
+  ctx.strokeStyle = '#'+color; ctx.fillStyle = '#'+color; ctx.lineWidth = 2.4; ctx.lineCap='round'; ctx.lineJoin='round';
+  if(kind==='up'){ ctx.beginPath(); ctx.moveTo(12,20); ctx.lineTo(12,4); ctx.moveTo(5,11); ctx.lineTo(12,4); ctx.lineTo(19,11); ctx.stroke(); }
+  else if(kind==='down'){ ctx.beginPath(); ctx.moveTo(12,4); ctx.lineTo(12,20); ctx.moveTo(5,13); ctx.lineTo(12,20); ctx.lineTo(19,13); ctx.stroke(); }
+  else if(kind==='plus'){ ctx.beginPath(); ctx.moveTo(12,4); ctx.lineTo(12,20); ctx.moveTo(4,12); ctx.lineTo(20,12); ctx.stroke(); }
+  else { // سلك شائك: لفّات سلك بأشواك
+    ctx.lineWidth = 1.7;
+    for(let r=0;r<3;r++){ ctx.beginPath(); ctx.ellipse(12,12,9,5,r*Math.PI/3,0,Math.PI*2); ctx.stroke(); }
+    ctx.lineWidth = 1.5;
+    for(let i=0;i<6;i++){
+      const a=i*Math.PI/3+Math.PI/6, px=12+Math.cos(a)*8.2, py=12+Math.sin(a)*8.2;
+      ctx.beginPath(); ctx.moveTo(px-2.2,py-2.2); ctx.lineTo(px+2.2,py+2.2); ctx.moveTo(px-2.2,py+2.2); ctx.lineTo(px+2.2,py-2.2); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function frIconData(kind, color){
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  frDrawIcon(cv.getContext('2d'), kind, 0,0,256,256, color);
+  return cv.toDataURL('image/png');
+}
+
+/* ---------- الراسم (Canvas) ---------- */
+function frRRect(ctx,x,y,w,h,r){
+  r = Math.min(r||0, w/2, h/2);
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+function frDrawText(ctx,S,o){
+  const px = o.size/72*S, lh = px*(o.lh||1.3);
+  ctx.save();
+  ctx.font = `${o.bold?'700':'400'} ${px}px ${FR_FONT}`; ctx.direction='rtl'; ctx.textBaseline='middle';
+  ctx.fillStyle = '#'+o.color;
+  const lines = frWrap(ctx,o.text,o.w*S);
+  const total = lines.length*lh;
+  let y0 = o.y*S;
+  if(o.valign==='middle') y0 += (o.h*S-total)/2; else if(o.valign==='bottom') y0 += o.h*S-total;
+  const ax = o.align==='center' ? 'center' : (o.align==='left'?'left':'right');
+  ctx.textAlign = ax;
+  const ex = ax==='center' ? (o.x+o.w/2)*S : (ax==='left' ? o.x*S : (o.x+o.w)*S);
+  lines.forEach((ln,i)=> ctx.fillText(ln, ex, y0 + i*lh + lh/2));
+  ctx.restore();
+}
+function frDrawBar(ctx,S,o){
+  const x=o.x*S,y=o.y*S,w=o.w*S,h=o.h*S;
+  ctx.save(); ctx.direction='rtl';
+  const fpx = pt=>pt/72*S;
+  ctx.fillStyle='#'+FR_C.mid; ctx.font=`400 ${fpx(11)}px ${FR_FONT}`; ctx.textAlign='center';
+  ctx.fillText(o.title, x+w/2, y+fpx(14));
+  const top = y+fpx(34), bottom = y+h-fpx(46), left = x+fpx(8), right = x+w-fpx(40);
+  const all = o.s1.values.concat(o.s2.values), mx = Math.max(1,...all);
+  const step = (function(){ const raw=mx/5, p=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/p; return (f<=1?1:f<=2?2:f<=5?5:10)*p; })();
+  const top$ = Math.ceil(mx*1.08/step)*step;
+  ctx.font=`400 ${fpx(10)}px ${FR_FONT}`; ctx.strokeStyle='#E5E9EB'; ctx.lineWidth=Math.max(1,S/96);
+  for(let v=0; v<=top$+0.001; v+=step){
+    const yy = bottom-(bottom-top)*v/top$;
+    ctx.beginPath(); ctx.moveTo(left,yy); ctx.lineTo(right,yy); ctx.stroke();
+    ctx.fillStyle='#'+FR_C.mid; ctx.textAlign='left'; ctx.fillText(String(v), right+fpx(6), yy+fpx(3.5));
+  }
+  const n=o.cats.length, gw=(right-left)/n, bw=Math.min(gw*0.34, fpx(48));
+  o.cats.forEach((cat,i)=>{
+    const cx = left+gw*(i+0.5);
+    // RTL: الأول (المتفق عليه) على اليمين
+    [[o.s1,cx+0.0],[o.s2,cx-bw]].forEach(([se,bx])=>{
+      const v=se.values[i], bh=(bottom-top)*v/top$;
+      ctx.fillStyle='#'+se.color; ctx.fillRect(bx,bottom-bh,bw,bh);
+      ctx.fillStyle='#'+FR_C.dark; ctx.textAlign='center'; ctx.font=`400 ${fpx(10)}px ${FR_FONT}`;
+      ctx.fillText(frNum(v), bx+bw/2, bottom-bh-fpx(4));
+    });
+    ctx.fillStyle='#'+FR_C.dark; ctx.textAlign='center'; ctx.font=`400 ${fpx(11)}px ${FR_FONT}`;
+    let label=cat; while(label.length>3 && ctx.measureText(label).width>gw*0.95) label=label.slice(0,-1);
+    ctx.fillText(label===cat?cat:label+'…', cx, bottom+fpx(18));
+  });
+  ctx.strokeStyle='#888'; ctx.beginPath(); ctx.moveTo(left,bottom); ctx.lineTo(right,bottom); ctx.stroke();
+  // وسيلة الإيضاح
+  ctx.font=`400 ${fpx(11)}px ${FR_FONT}`; ctx.textAlign='left';
+  const ly = y+h-fpx(8);
+  const l1=o.s1.name, l2=o.s2.name, wsw=fpx(10);
+  const w2=ctx.measureText(l2).width, w1=ctx.measureText(l1).width, tot=w1+w2+wsw*2+fpx(40);
+  let lx = x+w/2+tot/2;
+  [[o.s2,l2,w2],[o.s1,l1,w1]].forEach(([se,lab,lw])=>{
+    ctx.fillStyle='#'+se.color; ctx.fillRect(lx-wsw,ly-wsw+1,wsw,wsw);
+    ctx.fillStyle='#'+FR_C.dark; ctx.textAlign='right'; ctx.fillText(lab, lx-wsw-fpx(4), ly);
+    lx -= wsw+fpx(4)+lw+fpx(24);
+  });
+  ctx.restore();
+}
+function frDrawSlide(slide, S){
+  const cv = document.createElement('canvas'); cv.width = Math.round(FR_W*S); cv.height = Math.round(FR_H*S);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#'+slide.bg; ctx.fillRect(0,0,cv.width,cv.height);
+  slide.ops.forEach(o=>{
+    if(o.t==='rect'){ ctx.fillStyle='#'+o.fill; if(o.r){ frRRect(ctx,o.x*S,o.y*S,o.w*S,o.h*S,o.r*S); ctx.fill(); } else ctx.fillRect(o.x*S,o.y*S,o.w*S,o.h*S); }
+    else if(o.t==='ellipse'){ ctx.fillStyle='#'+o.fill; ctx.beginPath(); ctx.ellipse((o.x+o.w/2)*S,(o.y+o.h/2)*S,o.w/2*S,o.h/2*S,0,0,Math.PI*2); ctx.fill(); }
+    else if(o.t==='icon') frDrawIcon(ctx,o.kind,o.x*S,o.y*S,o.w*S,o.h*S,o.color);
+    else if(o.t==='text') frDrawText(ctx,S,o);
+    else if(o.t==='bar') frDrawBar(ctx,S,o);
+    else if(o.t==='img'){
+      if(o.__el){ const im=o.__el, sc=Math.max(o.w*S/im.width,o.h*S/im.height), sw=o.w*S/sc, sh=o.h*S/sc;
+        ctx.drawImage(im,(im.width-sw)/2,(im.height-sh)/2,sw,sh,o.x*S,o.y*S,o.w*S,o.h*S); }
+      else { ctx.fillStyle='#'+FR_C.light; ctx.fillRect(o.x*S,o.y*S,o.w*S,o.h*S); }
+    }
+    else if(o.t==='table'){
+      let yy=o.y*S;
+      o.rows.forEach(row=>{
+        let xx=o.x*S; const rh=o.rowH*S;
+        // العمود الأول في المصفوفة هو الأيسر بصرياً
+        row.forEach((cell,ci)=>{
+          const cw=o.colW[ci]*S;
+          ctx.fillStyle='#'+cell.fill; ctx.fillRect(xx,yy,cw,rh);
+          ctx.strokeStyle='#'+FR_C.line; ctx.lineWidth=Math.max(1,S/96); ctx.strokeRect(xx,yy,cw,rh);
+          const al = cell.align||'center', pad=0.14;
+          frDrawText(ctx,S,{text:cell.text,x:xx/S+pad,y:yy/S,w:cw/S-pad*2,h:rh/S,size:cell.size,bold:cell.bold,color:cell.color,align:al,valign:'middle',lh:1.15});
+          xx+=cw;
+        });
+        yy+=rh;
+      });
+    }
+  });
+  return cv;
+}
+async function frRenderAll(slides, S){
+  for(const s of slides) for(const o of s.ops) if(o.t==='img' && o.url){
+    const uri = (typeof __imgDataCache!=='undefined' && __imgDataCache[o.url]) || o.url;
+    o.__el = await frLoadImg(uri);
+  }
+  return slides.map(s=>frDrawSlide(s,S));
+}
+
+/* ---------- PowerPoint (عناصر أصلية قابلة للتعديل) ---------- */
+async function frToPptx(slides, rep){
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE'; // 13.333 × 7.5
+  pptx.rtlMode = true;
+  pptx.title = (rep.title||'تقرير تأمين الأسوار');
+  const iconCache = {};
+  for(const sl of slides){
+    const ps = pptx.addSlide(); ps.background = {color: sl.bg};
+    for(const o of sl.ops){
+      if(o.t==='rect'){
+        ps.addShape(o.r?pptx.ShapeType.roundRect:pptx.ShapeType.rect,{x:o.x,y:o.y,w:o.w,h:o.h,fill:{color:o.fill},line:{color:o.fill,width:0},rectRadius:o.r?Math.min(o.r,0.5):undefined});
+      } else if(o.t==='ellipse'){
+        ps.addShape(pptx.ShapeType.ellipse,{x:o.x,y:o.y,w:o.w,h:o.h,fill:{color:o.fill},line:{color:o.fill,width:0}});
+      } else if(o.t==='icon'){
+        const key=o.kind+o.color; iconCache[key] = iconCache[key] || frIconData(o.kind,o.color);
+        ps.addImage({data:iconCache[key],x:o.x,y:o.y,w:o.w,h:o.h});
+      } else if(o.t==='text'){
+        ps.addText(o.text,{x:o.x,y:o.y,w:o.w,h:o.h,fontFace:'Arial',fontSize:o.size,bold:o.bold,color:o.color,
+          align:o.align,valign:o.valign,margin:0,rtlMode:true,lineSpacingMultiple:Math.max(1,(o.lh||1.3)/1.2),fit:'none',wrap:true});
+      } else if(o.t==='img'){
+        if(o.data) ps.addImage({data:o.data,x:o.x,y:o.y,w:o.w,h:o.h});
+        else ps.addShape(pptx.ShapeType.rect,{x:o.x,y:o.y,w:o.w,h:o.h,fill:{color:FR_C.light},line:{color:FR_C.light,width:0}});
+      } else if(o.t==='bar'){
+        const data=[{name:o.s2.name,labels:o.cats,values:o.s2.values},{name:o.s1.name,labels:o.cats,values:o.s1.values}];
+        ps.addChart(pptx.charts.BAR,data,{x:o.x,y:o.y,w:o.w,h:o.h,barDir:'col',barGrouping:'clustered',barGapWidthPct:60,
+          chartColors:[o.s2.color,o.s1.color],showLegend:true,legendPos:'b',legendFontSize:11,legendColor:FR_C.dark,
+          showValue:true,dataLabelFontSize:10,dataLabelColor:FR_C.dark,dataLabelPosition:'outEnd',
+          catAxisLabelFontSize:11,catAxisLabelColor:FR_C.dark,valAxisLabelFontSize:10,valAxisLabelColor:FR_C.mid,
+          valGridLine:{color:'E5E9EB',size:0.5},catGridLine:{style:'none'},valAxisLineShow:false,
+          showTitle:true,title:o.title,titleFontSize:11,titleColor:FR_C.mid,titleFontFace:'Arial',dataLabelFormatCode:'General'});
+      } else if(o.t==='table'){
+        const rows = o.rows.map(r=>r.map(c=>({text:c.text,options:{fill:{color:c.fill},color:c.color,bold:!!c.bold,fontSize:c.size,fontFace:'Arial',
+          align:c.align||'center',valign:'middle',rtlMode:true,border:[{type:'solid',pt:0.75,color:FR_C.line},{type:'solid',pt:0.75,color:FR_C.line},{type:'solid',pt:0.75,color:FR_C.line},{type:'solid',pt:0.75,color:FR_C.line}],margin:[0,0.1,0,0.1]}})));
+        ps.addTable(rows,{x:o.x,y:o.y,colW:o.colW,rowH:o.rows.map(()=>o.rowH)});
+      }
+    }
+  }
+  return await pptx.write({outputType:'blob'});
+}
+
+/* ---------- PDF: ملف حقيقي بصفحات بحجم الشريحة (بدون مكتبات) ---------- */
+async function frToPdfBlob(jpegs){
+  const enc = new TextEncoder(), parts = []; let len = 0; const offs = [];
+  const push = d => { const u = typeof d==='string' ? enc.encode(d) : d; parts.push(u); len += u.length; };
+  const PW = Math.round(FR_W*72*100)/100, PH = FR_H*72;
+  const n = jpegs.length;
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const obj = (id, body)=>{ offs[id]=len; push(`${id} 0 obj\n`); body(); push('\nendobj\n'); };
+  obj(1,()=>push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2,()=>push(`<< /Type /Pages /Count ${n} /Kids [${jpegs.map((_,i)=>`${3+i*3} 0 R`).join(' ')}] >>`));
+  for(let i=0;i<n;i++){
+    const pid=3+i*3, cid=pid+1, iid=pid+2, j=jpegs[i];
+    obj(pid,()=>push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /XObject << /Im0 ${iid} 0 R >> >> /Contents ${cid} 0 R >>`));
+    const content = `q ${PW} 0 0 ${PH} 0 0 cm /Im0 Do Q`;
+    obj(cid,()=>push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+    obj(iid,()=>{ push(`<< /Type /XObject /Subtype /Image /Width ${j.w} /Height ${j.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.bytes.length} >>\nstream\n`); push(j.bytes); push('\nendstream'); });
+  }
+  const xref = len, total = 3+n*3;
+  push(`xref\n0 ${total}\n0000000000 65535 f \n`);
+  for(let i=1;i<total;i++) push(String(offs[i]).padStart(10,'0')+' 00000 n \n');
+  push(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(parts,{type:'application/pdf'});
+}
+
+/* ---------- Word: صفحات أفقية بحجم الشريحة، كل صفحة = شريحة بنفس التصميم ---------- */
+async function frToDocxBlob(jpegs){
+  const ok = await ensureZipLib(); if(!ok) throw new Error('تعذّر تحميل مكتبة الضغط');
+  const zip = new JSZip(), EMU = 914400, cx = Math.round(FR_W*EMU), cy = Math.round(FR_H*EMU);
+  zip.file('[Content_Types].xml','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  let rels = '', body = '';
+  jpegs.forEach((j,i)=>{
+    const rid = 'rId'+(i+1);
+    zip.file(`word/media/s${i+1}.jpeg`, j.bytes);
+    rels += `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/s${i+1}.jpeg"/>`;
+    body += `<w:p><w:pPr>${i?'<w:pageBreakBefore/>':''}<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${i+1}" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="${i+1}" name="Slide ${i+1}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${i+1}" name="s${i+1}.jpeg"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>`;
+  });
+  zip.file('word/_rels/document.xml.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`);
+  zip.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}<w:sectPr><w:pgSz w:w="${Math.round(FR_W*1440)}" w:h="${Math.round(FR_H*1440)}" w:orient="landscape"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  return await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+
+
+/* ============================================================================
+   واجهة قسم "تأمين الأسوار" — قائمة التقارير + محرر التقرير + المعاينة والتصدير
+   ============================================================================ */
+let frList = [];
+let frCur = null;          // التقرير المفتوح حاليًا
+let frSaveTimer = null;
+let frDirty = false;
+const FR_MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+function frNowLabel(){ const d=new Date(); return `${FR_MONTHS[d.getMonth()]} ${d.getFullYear()}`; }
+function frUid(){ return 's'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function frEsc(v){ return String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function frFromRow(r){
+  return {id:r.id, title:r.title||'', subtitle:r.subtitle||'', toName:r.to_name||'', preparedBy:r.prepared_by||'', dateLabel:r.date_label||'',
+    highlights:r.highlights||'', sites:Array.isArray(r.sites)?r.sites:[], created_at:r.created_at, updated_at:r.updated_at};
+}
+function frToRow(rep){
+  return {title:rep.title, subtitle:rep.subtitle, to_name:rep.toName, prepared_by:rep.preparedBy, date_label:rep.dateLabel,
+    highlights:rep.highlights, sites:rep.sites, updated_at:new Date().toISOString()};
+}
+function frMissingTable(e){ return /fence_reports|relation|schema cache|does not exist/i.test((e&&e.message)||''); }
+
+/* ---------- قائمة التقارير ---------- */
+function renderFenceReportsView(){
+  return `<div class="view active" id="frRoot">
+    <div class="section-title" style="margin-top:0"><h2>🧱 تأمين الأسوار</h2>
+      <button class="btn primary sm" onclick="frNewReport()">➕ تقرير جديد</button></div>
+    <div style="font-size:11.5px;color:var(--muted);margin:2px 0 10px">أنشئ تقرير تركيب السلك الشائك (المتفق عليه مقابل المنفذ فعلياً) وصدّره بنفس التصميم إلى PowerPoint وPDF وWord.</div>
+    <div id="frListHost"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function frLoadList(){
+  const host = document.getElementById('frListHost'); if(!host) return;
+  try{
+    const {data,error} = await supa.from('fence_reports').select('*').order('created_at',{ascending:false});
+    if(error) throw error;
+    frList = (data||[]).map(frFromRow);
+  }catch(e){
+    host.innerHTML = frMissingTable(e)
+      ? `<div class="empty">⚠️ قسم تأمين الأسوار يحتاج تشغيل ملف <b>schema_part44.sql</b> مرة واحدة في Supabase (SQL Editor).</div>`
+      : `<div class="empty">⚠️ تعذّر التحميل: ${frEsc(e.message||'')}</div>`;
+    return;
+  }
+  if(!frList.length){ host.innerHTML = `<div class="empty">لا توجد تقارير بعد. اضغط "➕ تقرير جديد" للبدء.</div>`; return; }
+  host.innerHTML = frList.map(r=>{
+    const k = frCalc(r);
+    return `<div class="site-card" style="cursor:pointer" onclick="frOpenReport('${r.id}')">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+        <div><div style="font-weight:800;font-size:14.5px">${frEsc(r.title||'تقرير بدون عنوان')}</div>
+          <div style="font-size:11px;color:var(--muted-2);margin-top:2px">${frEsc(r.dateLabel||'')} • ${k.sites.length} موقع</div></div>
+        <div style="text-align:left;font-size:11px;color:var(--muted)">متفق: <b>${frNum(k.totalAgreed)}</b> م<br>منفذ: <b>${frNum(k.totalExec)}</b> م</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;font-size:10.5px">
+        ${k.over.length?`<span style="color:#E08A00">▲ زيادة ${k.over.length}</span>`:''}
+        ${k.under.length?`<span style="color:var(--danger)">▼ نقص ${k.under.length}</span>`:''}
+        ${k.match.length?`<span style="color:var(--success)">● مطابق ${k.match.length}</span>`:''}
+        ${k.extra.length?`<span style="color:var(--muted)">＋ إضافي ${k.extra.length}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+async function frNewReport(){
+  if(!currentProfile){ toast('سجّل الدخول أولًا'); return; }
+  const rep = {title:'تقرير تركيب السلك الشائك بالمصانع', subtitle:'مقارنة الكميات المتفق عليها بالكميات المنفذة فعلياً',
+    toName:'', preparedBy:(currentProfile.display_name||''), dateLabel:frNowLabel(), highlights:'', sites:[]};
+  try{
+    const row = Object.assign(frToRow(rep),{created_by:currentProfile.id, created_by_name:currentProfile.display_name||''});
+    delete row.updated_at;
+    const {data,error} = await supa.from('fence_reports').insert(row).select().single();
+    if(error) throw error;
+    try{ await logAudit('إنشاء تقرير تأمين الأسوار', rep.title); }catch(_){}
+    frCur = frFromRow(data); frAddSite(true); frShowEditor();
+  }catch(e){
+    console.error(e);
+    toast(frMissingTable(e) ? '⚠️ شغّل ملف schema_part44.sql في Supabase أولًا' : '🚫 تعذّر الإنشاء: '+(e.message||''));
+  }
+}
+async function frOpenReport(id){
+  let r = frList.find(x=>x.id===id);
+  try{
+    const {data,error} = await supa.from('fence_reports').select('*').eq('id',id).single();
+    if(!error && data) r = frFromRow(data);
+  }catch(_){}
+  if(!r){ toast('تعذّر فتح التقرير'); return; }
+  frCur = r; frShowEditor();
+}
+function frCloseEditor(){ frFlushSave(); frCur=null; goTo('fencereports'); }
+async function frDeleteReport(){
+  if(!isAdmin()){ toast('🚫 الحذف متاح للأدمن فقط'); return; }
+  if(!frCur || !confirm('حذف هذا التقرير نهائيًا؟')) return;
+  const {error} = await supa.from('fence_reports').delete().eq('id',frCur.id);
+  if(error){ toast('🚫 تعذّر الحذف: '+error.message); return; }
+  try{ await logAudit('حذف تقرير تأمين الأسوار', frCur.title); }catch(_){}
+  frDirty=false; frCur=null; toast('تم الحذف'); goTo('fencereports');
+}
+
+/* ---------- محرر التقرير ---------- */
+function frShowEditor(){
+  const host = document.getElementById('viewsHost'); if(!host) return;
+  host.innerHTML = `<div class="view active" id="frRoot">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <button class="btn sm" onclick="frCloseEditor()">→ رجوع للتقارير</button>
+      <span id="frSaveState" style="font-size:11px;color:var(--muted-2)">✓ محفوظ</span>
+      <span style="flex:1"></span>
+      ${isAdmin()?`<button class="btn sm" style="color:var(--danger)" onclick="frDeleteReport()">🗑️ حذف</button>`:''}
+    </div>
+    <div class="site-card">
+      <div style="font-weight:800;margin-bottom:8px">📋 بيانات التقرير</div>
+      <div class="field"><label>عنوان التقرير</label><input class="input" id="fr_title" value="${frEsc(frCur.title)}" oninput="frSet('title',this.value)"></div>
+      <div class="field"><label>العنوان الفرعي</label><input class="input" id="fr_subtitle" value="${frEsc(frCur.subtitle)}" oninput="frSet('subtitle',this.value)"></div>
+      <div class="row2">
+        <div class="field"><label>مقدم إلى</label><input class="input" id="fr_to" placeholder="مثال: مدير الإدارة" value="${frEsc(frCur.toName)}" oninput="frSet('toName',this.value)"></div>
+        <div class="field"><label>إعداد</label><input class="input" id="fr_by" value="${frEsc(frCur.preparedBy)}" oninput="frSet('preparedBy',this.value)"></div>
+      </div>
+      <div class="field"><label>التاريخ (يظهر كما تكتبه)</label><input class="input" id="fr_date" value="${frEsc(frCur.dateLabel)}" oninput="frSet('dateLabel',this.value)"></div>
+    </div>
+    <div class="section-title"><h2>📍 المواقع</h2><button class="btn primary sm" onclick="frAddSite()">➕ إضافة موقع</button></div>
+    <div id="frSitesHost"></div>
+    <div class="site-card">
+      <div style="font-weight:800;margin-bottom:4px">📝 أبرز الملاحظات (اختياري)</div>
+      <div style="font-size:10.5px;color:var(--muted-2);margin-bottom:6px">اتركها فارغة ليكتبها التطبيق تلقائيًا من أرقام المواقع. أو اكتب سطرًا لكل ملاحظة لتحل محل التلقائي.</div>
+      <textarea class="input" id="fr_hl" rows="4" oninput="frSet('highlights',this.value)">${frEsc(frCur.highlights)}</textarea>
+    </div>
+    <div class="site-card" id="frSummary"></div>
+    <div class="site-card">
+      <div style="font-weight:800;margin-bottom:8px">🖨️ المعاينة والتصدير <span style="font-weight:400;font-size:10.5px;color:var(--muted-2)">(نفس التصميم في الكل)</span></div>
+      <button class="btn block" onclick="frPreview()">👁️ معاينة الشرائح</button>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px">
+        <button class="btn primary" onclick="frExport('pptx')">📊 PowerPoint</button>
+        <button class="btn primary" onclick="frExport('pdf')">📄 PDF</button>
+        <button class="btn primary" onclick="frExport('docx')">📝 Word</button>
+      </div>
+      <div id="frExpState" style="font-size:11px;color:var(--muted);margin-top:8px;display:none"></div>
+    </div>
+  </div>`;
+  frRenderSites(); frRefreshLive();
+}
+function frSet(key,val){ frCur[key]=val; frChanged(); if(key==='highlights') frRefreshLive(); }
+function frChanged(){
+  frDirty = true;
+  const st=document.getElementById('frSaveState'); if(st) st.textContent='… جاري الحفظ';
+  clearTimeout(frSaveTimer); frSaveTimer = setTimeout(frFlushSave, 1200);
+}
+async function frFlushSave(){
+  clearTimeout(frSaveTimer);
+  if(!frCur || !frDirty) return;
+  frDirty = false;
+  try{
+    const {error} = await supa.from('fence_reports').update(frToRow(frCur)).eq('id',frCur.id);
+    if(error) throw error;
+    const st=document.getElementById('frSaveState'); if(st) st.textContent='✓ محفوظ';
+  }catch(e){
+    frDirty = true; console.error(e);
+    const st=document.getElementById('frSaveState'); if(st) st.textContent='⚠️ لم يُحفظ — تحقق من الاتصال';
+  }
+}
+window.addEventListener('beforeunload',()=>{ if(frDirty) frFlushSave(); });
+
+function frAddSite(silent){
+  frCur.sites.push({id:frUid(), name:'', agreed:'', noPlan:false, executed:'', notes:'', photos:[]});
+  if(!silent){ frChanged(); frRenderSites(); frRefreshLive();
+    const cards=document.querySelectorAll('.fr-site'); const last=cards[cards.length-1]; if(last){ last.scrollIntoView({behavior:'smooth',block:'center'}); const i=last.querySelector('input'); if(i) setTimeout(()=>i.focus(),350); } }
+}
+function frSiteById(id){ return frCur.sites.find(s=>s.id===id); }
+function frSiteSet(id,key,val){
+  const s=frSiteById(id); if(!s) return; s[key]=val; frChanged(); frRefreshLive(id);
+}
+function frToggleNoPlan(id,on){
+  const s=frSiteById(id); if(!s) return; s.noPlan=on; if(on) s.agreed='';
+  const inp=document.getElementById('fr_ag_'+id); if(inp){ inp.disabled=on; if(on) inp.value=''; }
+  frChanged(); frRefreshLive(id);
+}
+function frMoveSite(id,dir){
+  const i=frCur.sites.findIndex(s=>s.id===id), j=i+dir; if(i<0||j<0||j>=frCur.sites.length) return;
+  [frCur.sites[i],frCur.sites[j]]=[frCur.sites[j],frCur.sites[i]]; frChanged(); frRenderSites(); frRefreshLive();
+}
+function frDelSite(id){
+  const s=frSiteById(id); if(!s) return;
+  if(!confirm('حذف الموقع "'+(s.name||'بدون اسم')+'" من التقرير؟')) return;
+  frCur.sites = frCur.sites.filter(x=>x.id!==id); frChanged(); frRenderSites(); frRefreshLive();
+}
+function frRenderSites(){
+  const host=document.getElementById('frSitesHost'); if(!host) return;
+  if(!frCur.sites.length){ host.innerHTML='<div class="empty">لا توجد مواقع. اضغط "➕ إضافة موقع".</div>'; return; }
+  host.innerHTML = frCur.sites.map((s,i)=>`
+    <div class="site-card fr-site" id="frs_${s.id}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <b style="font-size:13px">موقع ${i+1}</b>
+        <div style="display:flex;gap:4px">
+          <button class="btn sm" onclick="frMoveSite('${s.id}',-1)" ${i===0?'disabled':''}>↑</button>
+          <button class="btn sm" onclick="frMoveSite('${s.id}',1)" ${i===frCur.sites.length-1?'disabled':''}>↓</button>
+          <button class="btn sm" style="color:var(--danger)" onclick="frDelSite('${s.id}')">🗑️</button>
+        </div>
+      </div>
+      <div class="field"><label>اسم الموقع / المصنع</label><input class="input" value="${frEsc(s.name)}" placeholder="مثال: المروة" oninput="frSiteSet('${s.id}','name',this.value)"></div>
+      <div class="row2">
+        <div class="field"><label>المتفق عليه (متر)</label><input class="input" id="fr_ag_${s.id}" type="number" inputmode="decimal" step="any" value="${frEsc(s.agreed)}" ${s.noPlan?'disabled':''} oninput="frSiteSet('${s.id}','agreed',this.value)"></div>
+        <div class="field"><label>المنفذ فعلياً (متر)</label><input class="input" type="number" inputmode="decimal" step="any" value="${frEsc(s.executed)}" oninput="frSiteSet('${s.id}','executed',this.value)"></div>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:11.5px;margin-bottom:8px"><input type="checkbox" ${s.noPlan?'checked':''} onchange="frToggleNoPlan('${s.id}',this.checked)"> موقع إضافي (غير مدرج ضمن المتفق عليه)</label>
+      <div id="frlive_${s.id}" style="margin-bottom:8px"></div>
+      <div class="field"><label>ملاحظات</label><textarea class="input" rows="2" oninput="frSiteSet('${s.id}','notes',this.value)">${frEsc(s.notes)}</textarea></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">الصور (حتى 4)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+        ${(s.photos||[]).map((u,pi)=>`<div style="position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1px solid var(--border)">
+          <img src="${frEsc(u)}" style="width:100%;height:100%;object-fit:cover" onclick="frViewPhoto('${s.id}',${pi})">
+          <button onclick="frDelPhoto('${s.id}',${pi})" style="position:absolute;top:2px;left:2px;background:var(--danger);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:11px">✕</button></div>`).join('')}
+        ${(s.photos||[]).length<4?`<label style="aspect-ratio:1;border:1.5px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:22px;color:var(--muted)">＋
+          <input type="file" accept="image/*" multiple style="display:none" onchange="frAddPhotos('${s.id}',this)"></label>`:''}
+      </div>
+    </div>`).join('');
+  frCur.sites.forEach(s=>frRefreshLive(s.id));
+}
+function frRefreshLive(onlyId){
+  if(!frCur) return;
+  const k = frCalc(frCur);
+  frCur.sites.forEach((s,i)=>{
+    if(onlyId && s.id!==onlyId) return;
+    const el=document.getElementById('frlive_'+s.id); if(!el) return;
+    const c=k.sites[i], kd=FR_KIND[c.kind];
+    el.innerHTML = `<span style="display:inline-block;background:#${kd.color};color:#fff;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:700">${frDiffText(c)}</span>
+      ${c.pct!=null?`<span style="font-size:11.5px;color:var(--muted);margin-inline-start:8px">نسبة التنفيذ ${frPct(c.pct)}%</span>`:''}`;
+  });
+  const sm=document.getElementById('frSummary');
+  if(sm){
+    const box=(l,v,col)=>`<div style="background:var(--panel-2);border-radius:10px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;${col?'color:'+col:''}">${v}</div><div style="font-size:10px;color:var(--muted-2)">${l}</div></div>`;
+    sm.innerHTML = `<div style="font-weight:800;margin-bottom:8px">📊 الملخص التلقائي</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        ${box('المتفق عليه (م)',frNum(k.totalAgreed))}${box('المنفذ فعلياً (م)',frNum(k.totalExec))}${box('صافي الفرق (م)',(k.net>0?'+':'')+frNum(k.net),k.net===0?'var(--success)':(k.net>0?'#E08A00':'var(--danger)'))}
+      </div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.7">
+        نسبة التنفيذ الإجمالية <b>${frPct(k.pct)}%</b> • زيادة: ${k.over.length} موقع (${frNum(k.overSum)} م) • نقص: ${k.under.length} موقع (${frNum(k.underSum)} م) • مطابق: ${k.match.length} • إضافي: ${k.extra.length} (${frNum(k.extraSum)} م)</div>`;
+  }
+}
+
+/* ---------- الصور ---------- */
+async function frAddPhotos(siteId, input){
+  const s=frSiteById(siteId); if(!s) return;
+  const files=[...input.files]; input.value='';
+  const room = 4-(s.photos||[]).length; if(!files.length) return;
+  if(files.length>room) toast(`الحد الأقصى 4 صور — سيتم رفع أول ${room} فقط`);
+  toast('⏳ جاري رفع الصور...');
+  s.photos = s.photos||[];
+  for(const f of files.slice(0,room)){
+    try{
+      const blob = await compressImageFile(f, 1600, 0.82);
+      const path = `fence-reports/${frCur.id}/${siteId}-${Date.now()}-${Math.random().toString(36).slice(2,6)}.jpg`;
+      const {error} = await supa.storage.from('camera-photos').upload(path, blob, {contentType:'image/jpeg', upsert:true});
+      if(error) throw error;
+      const {data:pub} = supa.storage.from('camera-photos').getPublicUrl(path);
+      s.photos.push(pub.publicUrl);
+    }catch(e){ console.error(e); toast('🚫 تعذّر رفع صورة: '+(e.message||'')); }
+  }
+  frChanged(); frRenderSites(); frRefreshLive();
+}
+function frViewPhoto(id,i){ const s=frSiteById(id); if(s&&typeof openGalleryLightbox==='function') openGalleryLightbox(s.photos,i); }
+function frDelPhoto(siteId, idx){
+  const s=frSiteById(siteId); if(!s) return;
+  if(!confirm('حذف الصورة من التقرير؟')) return;
+  s.photos.splice(idx,1); frChanged(); frRenderSites(); frRefreshLive();
+}
+
+/* ---------- المعاينة والتصدير ---------- */
+async function frBuild(S, dpi){
+  await frFlushSave();
+  const urls = []; frCur.sites.forEach(s=>(s.photos||[]).forEach(u=>u&&urls.push(u)));
+  if(urls.length && typeof urlsToDataUris==='function') await urlsToDataUris(urls);
+  const slides = frBuildSlides(frCur);
+  if(dpi) await frPrepareImages(slides, dpi);
+  return slides;
+}
+function frExpState(msg){ const el=document.getElementById('frExpState'); if(el){ el.style.display=msg?'block':'none'; el.textContent=msg||''; } }
+async function frPreview(){
+  try{
+    frExpState('⏳ جاري تجهيز المعاينة...');
+    const slides = await frBuild(96, 0);
+    const cvs = await frRenderAll(slides, 96);
+    frExpState('');
+    openModal(`<div style="max-height:80vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>معاينة التقرير (${cvs.length} شريحة)</b><button class="btn sm" onclick="closeModal()">✕ إغلاق</button></div>
+      <div id="frPrevHost" style="display:flex;flex-direction:column;gap:10px"></div></div>`);
+    const h=document.getElementById('frPrevHost');
+    cvs.forEach((c,i)=>{ const im=new Image(); im.src=c.toDataURL('image/jpeg',0.85); im.style.cssText='width:100%;border-radius:8px;border:1px solid var(--border)'; im.alt='شريحة '+(i+1); h.appendChild(im); });
+  }catch(e){ console.error(e); frExpState(''); toast('🚫 تعذّرت المعاينة: '+(e.message||'')); }
+}
+function frCanvasToJpeg(cv, q){
+  return new Promise((res,rej)=>cv.toBlob(async b=>{ if(!b) return rej(new Error('تعذّر إنشاء الصورة')); res({w:cv.width,h:cv.height,bytes:new Uint8Array(await b.arrayBuffer())}); },'image/jpeg',q||0.92));
+}
+function frFileName(ext){
+  const t=((frCur&&frCur.title)||'تقرير-تأمين-الأسوار').replace(/[\\/:*?"<>|]+/g,' ').trim().slice(0,60);
+  return `${t}-${new Date().toISOString().slice(0,10)}.${ext}`;
+}
+async function frExport(kind){
+  if(!frCur) return;
+  if(!frCur.sites.length){ toast('أضف موقعًا واحدًا على الأقل'); return; }
+  try{
+    frExpState('⏳ جاري التجهيز...');
+    if(kind==='pptx'){
+      const ok = await ensurePptxLib(); if(!ok) throw new Error('تعذّر تحميل مكتبة PowerPoint (تحقق من الإنترنت)');
+      const slides = await frBuild(96, 170);
+      const blob = await frToPptx(slides, frCur);
+      await saveOrShareFile(blob, frFileName('pptx'));
+    } else {
+      const slides = await frBuild(96, 0);
+      const cvs = await frRenderAll(slides, 144);               // 1920×1080
+      const jp = [];
+      for(const c of cvs) jp.push(await frCanvasToJpeg(c, 0.92));
+      const blob = kind==='pdf' ? await frToPdfBlob(jp) : await frToDocxBlob(jp);
+      await saveOrShareFile(blob, frFileName(kind));
+    }
+    frExpState('');
+  }catch(e){ console.error(e); frExpState(''); toast('🚫 تعذّر التصدير: '+(e.message||'')); }
 }
 
 </script>
