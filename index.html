@@ -9945,7 +9945,7 @@ function rescaleLayoutElements(elements, sx, sy){
   if(sx===1 && sy===1) return elements; // مفيش تغيير مطلوب
   return elements.map(el=>{
     const e = {...el};
-    if(e.type==='image' || e.type==='rect'){ e.x*=sx; e.y*=sy; if(e.w!=null)e.w*=sx; if(e.h!=null)e.h*=sy; }
+    if(e.type==='image' || e.type==='rect'){ e.x*=sx; e.y*=sy; if(e.w!=null)e.w*=sx; if(e.h!=null)e.h*=sy; if(e.type==='image'){ const k=(sx+sy)/2; if(e.camNameSize) e.camNameSize*=k; if(e.camNameGap!=null) e.camNameGap*=k; } }
     else if(e.type==='pin'){ e.x*=sx; e.y*=sy; }
     else if(e.type==='text'){ e.x*=sx; e.y*=sy; if(e.fontSize) e.fontSize*=((sx+sy)/2); }
     else if(e.type==='arrow'){ e.x1*=sx; e.y1*=sy; e.x2*=sx; e.y2*=sy; }
@@ -10406,6 +10406,7 @@ function renderSelectedElementTools(){
       <input type="range" min="0" max="360" value="${el.rotation||0}" style="flex:1" oninput="changeSelectedTextRotation(this.value)">
       <span style="font-size:10.5px;min-width:34px">${el.rotation||0}°</span>
     </div>`:''}
+    ${(el.type==='image' && isCameraDeviceType(el.deviceType)) ? camNameSectionHTML(el) : ''}
   </div>`;
 }
 function updateArrowLineWidth(val){
@@ -10691,11 +10692,12 @@ function drawLayoutElement(ctx, el, selected){
     ctx.translate(el.x+el.w/2, el.y+el.h/2);
     ctx.rotate((el.rotation||0)*Math.PI/180);
     ctx.drawImage(el.img, -el.w/2, -el.h/2, el.w, el.h);
-    if(el.label){
+    if(el.label && !el.camHideLabel){
       ctx.font='bold 12px Arial'; ctx.textAlign='center'; ctx.fillStyle='#fff';
       ctx.fillText(el.label, 0, el.h/2+16);
     }
     ctx.restore();
+    drawCameraName(ctx, el); // 🏷️ اسم الكاميرا (اختياري — لا يظهر إلا لو المستخدم كتب اسمًا)
   }
   if(selected){
     const box = layoutElementBBox(el);
@@ -10911,10 +10913,156 @@ function setLayoutTool(t){
   if(rotHost) rotHost.style.display = t==='maprotate' ? 'flex' : 'none';
   redrawLayoutCanvas();
 }
+
+/* ============================================================
+   🏷️ اسم الكاميرا على الخريطة — بيظهر "وراء" الكاميرا حسب اتجاه عدستها
+   ------------------------------------------------------------
+   • اتجاه الكاميرا = زاوية دوران الأيقونة (الدوران الحالي)، والعدسة بتشاور:
+       - Govision Bullet (رسم) والكاميرا العادية: لليمين عند 0°
+       - Govision Bullet (صورة حقيقية): لليسار عند 0° (حسب شكل الصورة نفسها)
+   • الاسم بيتحسب مكانه تلقائيًا ويتحرك مع تدوير الكاميرا، من غير ما يغطي الأيقونة.
+   • كل الخصائص (الاسم/اللون/الحجم/المكان...) اختيارية وبتتحفظ مع الخريطة.
+   • مفيش أي تغيير في أي عنصر موجود: الاسم مش بيظهر غير لما تكتبه.
+   ============================================================ */
+const CAM_NAME_KEYS = ['camName','camNameColor','camNameSize','camNamePos','camNameBold','camNameBg','camNameHalo','camNameRotate','camNameGap','camHideLabel'];
+const CAM_FACING_AT_ZERO = { camera:0, govision_bullet:0, govision_bullet_real:180 };
+function pickCamNameProps(el){
+  const o = {};
+  CAM_NAME_KEYS.forEach(k=>{ if(el[k] !== undefined) o[k] = el[k]; });
+  return o;
+}
+// نقطة مركز نص الاسم + زاويته (للرسم)، محسوبة من اتجاه الكاميرا وحجم النص
+function camNameLayout(ctx, el){
+  const fs = el.camNameSize || 18;
+  const lines = String(el.camName).split('\n');
+  ctx.font = `${el.camNameBold===false?'':'bold '}${fs}px Arial`;
+  const tw = Math.max(...lines.map(l=>ctx.measureText(l).width), 1);
+  const lh = fs*1.25, th = lines.length*lh;
+  const cx = el.x+el.w/2, cy = el.y+el.h/2;
+  const rot = (el.rotation||0)*Math.PI/180;
+  const faceRad = ((CAM_FACING_AT_ZERO[el.deviceType]||0) + (el.rotation||0))*Math.PI/180;
+  const f = {x:Math.cos(faceRad), y:Math.sin(faceRad)};
+  const pos = el.camNamePos || 'behind';
+  const u = pos==='behind' ? {x:-f.x,y:-f.y} : pos==='front' ? f : pos==='top' ? {x:0,y:-1} : {x:0,y:1};
+  // نصف طول الأيقونة (المدوّرة) على اتجاه u
+  const ul = { x: u.x*Math.cos(rot)+u.y*Math.sin(rot), y: -u.x*Math.sin(rot)+u.y*Math.cos(rot) };
+  const supIcon = Math.abs(ul.x)*el.w/2 + Math.abs(ul.y)*el.h/2;
+  // زاوية النص: أفقي دائمًا مقروء، أو بيلف مع الكاميرا (ويتقلب لو هيبقى مقلوب)
+  let tAng = 0;
+  if(el.camNameRotate){ tAng = rot; const c = Math.cos(tAng); if(c < -1e-6) tAng += Math.PI; }
+  const ex = {x:Math.cos(tAng), y:Math.sin(tAng)}, ey = {x:-Math.sin(tAng), y:Math.cos(tAng)};
+  const supText = Math.abs(u.x*ex.x+u.y*ex.y)*tw/2 + Math.abs(u.x*ey.x+u.y*ey.y)*th/2;
+  const gap = el.camNameGap!=null ? el.camNameGap : 6;
+  const d = supIcon + gap + supText;
+  return { px: cx+u.x*d, py: cy+u.y*d, tAng, lines, fs, lh, tw, th };
+}
+function drawCameraName(ctx, el){
+  if(!el || el.type!=='image' || !el.camName || !isCameraDeviceType(el.deviceType)) return;
+  ctx.save();
+  const L = camNameLayout(ctx, el);
+  ctx.translate(L.px, L.py); ctx.rotate(L.tAng);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const color = el.camNameColor || '#FFFFFF';
+  if(el.camNameBg){
+    const pad = Math.max(4, L.fs*0.3), w = L.tw+pad*2, h = L.th+pad, r = Math.min(10, h/2);
+    ctx.fillStyle = 'rgba(11,18,32,0.72)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(-w/2, -h/2, w, h, r); else ctx.rect(-w/2, -h/2, w, h);
+    ctx.fill();
+  }
+  ctx.font = `${el.camNameBold===false?'':'bold '}${L.fs}px Arial`;
+  ctx.lineJoin = 'round';
+  L.lines.forEach((line,i)=>{
+    const y = (i-(L.lines.length-1)/2)*L.lh;
+    if(el.camNameHalo!==false){
+      // حدّ خفيف عكس لون الاسم عشان يتقري على أي خلفية
+      const hex = color.replace('#',''); const lum = (parseInt(hex.slice(0,2),16)*0.299 + parseInt(hex.slice(2,4),16)*0.587 + parseInt(hex.slice(4,6),16)*0.114)||0;
+      ctx.strokeStyle = lum > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = Math.max(2, L.fs/5);
+      ctx.strokeText(line, 0, y);
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(line, 0, y);
+  });
+  ctx.restore();
+}
+function setCamNameProp(prop, val, rerender){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || el.type!=='image' || !isCameraDeviceType(el.deviceType)) return;
+  const now = Date.now();
+  if(!window.__camNameHistTs || now-window.__camNameHistTs > 1200) pushLayoutHistory(); // نقطة تراجع (Undo) واحدة لكل سلسلة تعديل
+  window.__camNameHistTs = now;
+  if(prop==='camName' && (val===''||val==null)) delete el.camName; else el[prop] = val;
+  redrawLayoutCanvas();
+  if(rerender) renderSelectedElementTools();
+}
+function toggleCamNameProp(prop, defaultOn){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex]; if(!el) return;
+  const cur = el[prop]===undefined ? !!defaultOn : !!el[prop];
+  setCamNameProp(prop, !cur, true);
+}
+function clearCamName(){
+  const el = layoutEditor.elements[layoutEditor.selectedIndex];
+  if(!el || !el.camName) return;
+  pushLayoutHistory(); delete el.camName; redrawLayoutCanvas(); renderSelectedElementTools();
+  toast('🗑️ تم مسح اسم الكاميرا');
+}
+function applyCamNameStyleToAll(){
+  const src = layoutEditor.elements[layoutEditor.selectedIndex]; if(!src) return;
+  const cams = layoutEditor.elements.filter(e=> e!==src && e.type==='image' && isCameraDeviceType(e.deviceType));
+  if(!cams.length){ toast('مفيش كاميرات تانية في الخريطة دي'); return; }
+  if(!confirm(`تطبيق نفس اللون والحجم والمكان على ${cams.length} كاميرا أخرى؟\n(الأسماء نفسها مش هتتغيّر)`)) return;
+  pushLayoutHistory();
+  const styleKeys = CAM_NAME_KEYS.filter(k=>k!=='camName');
+  cams.forEach(e=> styleKeys.forEach(k=>{ if(src[k]!==undefined) e[k]=src[k]; else delete e[k]; }));
+  redrawLayoutCanvas();
+  toast(`✅ تم تطبيق التنسيق على ${cams.length} كاميرا`);
+}
+function camNameSectionHTML(el){
+  const pos = el.camNamePos || 'behind';
+  const on = (k,def)=> el[k]===undefined ? !!def : !!el[k];
+  const posBtn = (k,l)=>`<button class="btn sm ${pos===k?'primary':''}" style="padding:4px 8px" onclick="setCamNameProp('camNamePos','${k}',true)">${l}</button>`;
+  const tgl = (k,def,l)=>`<button class="btn sm ${on(k,def)?'primary':''}" style="padding:4px 8px" onclick="toggleCamNameProp('${k}',${def?'true':'false'})">${on(k,def)?'✓ ':''}${l}</button>`;
+  const nameVal = String(el.camName||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  return `<div style="border-top:1px solid var(--border-soft);margin-top:10px;padding-top:10px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:6px">🏷️ اسم الكاميرا (بيظهر وراء الكاميرا حسب اتجاهها)</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input class="input" type="text" id="camNameInput" maxlength="60" style="flex:1" placeholder="اكتب اسم الكاميرا — مثال: CAM-12" value="${nameVal}" oninput="setCamNameProp('camName', this.value)">
+      <button class="btn sm danger" style="padding:4px 8px" title="مسح الاسم" onclick="clearCamName()">🗑️</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <span style="font-size:10.5px;color:var(--muted-2)">🎨 لون الاسم:</span>
+      <input type="color" value="${el.camNameColor||'#FFFFFF'}" style="width:34px;height:30px;border-radius:6px;border:1px solid var(--border);cursor:pointer" oninput="setCamNameProp('camNameColor', this.value)">
+      ${['#FFFFFF','#FFD60A','#38D9C9','#FF3B30','#4ADE80','#60A5FA','#000000'].map(c=>`<span title="${c}" style="width:20px;height:20px;border-radius:50%;background:${c};border:2px solid ${(el.camNameColor||'#FFFFFF').toLowerCase()===c.toLowerCase()?'var(--primary,#38D9C9)':'var(--border)'};cursor:pointer;display:inline-block" onclick="setCamNameProp('camNameColor','${c}',true)"></span>`).join('')}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <span style="font-size:10.5px;color:var(--muted-2)">🔠 حجم الاسم:</span>
+      <input type="range" min="8" max="120" value="${el.camNameSize||18}" style="flex:1" oninput="setCamNameProp('camNameSize', parseInt(this.value)); this.nextElementSibling.textContent=this.value">
+      <span style="font-size:10.5px;min-width:26px">${el.camNameSize||18}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <span style="font-size:10.5px;color:var(--muted-2)">📍 مكان الاسم:</span>
+      ${posBtn('behind','🔙 وراء الكاميرا')}${posBtn('front','➡️ قدامها')}${posBtn('top','⬆️ فوق')}${posBtn('bottom','⬇️ تحت')}
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+      ${tgl('camNameBold',true,'𝗕 عريض')}${tgl('camNameHalo',true,'حدّ للوضوح')}${tgl('camNameBg',false,'خلفية داكنة')}${tgl('camNameRotate',false,'يلف مع الكاميرا')}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <span style="font-size:10.5px;color:var(--muted-2)">↔️ المسافة عن الكاميرا:</span>
+      <input type="range" min="0" max="80" value="${el.camNameGap!=null?el.camNameGap:6}" style="flex:1" oninput="setCamNameProp('camNameGap', parseInt(this.value)); this.nextElementSibling.textContent=this.value">
+      <span style="font-size:10.5px;min-width:22px">${el.camNameGap!=null?el.camNameGap:6}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+      ${tgl('camHideLabel',false,'إخفاء كلمة "'+(el.label||'كاميرا').replace(/"/g,'')+'" تحت الأيقونة')}
+      <button class="btn sm" style="padding:4px 8px" onclick="applyCamNameStyleToAll()">🎯 نفس التنسيق لكل الكاميرات</button>
+    </div>
+    <p style="font-size:9.5px;color:var(--muted-2);margin-top:6px">💡 لف الكاميرا بمقبض الدوران وهتلاقي الاسم بيتحرك معاها ويفضل وراها. لو الاسم طلع قدام العدسة بدل وراها، اختار "قدامها".</p>
+  </div>`;
+}
 function layoutElementsForHistory(){
   const cleaned = layoutEditor.elements
     .filter(el=> el != null) // إزالة أي فجوة/عنصر فارغ في المصفوفة (سبب محتمل لفقد البيانات)
-    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,deviceType:el.deviceType,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color} : el)
+    .map(el=> el.type==='image' ? {type:'image',src:el.src,label:el.label,deviceType:el.deviceType,x:el.x,y:el.y,w:el.w,h:el.h,rotation:el.rotation||0,color:el.color,...pickCamNameProps(el)} : el)
     .map(el=>{
       // 🛡️ تنظيف دفاعي: أي خصائص مؤقتة داخلية (بادئة __ زي __resizeStartBBox وقت
       // التكبير الحي) ممنوع تتسرّب لقاعدة البيانات تحت أي ظرف
