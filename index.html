@@ -10278,8 +10278,39 @@ function redrawLayoutCanvas(){
   }
   renderSelectedElementTools();
 }
+/* 🛠️ إصلاح "الكتابة حرف حرف": كل تعديل بيعمل redrawLayoutCanvas() اللي كانت بتبني لوحة الخصائص من الصفر،
+   فخانة الكتابة (أو السلايدر) اللي إنت واقف فيها بتتمسح وبتتعمل واحدة جديدة وبتفقد المؤشر بعد كل حرف.
+   الحل: لو انت بتكتب/بتسحب جوه اللوحة، بنحدّث القيم والنصوص "في مكانها" من غير ما نلمس الخانة اللي شغال عليها. */
+function _syncPanelDom(oldRoot, newRoot){
+  const a = [...oldRoot.querySelectorAll('*')], b = [...newRoot.querySelectorAll('*')];
+  if(a.length !== b.length) return false;
+  for(let i=0;i<a.length;i++) if(a[i].tagName !== b[i].tagName) return false;
+  const active = document.activeElement;
+  for(let i=0;i<a.length;i++){
+    const o = a[i], n = b[i], isActive = (o === active);
+    for(const at of [...n.attributes]){
+      if(isActive && at.name === 'value') continue;
+      if(o.getAttribute(at.name) !== at.value) o.setAttribute(at.name, at.value);
+    }
+    for(const at of [...o.attributes]){ if(!n.hasAttribute(at.name)) o.removeAttribute(at.name); }
+    if(isActive) continue;
+    if(o.tagName === 'INPUT'){ if(n.hasAttribute('value') && o.value !== n.getAttribute('value')) o.value = n.getAttribute('value'); }
+    else if(o.tagName === 'TEXTAREA'){ if(o.value !== n.textContent) o.value = n.textContent; }
+    else if(!o.children.length && o.textContent !== n.textContent){ o.textContent = n.textContent; }
+  }
+  return true;
+}
 function renderSelectedElementTools(){
   const host = document.getElementById('selectedElementToolsHost');
+  if(!host) return;
+  const ae = document.activeElement;
+  const interacting = ae && host.contains(ae) && ['INPUT','TEXTAREA','SELECT'].includes(ae.tagName);
+  if(!interacting){ renderSelectedElementToolsRaw(host); return; }
+  const tmp = document.createElement('div');
+  renderSelectedElementToolsRaw(tmp);
+  if(!_syncPanelDom(host, tmp)) renderSelectedElementToolsRaw(host); // لو شكل اللوحة اتغيّر فعلًا (نوع عنصر مختلف) نبنيها من جديد
+}
+function renderSelectedElementToolsRaw(host){
   if(!host) return;
   const el = layoutEditor.elements[layoutEditor.selectedIndex];
   if(!el){ host.innerHTML = ''; return; }
