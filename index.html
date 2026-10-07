@@ -4298,6 +4298,14 @@ function renderSettingsView(){
         <button class="btn" onclick="exportAllJson()">🗂️ JSON</button>
       </div>
       <button class="btn primary block" style="margin-top:10px" onclick="exportAllFormats()">⬇️ تصدير الكل (ZIP واحد شامل كل الصيغ)</button>
+      <p style="font-size:10.5px;color:var(--muted-2);margin:10px 0 4px">🎨 PDF وWord وPowerPoint والصورة وZIP بتطلع بتصاميم الأقسام (أزرق · رادار · كحلي وذهبي · نيلي). لو عايز الشكل القديم:</p>
+      <div class="btn-row">
+        <button class="btn sm" onclick="exportAllPdf__classic()">PDF (قديم)</button>
+        <button class="btn sm" onclick="exportAllWord__classic()">Word (قديم)</button>
+        <button class="btn sm" onclick="exportAllPptx__classic()">PowerPoint (قديم)</button>
+        <button class="btn sm" onclick="exportAllImage__classic()">صورة (قديم)</button>
+        <button class="btn sm" onclick="exportAllFormats__classic()">ZIP (قديم)</button>
+      </div>
     </div>
 
     <div class="section-title"><h2>النسخ الاحتياطي والاستعادة</h2></div>
@@ -13322,8 +13330,8 @@ function renderReportsCenterView(){
     <button class="btn primary block" onclick="goTo('settings')">📤 مركز التصدير الشامل (كل الصيغ)</button>
   </div>`;
 }
-async function exportSectionPicker(section, factoryId){
-  toast('جاري تجميع البيانات...');
+async function exportSectionPicker(section, factoryId, __collect){
+  if(!__collect) toast('جاري تجميع البيانات...');
   const configs = {
     fence_sections: async()=>{
       const {data} = await supa.from('fence_sections').select('*').order('factory_id').order('created_at',{ascending:false});
@@ -13556,6 +13564,7 @@ async function exportSectionPicker(section, factoryId){
     const opts = { getImageUrl, getImageUrls, rawObjects: raw, chartImages: cfg.chartImages, chartData: cfg.chartData, customBodyHtml: cfg.customBodyHtml };
     const preloadUrls = unifiedAllImageUrls(data, opts);
     if(preloadUrls.length) await urlsToDataUris(preloadUrls);
+    if(__collect) return {title, headers:cfg.headers, rows:data, opts};
     openUnifiedExportPicker(title, cfg.headers, data, opts);
   }catch(e){ console.error(e); toast('🚫 تعذّر تجميع البيانات: '+(e.message||'')); }
 }
@@ -15229,7 +15238,7 @@ async function buildAllReportHtml(d){
 }
 
 /* ---------- PDF شامل ---------- */
-async function exportAllPdf(){
+async function exportAllPdf__classic(){
   const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PDF'); return; }
   toast('جاري تجميع كل بيانات التطبيق والصور...');
   try{
@@ -15244,7 +15253,7 @@ async function exportAllPdf(){
 }
 
 /* ---------- Word شامل ---------- */
-async function exportAllWord(){
+async function exportAllWord__classic(){
   toast('جاري تجميع كل بيانات التطبيق والصور...');
   try{
     const d = await gatherAllAppData();
@@ -15257,7 +15266,7 @@ async function exportAllWord(){
 }
 
 /* ---------- PowerPoint شامل ---------- */
-async function exportAllPptx(){
+async function exportAllPptx__classic(){
   const ok = await ensurePptxLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة PowerPoint'); return; }
   toast('جاري تجميع كل بيانات التطبيق والصور...');
   try{
@@ -15377,7 +15386,7 @@ async function exportAllPptx(){
 }
 
 /* ---------- صورة Infographic شاملة ---------- */
-async function exportAllImage(){
+async function exportAllImage__classic(){
   toast('جاري تجميع كل بيانات التطبيق...');
   try{
     const d = await gatherAllAppData();
@@ -15454,7 +15463,7 @@ async function exportAllJson(){
 }
 
 /* ---------- تصدير الكل في ملف ZIP واحد ---------- */
-async function exportAllFormats(){
+async function exportAllFormats__classic(){
   const zipOk = await ensureZipLib();
   if(!zipOk){ toast('⚠️ تعذّر تحميل مكتبة الضغط ZIP — سيتم تصدير الصيغ منفصلة بدلًا من ذلك'); 
     await exportAllExcel(); await exportAllPdf(); await exportAllJson(); return; }
@@ -16754,10 +16763,10 @@ async function tpRenderJpegs(slides, S){
   }
   return out;
 }
-async function tpOutput(format, slides, title){
-  await tpPrepare(slides, format==='pptx'?160:150);
+async function tpOutput(format, slides, title, lo){
+  await tpPrepare(slides, lo?110:(format==='pptx'?160:150));
   if(format==='pptx') return {blob: await tpToPptx(slides,title), ext:'pptx'};
-  const jpegs = await tpRenderJpegs(slides, format==='pdf'?170:150);
+  const jpegs = await tpRenderJpegs(slides, lo?(format==='pdf'?125:110):(format==='pdf'?170:150));
   if(format==='pdf') return {blob: await frToPdfBlob(jpegs), ext:'pdf'};
   return {blob: await frToDocxBlob(jpegs), ext:'docx'};
 }
@@ -16769,7 +16778,7 @@ function tpBlueChrome(c, s, title, icon, n){
   s.ops.push(E(12.15,0.51,0.58,0.58,th.brand), I(icon,12.31,0.67,0.26,0.26));
   s.ops.push(R(0.6,0.61,1.9,0.38,th.soft,{r:0.19}), T(c.date,0.6,0.61,1.9,0.38,11.5,th.brand,{bold:true,align:'center',noFit:true}));
   s.ops.push(T(`${TP_SYS}  ·  ${c.footLabel}`,3.0,7.0,9.73,0.3,10,th.mute,{noFit:true}));
-  s.ops.push(R(0.6,6.97,0.62,0.34,th.brand,{r:0.17}), T(String(n),0.6,6.97,0.62,0.34,10,'FFFFFF',{bold:true,align:'center',noFit:true}));
+  s.ops.push(R(0.6,6.97,0.62,0.34,th.brand,{r:0.17}), T(String(n),0.6,6.97,0.62,0.34,10,'FFFFFF',{bold:true,align:'center',noFit:true,pg:true}));
 }
 function tpBlueCover(c, title, D){
   const {th,R,E,T,I} = c, s = c.newSlide(th.bg);
@@ -16971,7 +16980,7 @@ function tpRadarChrome(c,s,title,n){
   s.ops.push(T(title,4.0,0.4,8.39,0.8,24,th.ink,{bold:true,min:14,lh:1.15}));
   s.ops.push(R(0.6,0.63,1.9,0.34,null,{r:0.17,line:{c:th.line,w:1}}), T(c.date,0.6,0.63,1.9,0.34,11,th.brand,{align:'center',noFit:true}));
   s.ops.push(T(`${TP_SYS}  •  ${c.footLabel}`,3.0,7.0,9.73,0.3,10,th.mute,{noFit:true}));
-  s.ops.push(T(String(n),0.6,6.98,0.7,0.32,10,th.brand,{bold:true,align:'left',noFit:true}));
+  s.ops.push(T(String(n),0.6,6.98,0.7,0.32,10,th.brand,{bold:true,align:'left',noFit:true,pg:true}));
 }
 function tpRadarRings(c,s,cx,cy,withDots){
   const {th,E,L} = c, a=[0.22,0.34,0.46,0.58], d=[6.4,4.9,3.4,1.9];
@@ -17045,7 +17054,7 @@ function tpRadarClosing(c,title){
 function tpNavyChrome(c,s,title,n){
   const {th,R,T,L} = c;
   s.ops.push(R(12.57,0.71,0.16,0.16,th.gold), T(title,3.8,0.4,8.57,0.8,26,th.brand,{bold:true,min:14,lh:1.15}), T(c.date,0.6,0.62,3.0,0.36,12,th.mute,{align:'left',noFit:true}));
-  s.ops.push(L(0.6,6.95,12.73,6.95,th.line,0.75), T(TP_SYS,8.53,7.02,4.2,0.3,10,th.mute,{noFit:true}), T(c.footLabel,3.2,7.02,6.93,0.3,10,th.mute,{align:'center',noFit:true}), T(String(n),0.6,7.02,1.2,0.3,10,th.brand,{bold:true,align:'left',noFit:true}));
+  s.ops.push(L(0.6,6.95,12.73,6.95,th.line,0.75), T(TP_SYS,8.53,7.02,4.2,0.3,10,th.mute,{noFit:true}), T(c.footLabel,3.2,7.02,6.93,0.3,10,th.mute,{align:'center',noFit:true}), T(String(n),0.6,7.02,1.2,0.3,10,th.brand,{bold:true,align:'left',noFit:true,pg:true}));
 }
 function tpNavyCover(c,title,D){
   const {th,R,E,T,L,I} = c, s = c.newSlide(th.bg);
@@ -17077,7 +17086,7 @@ function tpIndigoChrome(c,s,title,n,D){
   s.ops.push(R(12.11,0.5,0.46,0.46,th.brand,{r:0.1}), I('layers',12.23,0.62,0.22,0.22));
   s.ops.push(R(2.7,0.56,1.5,0.34,th.brand,{r:0.17}), T(`${tpN(D.records)} سجل`,2.7,0.56,1.5,0.34,11,'FFFFFF',{bold:true,align:'center',noFit:true}));
   s.ops.push(R(0.75,0.56,1.8,0.34,th.soft,{r:0.17}), T(c.date,0.75,0.56,1.8,0.34,11,th.brand,{bold:true,align:'center',noFit:true}));
-  s.ops.push(T(`${TP_SYS}  ·  ${c.footLabel}`,3.0,7.02,9.83,0.3,10,th.mute,{noFit:true}), T(String(n),0.5,7.02,1.0,0.3,10,th.brand,{bold:true,align:'left',noFit:true}));
+  s.ops.push(T(`${TP_SYS}  ·  ${c.footLabel}`,3.0,7.02,9.83,0.3,10,th.mute,{noFit:true}), T(String(n),0.5,7.02,1.0,0.3,10,th.brand,{bold:true,align:'left',noFit:true,pg:true}));
 }
 function tpIndigoCover(c,title,D){
   const {th,R,T} = c, s = c.newSlide(th.bg);
@@ -17278,6 +17287,109 @@ async function tplTryExport(format, title, headers, rows, opts){
   return true;
 }
 
+
+
+/* ===== مركز التصدير الشامل بالتصاميم الأربعة ===== */
+async function tplCollectCamTypes(){
+  const {data} = await supa.from('camera_type_counts').select('*'); const rows = data||[];
+  if(!rows.length) return null;
+  const headers = ['المصنع','العدد','الشركة المصنعة','الدقة','النوع'];
+  const dd = rows.map(r=>[factoriesData.find(x=>x.id===r.factory_id)?.name||'—', r.count, r.brand||'—', r.resolution||'—', r.camera_type||'—']);
+  const {byBrand, byRes, byType} = aggregateCameraTypeRows(rows);
+  const byFactory = {}; rows.forEach(r=>{ const fn=factoriesData.find(x=>x.id===r.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+r.count; });
+  return {title:'أنواع الكاميرات بالمصانع - كل المصانع', headers, rows:dd, opts:{rawObjects:rows, chartData:{byFactory,byBrand,byRes,byType}}};
+}
+async function tplCollectSections(){
+  const order=['cameras','camtypes','cameras_added','downcams_fixed','cameramods','faults','lighting','ups','racks','switches','servers','room_entry_reports','store_room','store_container'];
+  const out=[];
+  for(const sec of order){
+    try{
+      const r = sec==='camtypes' ? await tplCollectCamTypes() : await exportSectionPicker(sec,null,true);
+      if(r && r.rows && r.rows.length && tpMatch(r.title,r.headers,r.rows,r.opts)) out.push(r);
+    }catch(e){ console.warn('تعذّر تجميع قسم',sec,e); }
+  }
+  return out;
+}
+// يبني شرائح التقرير الشامل: غلاف عام + كل قسم بتصميمه + ختام
+async function tplCenterBuild(){
+  const secs = await tplCollectSections();
+  if(!secs.length) return null;
+  const all = [], covers = [];
+  let records=0, photos=0;
+  secs.forEach(s=>{
+    const m = tpMatch(s.title,s.headers,s.rows,s.opts);
+    const sl = tpBuild(m.key,m.cfg,s.title,s.headers,s.rows,s.opts);
+    covers.push(sl.slice(0,2));
+    sl.pop();                       // ختام القسم يُستبدل بختام واحد في النهاية
+    all.push(...sl);
+    records += s.rows.length;
+    if(s.opts&&(s.opts.getImageUrl||s.opts.getImageUrls)) s.rows.forEach((_,i)=>{ photos += unifiedRowImages(s.opts,i).length; });
+  });
+  const title = 'التصدير الشامل لكل بيانات التطبيق';
+  const c = tpCtx('blue',title,title); c.title=title; c.date=tpDate();
+  tpBlueCover(c,title,{records,photos}); tpBlueClosing(c,title);
+  const slides = [c.slides[0], ...all, c.slides[1]];
+  slides.forEach((sl,i)=> sl.ops.forEach(o=>{ if(o.pg) o.text=String(i+1); }));
+  return {slides, covers, title};
+}
+async function tplCenterImage(covers){
+  const W=40, cw=Math.round(TP_W*W), ch=Math.round(TP_H*W), pad=16, head=90;
+  const rows = covers.length;
+  const cv=document.createElement('canvas'); cv.width=cw*2+pad*3; cv.height=head+rows*(ch+pad)+pad;
+  const x=cv.getContext('2d'); x.fillStyle='#EEF3FC'; x.fillRect(0,0,cv.width,cv.height);
+  x.fillStyle='#0F172A'; x.font=`700 34px ${FR_FONT}`; x.direction='rtl'; x.textAlign='center'; x.fillText('التصدير الشامل — '+TP_SYS, cv.width/2, 58);
+  for(let r=0;r<rows;r++) covers[r].forEach((sl,k)=>{ x.drawImage(tpDrawSlide(sl,W), cv.width-pad-cw-k*(cw+pad), head+r*(ch+pad)); });
+  return await new Promise(res=>cv.toBlob(res,'image/png'));
+}
+async function tplCenterRun(kind){
+  toast('جاري تجميع كل الأقسام بتصاميمها...');
+  const built = await tplCenterBuild();
+  if(!built){ toast('لا توجد بيانات للتصدير'); return null; }
+  if(kind==='image'){ return {blob: await tplCenterImage(built.covers), ext:'png'}; }
+  if(kind==='pptx'){ if(!(await ensurePptxLib())) throw new Error('مكتبة PowerPoint'); }
+  if(kind==='docx'){ if(!(await ensureZipLib())) throw new Error('مكتبة Word'); }
+  const out = await tpOutput(kind, built.slides, built.title, true);
+  Object.keys(__tpImg).forEach(k=>{ delete __tpImg[k]; });
+  return out;
+}
+async function tplCenterOne(kind){
+  try{
+    const out = await tplCenterRun(kind); if(!out) return;
+    await saveOrShareFile(out.blob, exportCenterFilename(out.ext));
+    await logAudit('تصدير شامل بالتصاميم', kind.toUpperCase());
+  }catch(e){ console.error(e); toast('⚠️ تعذّر التصميم الجديد، تم استخدام الشكل السابق'); return await ({pdf:exportAllPdf__classic,docx:exportAllWord__classic,pptx:exportAllPptx__classic,image:exportAllImage__classic})[kind](); }
+}
+async function exportAllPdf(){ return tplCenterOne('pdf'); }
+async function exportAllWord(){ return tplCenterOne('docx'); }
+async function exportAllPptx(){ return tplCenterOne('pptx'); }
+async function exportAllImage(){ return tplCenterOne('image'); }
+async function exportAllFormats(){
+  const zipOk = await ensureZipLib();
+  if(!zipOk){ return exportAllFormats__classic(); }
+  try{
+    toast('جاري تجهيز كل الصيغ بالتصاميم... قد يستغرق دقيقة');
+    const d = await gatherAllAppData();
+    const zip = new JSZip(), folder = zip.folder(exportCenterFilename(''));
+    folder.file('التقرير-الشامل.xlsx', await (await buildAllExcelWorkbook(d)).xlsx.writeBuffer());
+    folder.file('التقرير-الشامل.json', JSON.stringify(d,null,2));
+    const esc = v => `"${String(v??'').replace(/"/g,'""')}"`;
+    const csv = ['﻿== المصانع ==', ['المصنع','الشاشات','منقطعة','الكاميرات','تعمل','منقطعة'].map(esc).join(',')];
+    d.sites.forEach(s=> csv.push([s.name,s.screens,s.screensDown,s.camerasTotal,s.camerasUp,s.camerasDown].map(esc).join(',')));
+    folder.file('التقرير-الشامل.csv', csv.join('\n'));
+    const built = await tplCenterBuild();
+    if(built){
+      for(const k of ['pdf','docx','pptx']){
+        if(k==='pptx' && !(await ensurePptxLib())) continue;
+        const o = await tpOutput(k, built.slides, built.title, true); folder.file('التقرير-الشامل.'+o.ext, o.blob);
+      }
+      folder.file('التقرير-الشامل.png', await tplCenterImage(built.covers));
+      Object.keys(__tpImg).forEach(k=>{ delete __tpImg[k]; });
+    }
+    const blob = await zip.generateAsync({type:'blob'});
+    await saveOrShareFile(blob, exportCenterFilename('zip'));
+    await logAudit('تصدير شامل ZIP بالتصاميم','');
+  }catch(e){ console.error(e); toast('⚠️ تعذّر التصميم الجديد، تم استخدام الشكل السابق'); return exportAllFormats__classic(); }
+}
 
 </script>
 </body>
