@@ -923,6 +923,8 @@ let currentSession = null;
 let currentProfile = null; // {id, display_name, role, status, permissions}
 let realtimeChannel = null;
 
+/* 🔐 تنظيف النصوص قبل عرضها داخل HTML — يمنع حقن أكواد (XSS) من أي حقل نصي يكتبه مستخدم */
+function esc(v){ return (v===null||v===undefined) ? '' : String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function isAdmin(){ return currentProfile && currentProfile.role === 'admin'; }
 function hasPerm(key){ return isAdmin() || !!(currentProfile && currentProfile.permissions && currentProfile.permissions[key]); }
 
@@ -1279,7 +1281,7 @@ async function submitAuth(){
       const { data, error } = await supa.auth.signUp({ email, password: pass, options:{ data:{ display_name: name || email.split('@')[0] } } });
       if(error) throw error;
       if(data && data.user && !data.session){
-        toast('✅ تم إنشاء الحساب — إذا طُلب تأكيد البريد الإلكتروني، تحقق من بريدك ثم سجّل الدخول');
+        toast('✅ تم إنشاء الحساب — الحساب الجديد يحتاج موافقة الأدمن قبل الدخول، وإذا طُلب تأكيد البريد تحقق من بريدك');
         switchAuthMode('login');
         return;
       }
@@ -1372,7 +1374,7 @@ async function loadProfileAndEnterApp(){
     if(error) throw error;
     currentProfile = profile;
     if(profile.status === 'suspended'){
-      toast('🚫 هذا الحساب موقوف من الأدمن — تواصل مع إبراهيم');
+      toast('🚫 هذا الحساب موقوف أو بانتظار موافقة الأدمن — تواصل مع إبراهيم');
       await doSignOut();
       return;
     }
@@ -1402,7 +1404,7 @@ function enterApp(){
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('appShell').style.display = 'block';
   const roleLabels = { admin:'👑 Admin', manager:'مدير', supervisor:'مشرف', colleague:'زميل' };
-  document.getElementById('userBadge').innerHTML = `${currentProfile.display_name} · <span class="pill ${isAdmin()?'role-admin':''}" style="padding:1px 7px;font-size:9.5px">${roleLabels[currentProfile.role]||currentProfile.role}</span>`;
+  document.getElementById('userBadge').innerHTML = `${esc(currentProfile.display_name)} · <span class="pill ${isAdmin()?'role-admin':''}" style="padding:1px 7px;font-size:9.5px">${roleLabels[currentProfile.role]||currentProfile.role}</span>`;
   const lastLocation = loadLastLocation();
   currentView = lastLocation ? lastLocation.view : 'dashboard';
   currentViewCtx = lastLocation ? lastLocation.ctx : null;
@@ -1558,7 +1560,7 @@ async function renderTrainingAccessPanel(){
     </div>`).join('') : '<div class="empty">مفيش حد ممنوح الصلاحية دي غيرك حاليًا.</div>';
   if(selectHost){
     const eligible = users.filter(u=> u.id!==currentProfile.id && !accessRows.some(r=>r.user_id===u.id));
-    selectHost.innerHTML = eligible.length ? eligible.map(u=>`<option value="${u.id}">${u.display_name}</option>`).join('') : '<option value="">لا يوجد مستخدمين آخرين متاحين</option>';
+    selectHost.innerHTML = eligible.length ? eligible.map(u=>`<option value="${u.id}">${esc(u.display_name)}</option>`).join('') : '<option value="">لا يوجد مستخدمين آخرين متاحين</option>';
   }
 }
 async function grantTrainingAccess(){
@@ -3207,7 +3209,7 @@ function renderDashboard(){
             <div class="perf-t">
               <small>تقييم الأداء العام</small>
               <b style="color:${perf.color}">${perf.score}/100 — تقدير ${perf.grade}</b>
-              ${badges.length ? `<div class="perf-badges">${badges.map(b=>`<span class="pill" style="font-size:10px">${b.icon} ${b.label}</span>`).join('')}</div>` : `<div style="font-size:11px;color:var(--muted-2);margin-top:2px">${currentProfile.display_name}</div>`}
+              ${badges.length ? `<div class="perf-badges">${badges.map(b=>`<span class="pill" style="font-size:10px">${b.icon} ${b.label}</span>`).join('')}</div>` : `<div style="font-size:11px;color:var(--muted-2);margin-top:2px">${esc(currentProfile.display_name)}</div>`}
             </div>
           </div>
         </section>
@@ -3318,9 +3320,9 @@ function renderAuditLogList(){
   host.innerHTML = list.map(r=>`
     <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px">
       <div style="display:flex;justify-content:space-between;color:var(--muted-2);font-size:10.5px;margin-bottom:2px">
-        <span>${new Date(r.ts).toLocaleString('ar-EG')}</span><span>👤 ${r.actor_name}</span>
+        <span>${new Date(r.ts).toLocaleString('ar-EG')}</span><span>👤 ${esc(r.actor_name)}</span>
       </div>
-      <div><b style="color:var(--accent)">${r.action}</b> — ${r.details||''}</div>
+      <div><b style="color:var(--accent)">${esc(r.action)}</b> — ${esc(r.details||'')}</div>
     </div>`).join('');
 }
 async function openAuditLogExportPicker(){
@@ -3396,9 +3398,9 @@ function renderUsersList(){
     <div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div>
-          <div class="site-name" style="font-size:14px">${u.display_name}</div>
+          <div class="site-name" style="font-size:14px">${esc(u.display_name)}</div>
           <div class="site-meta">${u.role==='admin'?'👑 Admin (لا يمكن تغييره)':({manager:'مدير',supervisor:'مشرف',colleague:'زميل'}[u.role]||u.role)}</div>
-          <div style="font-size:11px;color:var(--muted-2);margin-top:2px;text-align:right" dir="ltr">📧 ${u.email||'—'}</div>
+          <div style="font-size:11px;color:var(--muted-2);margin-top:2px;text-align:right" dir="ltr">📧 ${esc(u.email||'—')}</div>
         </div>
         <span class="pill ${u.status==='active'?'ok':'bad'}">${u.status==='active'?'فعّال':'موقوف'}</span>
       </div>
@@ -3475,7 +3477,7 @@ async function openUserActivityLog(userId, userName){
     host.innerHTML = data.map(r=>`
       <div style="border-bottom:1px solid var(--border-soft);padding:9px 2px;font-size:12.5px">
         <div style="color:var(--muted-2);font-size:10.5px;margin-bottom:2px">${new Date(r.ts).toLocaleString('ar-EG')}</div>
-        <div><b style="color:var(--accent)">${r.action}</b>${r.details?' — '+r.details:''}</div>
+        <div><b style="color:var(--accent)">${esc(r.action)}</b>${r.details?' — '+r.details:''}</div>
       </div>`).join('');
   }catch(e){
     const host = document.getElementById('userActivityHost');
@@ -3684,7 +3686,7 @@ function renderReportView(){
         </select>
       </div>
     </div>
-    <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="rm_notes">${reportMeta.notes}</textarea></div>
+    <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="rm_notes">${esc(reportMeta.notes)}</textarea></div>
 
     <div class="site-card">
       <div class="site-name" style="font-size:14px;margin-bottom:8px">🔄 تسليم واستلام الوردية</div>
@@ -4191,7 +4193,7 @@ function renderSettingsView(){
     <div class="section-title" style="margin-top:0"><h2>الإعدادات</h2></div>
     <div class="site-card">
       <div class="site-name" style="font-size:14px">معلومات الحساب</div>
-      <p style="font-size:12.5px;color:var(--muted);margin-top:8px">الاسم: ${currentProfile.display_name}<br>الدور: ${isAdmin()?'👑 Admin':currentProfile.role}<br>البريد: ${currentSession.user.email}</p>
+      <p style="font-size:12.5px;color:var(--muted);margin-top:8px">الاسم: ${esc(currentProfile.display_name)}<br>الدور: ${isAdmin()?'👑 Admin':currentProfile.role}<br>البريد: ${currentSession.user.email}</p>
       <button class="btn sm block" style="margin-top:8px" onclick="openChangeMyPasswordForm()">🔑 تغيير كلمة المرور</button>
     </div>
     <div class="btn-row">
@@ -4521,9 +4523,9 @@ function renderMaintenanceList(){
           ${t.scheduled_date<today && t.status!=='تم التنفيذ'? `<span class="pill bad" style="font-size:9px">متأخرة</span>`:''}
         </div>
       </div>
-      ${t.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>المشكلة:</b> ${t.problem_description}</p>`:''}
+      ${t.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>المشكلة:</b> ${esc(t.problem_description)}</p>`:''}
       ${t.required_action? `<p style="font-size:12px;color:var(--muted)"><b>المطلوب:</b> ${t.required_action}</p>`:''}
-      ${t.notes? `<p style="font-size:12px;color:var(--muted)">${t.notes}</p>`:''}
+      ${t.notes? `<p style="font-size:12px;color:var(--muted)">${esc(t.notes)}</p>`:''}
       <div class="row2" style="margin-top:8px">
         <div>
           <div style="font-size:10.5px;color:var(--muted-2);text-align:center;margin-bottom:4px">قبل</div>
@@ -4637,7 +4639,7 @@ function openMaintenanceForm(factoryId, id){
     <div class="modal-head"><h3>${isNew?'+ جدولة صيانة وقائية':'تعديل مهمة صيانة'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>المصنع</label><select class="input" id="mt_factory">${factoriesData.map(s=>`<option value="${s.id}" ${factoryId===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div>
     <div class="field"><label>نوع الصيانة</label><input class="input" id="mt_type" value="${d.maintenance_type||''}" placeholder="مثال: تنظيف عدسات الكاميرات"></div>
-    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="mt_problem">${d.problem_description||''}</textarea></div>
+    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="mt_problem">${esc(d.problem_description||'')}</textarea></div>
     <div class="field"><label>الإجراء المطلوب</label><textarea class="input" id="mt_required">${d.required_action||''}</textarea></div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="mt_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
@@ -4647,7 +4649,7 @@ function openMaintenanceForm(factoryId, id){
     <div class="field"><label>التكرار</label><select class="input" id="mt_recur">
       ${['','شهري','ربع سنوي','سنوي'].map(r=>`<option value="${r}" ${d.recurrence===r?'selected':''}>${r||'مرة واحدة'}</option>`).join('')}
     </select></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="mt_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="mt_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveMaintenanceTask('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
@@ -4752,7 +4754,7 @@ function renderUnifiedDownCamerasModal(factoryId){
           ${photo? `<img src="${photo}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${photo}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
           <div style="flex:1">
             <div style="font-size:13px;font-weight:700">${c.device_name}</div>
-            ${c.description? `<div style="font-size:10.5px;color:var(--muted)">${c.description}</div>`:''}
+            ${c.description? `<div style="font-size:10.5px;color:var(--muted)">${esc(c.description)}</div>`:''}
             <div style="font-size:10px;color:var(--muted-2)">انقطعت: ${new Date(c.reported_at).toLocaleDateString('ar-EG')} — <span class="pill ${FAULT_SEVERITY_COLOR[c.severity]}" style="font-size:9px">${c.severity}</span></div>
           </div>
         </div>
@@ -4972,7 +4974,7 @@ const DEVICE_STATS_CONFIG = {
 function renderDeviceStatsPlaceholder(view, cfg, factoryId){
   if(!factoryId){
     return `<div class="view active">
-      <div class="section-title" style="margin-top:0"><h2>${cfg.icon} ${cfg.title} بالمصانع</h2></div>
+      <div class="section-title" style="margin-top:0"><h2>${cfg.icon} ${esc(cfg.title)} بالمصانع</h2></div>
       <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">الإجمالي العام ظاهر مباشرة تحت. دوس على أي مصنع عشان تفتح تفاصيله الكاملة.</p>
       <div id="devStatsFactoryPickerHost"><div class="empty">جاري التحميل...</div></div>
     </div>`;
@@ -5009,7 +5011,7 @@ async function loadDeviceStatsFactoryPicker(view, cfg){
   const factoriesWithData = factoriesData.filter(f=> byFactoryCount[f.id]);
 
   host.innerHTML = `
-    <div class="section-title" style="margin-top:0"><h2 style="font-size:13px">📊 ${cfg.icon} إجمالي ${cfg.title} في جميع المصانع</h2></div>
+    <div class="section-title" style="margin-top:0"><h2 style="font-size:13px">📊 ${cfg.icon} إجمالي ${esc(cfg.title)} في جميع المصانع</h2></div>
     <div class="mini-grid">
       <div class="mini"><div class="n" style="color:var(--accent)">${all.length}</div><div class="t">الإجمالي العام</div></div>
       ${Object.entries(byStatus).map(([s,c])=>`<div class="mini"><div class="n">${c}</div><div class="t">${s}</div></div>`).join('')}
@@ -5078,7 +5080,7 @@ function renderDeviceStatsContent(view, cfg){
       ${Object.entries(byStatus).slice(0,3).map(([s,c])=>`<div class="mini"><div class="n">${c}</div><div class="t">${s}</div></div>`).join('')}
     </div>
     ${charts.filter(Boolean).map(c=>`<img src="${c.dataUrl}" style="width:100%;border-radius:10px;margin:10px 0" alt="رسم بياني">`).join('')}
-    ${cfg.hasBrand ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:-4px">💡 لو رسم "الشركات المصنعة" فاضي أو ناقص، ادخل حقل "الشركة المصنعة/الماركة" لكل ${cfg.title} من زر ✏️ تعديل تحت.</p>`:''}
+    ${cfg.hasBrand ? `<p style="font-size:10.5px;color:var(--muted-2);margin-top:-4px">💡 لو رسم "الشركات المصنعة" فاضي أو ناقص، ادخل حقل "الشركة المصنعة/الماركة" لكل ${esc(cfg.title)} من زر ✏️ تعديل تحت.</p>`:''}
     <button class="btn block" onclick="openDeviceStatsExportPicker('${view}')">🖨️ طباعة / تصدير (كل الصيغ)</button>
     <div id="devStatsListHost" style="margin-top:10px">${rows.map(r=>renderDeviceStatsCard(r,cfg)).join('')}</div>
   `;
@@ -5091,7 +5093,7 @@ function renderDeviceStatsCard(r, cfg){
       <b style="font-size:13px">${name}</b><span class="pill ${isOk?'ok':'bad'}" style="font-size:9.5px">${r.status||'—'}</span>
     </div>
     <div style="font-size:11px;color:var(--muted)">${cfg.extraFields.map(ef=>r[ef.key]!=null&&r[ef.key]!==''?`${ef.label}: ${r[ef.key]}`:'').filter(Boolean).join(' — ')}</div>
-    ${r.notes? `<div style="font-size:10.5px;color:var(--muted-2)">${r.notes}</div>`:''}
+    ${r.notes? `<div style="font-size:10.5px;color:var(--muted-2)">${esc(r.notes)}</div>`:''}
     ${r.photo_url? `<img src="${r.photo_url}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
   </div>`;
 }
@@ -5409,7 +5411,7 @@ function renderAddedCamerasList(){
         ${c.photo_url? `<img src="${c.photo_url}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:zoom-in;flex:none" onclick="openImageLightbox('${c.photo_url}')">` : `<div style="width:56px;height:56px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;flex:none">📷</div>`}
         <div style="flex:1">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="site-name" style="font-size:13px">${c.camera_name}</div>
+            <div class="site-name" style="font-size:13px">${esc(c.camera_name)}</div>
             <span class="pill ${c.status==='تعمل'?'ok':'bad'}" style="font-size:9px">${c.status}</span>
           </div>
           <div class="site-meta" style="font-size:10.5px">${c.camera_number?'كود: '+c.camera_number+' — ':''}${[c.brand,c.resolution,c.camera_type].filter(Boolean).join(' / ')||'—'}</div>
@@ -5665,7 +5667,7 @@ function renderTrainingContent(){
     const l = TRAINING_LESSONS[trainingLessonIndex];
     host.innerHTML = `
       <div class="site-card">
-        <div class="site-name" style="font-size:15px">${l.icon} ${l.title}</div>
+        <div class="site-name" style="font-size:15px">${l.icon} ${esc(l.title)}</div>
         <p style="font-size:13px;line-height:1.9;margin-top:8px">${l.content}</p>
         <div style="background:var(--bg-2);border-radius:10px;padding:10px;margin-top:10px">
           <div style="font-size:11.5px;color:var(--accent);font-weight:700">❓ سؤال محتمل من الإدارة:</div>
@@ -5737,13 +5739,13 @@ async function loadMyTasks(){
     const f = factoriesData.find(x=>x.id===t.factory_id);
     return `<div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div><div class="site-name" style="font-size:14px">${t.title}</div><div class="site-meta">${f?f.name+' — ':''}${t.assigned_to_name||''}</div></div>
+        <div><div class="site-name" style="font-size:14px">${esc(t.title)}</div><div class="site-meta">${f?f.name+' — ':''}${esc(t.assigned_to_name||'')}</div></div>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
           <span class="pill ${TASK_STATUS_COLOR[t.status]}">${t.status}</span>
           ${t.due_date<today && t.status!=='مكتملة'? `<span class="pill bad" style="font-size:9px">متأخرة</span>`:''}
         </div>
       </div>
-      ${t.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${t.description}</p>`:''}
+      ${t.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${esc(t.description)}</p>`:''}
       <div style="font-size:10.5px;color:var(--muted-2);margin-top:4px">تاريخ الاستحقاق: ${fmtDateAr(t.due_date)}</div>
       <div class="btn-row" style="margin-top:8px">
         ${t.status!=='مكتملة'? `<select class="input" style="width:auto;font-size:11px;padding:6px 8px" onchange="updateTaskStatus('${t.id}', this.value)">
@@ -5778,16 +5780,16 @@ async function openTaskAssignForm(taskId){
   try{ const {data} = await supa.from('profiles').select('*').eq('status','active').order('display_name'); users = data||[]; }catch(e){}
   openModal(`
     <div class="modal-head"><h3>${isNew?'+ تعيين مهمة جديدة':'✏️ تعديل المهمة'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>الفني المسؤول</label><select class="input" id="tk_user">${users.map(u=>`<option value="${u.id}" ${t?.assigned_to===u.id?'selected':''}>${u.display_name}</option>`).join('')}</select></div>
+    <div class="field"><label>الفني المسؤول</label><select class="input" id="tk_user">${users.map(u=>`<option value="${u.id}" ${t?.assigned_to===u.id?'selected':''}>${esc(u.display_name)}</option>`).join('')}</select></div>
     <div class="field"><label>المصنع (اختياري)</label><select class="input" id="tk_factory"><option value="">— بدون —</option>${factoriesData.map(f=>`<option value="${f.id}" ${t?.factory_id===f.id?'selected':''}>${f.name}</option>`).join('')}</select></div>
-    <div class="field"><label>عنوان المهمة</label><input class="input" id="tk_title" value="${t?.title||''}" placeholder="مثال: فحص كاميرا البوابة الرئيسية"></div>
-    <div class="field"><label>التفاصيل</label><textarea class="input" id="tk_desc">${t?.description||''}</textarea></div>
+    <div class="field"><label>عنوان المهمة</label><input class="input" id="tk_title" value="${esc(t?.title||'')}" placeholder="مثال: فحص كاميرا البوابة الرئيسية"></div>
+    <div class="field"><label>التفاصيل</label><textarea class="input" id="tk_desc">${esc(t?.description||'')}</textarea></div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="tk_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${(t?.priority||'متوسطة')===p?'selected':''}>${p}</option>`).join('')}</select></div>
       <div class="field"><label>الحالة</label><select class="input" id="tk_status">${['قيد الانتظار','قيد التنفيذ','مكتملة'].map(s=>`<option ${(t?.status||'قيد الانتظار')===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>تاريخ الاستحقاق</label><input class="input" type="date" id="tk_due" value="${t?.due_date||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="tk_notes">${t?.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="tk_notes">${esc(t?.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveTaskAssign('${isNew?'':taskId}')">💾 ${isNew?'تعيين المهمة':'حفظ التعديلات'}</button>
   `);
 }
@@ -5879,17 +5881,17 @@ function renderHandoverList(){
     const factory = factoriesData.find(x=>x.id===h.factory_id);
     return `<div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div><div class="site-name" style="font-size:14px">${h.shift_name||'شيفت'} — ${factory?factory.name:'عام (كل المصانع)'}</div>
-        <div class="site-meta">سلّم: ${h.handed_by_name||'—'} — ${new Date(h.created_at).toLocaleString('ar-EG')}</div></div>
+        <div><div class="site-name" style="font-size:14px">${esc(h.shift_name||'شيفت')} — ${factory?factory.name:'عام (كل المصانع)'}</div>
+        <div class="site-meta">سلّم: ${esc(h.handed_by_name||'—')} — ${new Date(h.created_at).toLocaleString('ar-EG')}</div></div>
         <span class="pill ${HANDOVER_STATUS_COLOR[h.status]}">${h.status}</span>
       </div>
-      ${h.summary? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>أهم ما حدث:</b> ${h.summary}</p>`:''}
-      ${h.faults_found? `<p style="font-size:12px;color:var(--muted)"><b>أعطال مكتشفة:</b> ${h.faults_found}</p>`:''}
-      ${h.open_issues? `<p style="font-size:12px;color:var(--danger)"><b>مفتوح/لسه معلَّق:</b> ${h.open_issues}</p>`:''}
-      ${h.follow_up_notes? `<p style="font-size:12px;color:var(--amber)"><b>يحتاج متابعة:</b> ${h.follow_up_notes}</p>`:''}
-      ${h.instructions? `<p style="font-size:12px;color:var(--muted)"><b>تعليمات للشيفت التالي:</b> ${h.instructions}</p>`:''}
-      ${h.received_by_name? `<p style="font-size:10.5px;color:var(--success)">✅ استلم: ${h.received_by_name} — ${new Date(h.received_at).toLocaleString('ar-EG')}</p>`:''}
-      ${h.followed_up_by_name? `<p style="font-size:10.5px;color:var(--success)">✅ تمت المتابعة بواسطة: ${h.followed_up_by_name} — ${new Date(h.followed_up_at).toLocaleString('ar-EG')}</p>`:''}
+      ${h.summary? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>أهم ما حدث:</b> ${esc(h.summary)}</p>`:''}
+      ${h.faults_found? `<p style="font-size:12px;color:var(--muted)"><b>أعطال مكتشفة:</b> ${esc(h.faults_found)}</p>`:''}
+      ${h.open_issues? `<p style="font-size:12px;color:var(--danger)"><b>مفتوح/لسه معلَّق:</b> ${esc(h.open_issues)}</p>`:''}
+      ${h.follow_up_notes? `<p style="font-size:12px;color:var(--amber)"><b>يحتاج متابعة:</b> ${esc(h.follow_up_notes)}</p>`:''}
+      ${h.instructions? `<p style="font-size:12px;color:var(--muted)"><b>تعليمات للشيفت التالي:</b> ${esc(h.instructions)}</p>`:''}
+      ${h.received_by_name? `<p style="font-size:10.5px;color:var(--success)">✅ استلم: ${esc(h.received_by_name)} — ${new Date(h.received_at).toLocaleString('ar-EG')}</p>`:''}
+      ${h.followed_up_by_name? `<p style="font-size:10.5px;color:var(--success)">✅ تمت المتابعة بواسطة: ${esc(h.followed_up_by_name)} — ${new Date(h.followed_up_at).toLocaleString('ar-EG')}</p>`:''}
       <div class="btn-row" style="margin-top:8px">
         ${h.status==='تم التسليم'? `<button class="btn sm primary" onclick="acknowledgeHandover('${h.id}')">✅ تم الاستلام</button>`:''}
         ${h.status==='تم الاستلام' && (h.open_issues||h.follow_up_notes)? `<button class="btn sm" style="background:var(--success);color:#fff" onclick="completeHandoverFollowUp('${h.id}')">✔️ تمت المتابعة</button>`:''}
@@ -5959,11 +5961,11 @@ async function renderLatestHandoverWidget(){
     const factory = factoriesData.find(x=>x.id===h.factory_id);
     host.innerHTML = `<div class="site-card" style="border-color:var(--amber);background:linear-gradient(150deg,var(--panel-2),var(--panel))">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div class="site-name" style="font-size:13px">🔄 آخر تسليم شيفت — ${h.shift_name||''} ${factory?'('+factory.name+')':''}</div>
+        <div class="site-name" style="font-size:13px">🔄 آخر تسليم شيفت — ${esc(h.shift_name||'')} ${factory?'('+factory.name+')':''}</div>
         <span class="pill ${HANDOVER_STATUS_COLOR[h.status]}" style="font-size:9px">${h.status}</span>
       </div>
-      <p style="font-size:11.5px;color:var(--muted);margin-top:6px">${h.summary}</p>
-      ${h.open_issues? `<p style="font-size:11px;color:var(--danger)">⚠️ ${h.open_issues}</p>`:''}
+      <p style="font-size:11.5px;color:var(--muted);margin-top:6px">${esc(h.summary)}</p>
+      ${h.open_issues? `<p style="font-size:11px;color:var(--danger)">⚠️ ${esc(h.open_issues)}</p>`:''}
       <button class="btn sm block" style="margin-top:6px" onclick="goTo('shifthandover')">عرض كل التفاصيل</button>
     </div>`;
   }catch(e){ host.innerHTML=''; }
@@ -6014,7 +6016,7 @@ async function loadEscalatedFaults(){
         <span class="pill bad">🚨 تدخل فوري</span>
       </div>
       <p style="font-size:11.5px;color:var(--danger);margin-top:6px">⏱️ متأخر منذ ${Math.round(f.hoursOpen)} ساعة (تجاوز مدة الـSLA)</p>
-      ${f.description? `<p style="font-size:12px;color:var(--muted)">${f.description}</p>`:''}
+      ${f.description? `<p style="font-size:12px;color:var(--muted)">${esc(f.description)}</p>`:''}
       <div class="btn-row" style="margin-top:8px">
         <button class="btn sm" onclick="goTo('faults')">فتح شاشة الأعطال</button>
       </div>
@@ -6046,7 +6048,7 @@ async function loadCameras(factoryId){
     <div class="site-card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1">
-          <div class="site-name" style="font-size:14px;cursor:pointer;text-decoration:underline dotted" onclick="openCameraProfile('${c.id}')">${c.camera_name}</div>
+          <div class="site-name" style="font-size:14px;cursor:pointer;text-decoration:underline dotted" onclick="openCameraProfile('${c.id}')">${esc(c.camera_name)}</div>
           ${c.fault_reason? `<div class="site-meta">السبب: ${c.fault_reason}</div>`:''}
         </div>
         ${c.photo_url? `<img src="${c.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">`:''}
@@ -6110,7 +6112,7 @@ async function renderCameraFormModal(factoryId, camId){
         ${list.length ? list.map(f=>`<div style="font-size:11px;border-top:1px solid var(--border-soft);padding-top:5px;margin-top:5px">
           <span class="pill ${f.status==='تم الإصلاح'||f.status==='مغلق'?'ok':'bad'}">${f.status}</span>
           <span style="color:var(--muted-2)"> — ${fmtDateAr((f.reported_at||'').slice(0,10))}${f.resolved_at?` → ${fmtDateAr(f.resolved_at.slice(0,10))}`:''}</span>
-          <div style="color:var(--muted)">${f.description||''}</div>
+          <div style="color:var(--muted)">${esc(f.description||'')}</div>
         </div>`).join('') : `<p style="font-size:11px;color:var(--muted-2)">لا يوجد أعطال مسجّلة لهذه الكاميرا.</p>`}
       </div>`;
     }catch(e){ console.warn('تعذّر تحميل سجل أعطال الكاميرا', e); }
@@ -6119,7 +6121,7 @@ async function renderCameraFormModal(factoryId, camId){
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا':'تعديل كاميرا'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     ${camFaultsHtml}
     <button class="btn sm block" style="margin-bottom:10px" onclick="openCameraTypesManager('${factoryId}', '${camId||''}')">📷 إدارة الشركات والدقات لهذا المصنع</button>
-    <div class="field"><label>اسم/موقع الكاميرا</label><input class="input" id="cf_name" value="${d.camera_name}" placeholder="مثال: بوابة الملح"></div>
+    <div class="field"><label>اسم/موقع الكاميرا</label><input class="input" id="cf_name" value="${esc(d.camera_name)}" placeholder="مثال: بوابة الملح"></div>
     <div class="row2">
       <div class="field"><label>رقم/كود الكاميرا</label><input class="input" id="cf_number" value="${d.camera_number||''}"></div>
       <div class="field"><label>الحالة</label><select class="input" id="cf_status">${['تعمل','عطل','تحت الصيانة','متوقفة مؤقتًا'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
@@ -6146,7 +6148,7 @@ async function renderCameraFormModal(factoryId, camId){
     <div class="field"><label>تاريخ التركيب</label><input class="input" type="date" id="cf_install" value="${d.install_date||''}"></div>
     <div class="field"><label>سبب العطل (إن وجد)</label><input class="input" id="cf_reason" value="${d.fault_reason||''}"></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="cf_resp" value="${d.responsible||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="cf_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="cf_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveCameraForm('${factoryId}','${isNew?'':camId}')">💾 حفظ</button>
   `);
 }
@@ -6458,7 +6460,7 @@ async function openCameraProfile(camId){
     relatedSwitch = (data||[]).find(sw=> (sw.connected_cameras||[]).includes(cam.camera_name));
   }catch(e){}
   document.getElementById('modalHost').innerHTML = `
-    <div class="modal-head"><h3>📷 ${cam.camera_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📷 ${esc(cam.camera_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="site-card">
       ${cam.photo_url? `<img src="${cam.photo_url}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-bottom:8px;cursor:zoom-in" onclick="openImageLightbox('${cam.photo_url}')">` : ''}
       <div class="mini-grid">
@@ -6469,7 +6471,7 @@ async function openCameraProfile(camId){
       </div>
       ${cam.fault_reason? `<p style="font-size:12px;color:var(--muted);margin-top:8px"><b>سبب العطل الحالي:</b> ${cam.fault_reason}</p>`:''}
       ${cam.responsible? `<p style="font-size:12px;color:var(--muted)"><b>المسؤول:</b> ${cam.responsible}</p>`:''}
-      ${cam.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${cam.notes}</p>`:''}
+      ${cam.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${esc(cam.notes)}</p>`:''}
     </div>
 
     <div class="section-title" style="margin-top:12px"><h2 style="font-size:13px">📋 الأعطال السابقة (${relatedFaults.length})</h2></div>
@@ -6502,7 +6504,7 @@ async function downloadCameraQR(camId){
   const factory = factoriesData.find(f=>f.id===cam.factory_id);
   const text = `كاميرا: ${cam.camera_name}\nرقم: ${cam.camera_number||'—'}\nالمصنع: ${factory?factory.name:''}\nالحالة: ${cam.status}`;
   openModal(`
-    <div class="modal-head"><h3>📱 QR — ${cam.camera_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📱 QR — ${esc(cam.camera_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div style="display:flex;justify-content:center;padding:14px;background:#fff;border-radius:14px" id="camQrHost"></div>
     <button class="btn primary block" style="margin-top:10px" onclick="downloadCamQrImage()">⬇️ حفظ الصورة</button>
   `);
@@ -6586,7 +6588,7 @@ async function executeGlobalSearch(q){
   host.innerHTML = Object.entries(grouped).map(([cat, items])=>`
     <div style="margin-top:10px">
       <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px">${cat} (${items.length})</div>
-      ${items.map(it=>`<div class="site-card" style="padding:8px 12px;cursor:pointer;margin-bottom:6px" onclick='closeModal(); ${it.action}'>${it.label}</div>`).join('')}
+      ${items.map(it=>`<div class="site-card" style="padding:8px 12px;cursor:pointer;margin-bottom:6px" onclick='closeModal(); ${esc(it.action)}'>${it.label}</div>`).join('')}
     </div>`).join('');
 }
 
@@ -6674,7 +6676,7 @@ function renderScreenFormModal(factoryId, screenId){
     </div>
     <div class="field"><label>اسم الشاشة</label><input class="input" id="sf_name" value="${d.screen_name}"></div>
     <div class="field"><label>سبب العطل</label><input class="input" id="sf_reason" value="${d.fault_reason||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="sf_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="sf_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveScreenForm('${factoryId}','${isNew?'':screenId}')">💾 حفظ</button>
   `);
 }
@@ -6853,7 +6855,7 @@ function openFaultForm(id){
     </div>
     <div class="field"><label>اسم/رقم الجهاز</label><input class="input" id="ft_devname" value="${d.device_name}" placeholder="مثال: كاميرا بوابة الملح"></div>
     <div class="field"><label>نوع العطل</label><input class="input" id="ft_type" value="${d.fault_type||''}" placeholder="مثال: انقطاع الصورة"></div>
-    <div class="field"><label>الوصف</label><textarea class="input" id="ft_desc">${d.description||''}</textarea></div>
+    <div class="field"><label>الوصف</label><textarea class="input" id="ft_desc">${esc(d.description||'')}</textarea></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="ft_resp" value="${d.responsible||''}"></div>
     <button class="btn primary block" onclick="saveFaultForm('${isNew?'':id}')">💾 ${isNew?'تسجيل العطل':'حفظ التعديل'}</button>
   `);
@@ -6917,7 +6919,7 @@ async function renderBulkFaultForm(factoryId){
           <input type="checkbox" id="bf_selectAll" onchange="document.querySelectorAll('.bf_cam_chk').forEach(c=>c.checked=this.checked)"> تحديد الكل
         </label>
         ${factoryCameras.map(c=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 2px;cursor:pointer">
-          <input type="checkbox" class="bf_cam_chk" value="${c.camera_name}" style="accent-color:var(--accent)"> ${c.camera_name} ${c.status!=='تعمل'?'<span class=\"pill bad\" style=\"font-size:9px\">'+c.status+'</span>':''}
+          <input type="checkbox" class="bf_cam_chk" value="${esc(c.camera_name)}" style="accent-color:var(--accent)"> ${esc(c.camera_name)} ${c.status!=='تعمل'?'<span class=\"pill bad\" style=\"font-size:9px\">'+c.status+'</span>':''}
         </label>`).join('')}
       </div>
     </div>` : `<p style="font-size:11px;color:var(--muted-2)">لا توجد كاميرات فردية مسجّلة لهذا المصنع — استخدم الحقل تحت لكتابة الأسماء يدويًا.</p>`}
@@ -7127,14 +7129,14 @@ function renderStoreList(){
         <div><div class="site-name" style="font-size:14px">${item.item_name}</div><div class="site-meta">${item.item_type||'—'}</div></div>
         <span class="pill ${balance>0?'ok':'bad'}" style="font-size:13px;font-weight:800">الرصيد: ${balance}</span>
       </div>
-      ${item.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${item.notes}</p>`:''}
+      ${item.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(item.notes)}</p>`:''}
       ${(images.length && (isAdmin()||hasPerm('view_store_images'))) ? `<div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto">
         ${images.slice(0,5).map((im,i)=>`<img src="${im.image_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex:none;cursor:zoom-in" onclick='openGalleryLightbox(${JSON.stringify(images.map(x=>x.image_url))},${i})'>`).join('')}
         ${images.length>5? `<div style="width:52px;height:52px;border-radius:8px;background:var(--bg-2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);flex:none">+${images.length-5}</div>`:''}
       </div>` : ''}
       <div class="table-wrap" style="margin-top:8px"><table style="font-size:11px">
         <thead><tr><th>التاريخ</th><th>وارد</th><th>صادر</th><th>السبب</th><th>الجهة</th>${isAdmin()?'<th></th>':''}</tr></thead>
-        <tbody>${txns.map(t=>`<tr><td>${fmtDateAr(t.transaction_date)}</td><td class="num-ok" style="color:var(--success)">${t.in_qty||0}</td><td style="color:var(--danger)">${t.out_qty||0}</td><td>${t.reason||'—'}</td><td>${t.destination||'—'}</td>${isAdmin()?`<td><button class="btn sm danger" style="padding:2px 6px;font-size:10px" onclick="deleteStoreTransaction('${t.id}','${item.id}')">🗑</button></td>`:''}</tr>`).join('') || `<tr><td colspan="${isAdmin()?6:5}">لا توجد حركات</td></tr>`}</tbody>
+        <tbody>${txns.map(t=>`<tr><td>${fmtDateAr(t.transaction_date)}</td><td class="num-ok" style="color:var(--success)">${t.in_qty||0}</td><td style="color:var(--danger)">${t.out_qty||0}</td><td>${esc(t.reason||'—')}</td><td>${t.destination||'—'}</td>${isAdmin()?`<td><button class="btn sm danger" style="padding:2px 6px;font-size:10px" onclick="deleteStoreTransaction('${t.id}','${item.id}')">🗑</button></td>`:''}</tr>`).join('') || `<tr><td colspan="${isAdmin()?6:5}">لا توجد حركات</td></tr>`}</tbody>
       </table></div>
       <div class="btn-row">
         ${(isAdmin()||hasPerm('view_store_images')) ? `<button class="btn sm" onclick="openItemGalleryModal('${item.id}')">🖼️ الصور (${images.length})</button>` : ''}
@@ -7154,7 +7156,7 @@ function openStoreItemForm(id, warehouse){
     <div class="field"><label>القسم</label><select class="input" id="si_warehouse">${STORE_WAREHOUSES.map(w=>`<option ${d.warehouse===w?'selected':''}>${w}</option>`).join('')}</select></div>
     <div class="field"><label>اسم الصنف</label><input class="input" id="si_name" value="${d.item_name}" placeholder="مثال: كاميرا 4 ميجا"></div>
     <div class="field"><label>النوع</label><input class="input" id="si_type" value="${d.item_type||''}" placeholder="مثال: 4 ميجا / ماوس / شاشة جديدة"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="si_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="si_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveStoreItemForm('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
@@ -7350,7 +7352,7 @@ async function exportStorePdf(){
     <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
       <tr style="background:#0B1220;color:#fff"><th>التاريخ</th><th>الصنف</th><th>النوع</th><th>وارد</th><th>صادر</th><th>السبب</th><th>المصنع</th></tr>
       ${storeTransactionsData.map(t=>{ const item=storeItemsData.find(i=>i.id===t.item_id);
-        return `<tr><td>${fmtDateAr(t.transaction_date)}</td><td>${item?item.item_name:'—'}</td><td>${item?item.item_type:''}</td><td>${t.in_qty||0}</td><td>${t.out_qty||0}</td><td>${t.reason||''}</td><td>${t.destination||''}</td></tr>`;
+        return `<tr><td>${fmtDateAr(t.transaction_date)}</td><td>${item?item.item_name:'—'}</td><td>${item?item.item_type:''}</td><td>${t.in_qty||0}</td><td>${t.out_qty||0}</td><td>${esc(t.reason||'')}</td><td>${t.destination||''}</td></tr>`;
       }).join('')}
     </table>
     ${storeItemImagesData.length ? `<h2 style="text-align:center;margin-top:24px">صور الأصناف</h2>
@@ -7460,14 +7462,14 @@ function renderCameraModsList(){
   host.innerHTML = list.map(c=>`
     <div class="site-card">
       <div style="display:flex;justify-content:space-between">
-        <div><div class="site-name" style="font-size:14px">${c.camera_name}</div><div class="site-meta">${c.factory_name} — ${c.place_name||''} ${c.camera_type?'· '+c.camera_type:''}</div></div>
+        <div><div class="site-name" style="font-size:14px">${esc(c.camera_name)}</div><div class="site-meta">${c.factory_name} — ${esc(c.place_name||'')} ${c.camera_type?'· '+c.camera_type:''}</div></div>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
           <span class="pill ${PRIORITY_COLOR[c.priority]}">${c.priority}</span>
           <span class="pill ${MOD_STATUS_COLOR[c.status]}">${c.status}</span>
         </div>
       </div>
-      ${c.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>المشكلة:</b> ${c.problem_description}</p>`:''}
-      ${c.required_change? `<p style="font-size:12px;color:var(--muted)"><b>المطلوب:</b> ${c.required_change}</p>`:''}
+      ${c.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px"><b>المشكلة:</b> ${esc(c.problem_description)}</p>`:''}
+      ${c.required_change? `<p style="font-size:12px;color:var(--muted)"><b>المطلوب:</b> ${esc(c.required_change)}</p>`:''}
       <div style="display:flex;gap:10px;margin-top:8px">
         <div style="flex:1;text-align:center">
           <div style="font-size:10.5px;color:var(--muted-2);margin-bottom:4px">قبل التعديل</div>
@@ -7505,21 +7507,21 @@ function openCameraModForm(factoryId, id){
     <div class="modal-head"><h3>${isNew?'إضافة كاميرا للتعديل':'تعديل السجل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>المصنع</label><select class="input" id="cm_factory">${factoriesData.map(f=>`<option value="${f.id}" ${d.factory_name===f.name?'selected':''}>${f.name}</option>`).join('')}</select></div>
     <div class="row2">
-      <div class="field"><label>المكان</label><input class="input" id="cm_place" value="${d.place_name||''}"></div>
+      <div class="field"><label>المكان</label><input class="input" id="cm_place" value="${esc(d.place_name||'')}"></div>
       <div class="field"><label>رقم الكاميرا</label><input class="input" id="cm_number" value="${d.camera_number||''}"></div>
     </div>
     <div class="row2">
-      <div class="field"><label>اسم الكاميرا</label><input class="input" id="cm_name" value="${d.camera_name}"></div>
+      <div class="field"><label>اسم الكاميرا</label><input class="input" id="cm_name" value="${esc(d.camera_name)}"></div>
       <div class="field"><label>نوع الكاميرا</label><input class="input" id="cm_type" value="${d.camera_type||''}" placeholder="مثال: 4 ميجا"></div>
     </div>
-    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="cm_problem">${d.problem_description||''}</textarea></div>
+    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="cm_problem">${esc(d.problem_description||'')}</textarea></div>
     <div class="field"><label>سبب التعديل</label><input class="input" id="cm_reason" value="${d.modification_reason||''}"></div>
-    <div class="field"><label>المطلوب تعديله</label><textarea class="input" id="cm_required">${d.required_change||''}</textarea></div>
+    <div class="field"><label>المطلوب تعديله</label><textarea class="input" id="cm_required">${esc(d.required_change||'')}</textarea></div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="cm_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
       <div class="field"><label>الحالة</label><select class="input" id="cm_status">${['تحتاج تعديل','جاري التعديل','تم التعديل'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="cm_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="cm_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveCameraModForm('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
@@ -7595,7 +7597,7 @@ async function removeModPhoto(id, which){
 function compareBeforeAfter(id){
   const c = cameraModsData.find(x=>x.id===id); if(!c) return;
   openModal(`
-    <div class="modal-head"><h3>🔍 مقارنة قبل وبعد — ${c.camera_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🔍 مقارنة قبل وبعد — ${esc(c.camera_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div style="display:flex;gap:10px">
       <div style="flex:1;text-align:center">
         <div style="font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:700">قبل</div>
@@ -7625,7 +7627,7 @@ async function exportCameraModsPdf(){
   el.innerHTML = `<h2 style="text-align:center">تقرير الكاميرات التي تحتاج تعديل</h2>
     <table style="width:100%;border-collapse:collapse;font-size:10.5px" border="1" cellpadding="4">
       <tr style="background:#0B1220;color:#fff"><th>المصنع</th><th>المكان</th><th>الكاميرا</th><th>المشكلة</th><th>الحالة</th><th>الأولوية</th></tr>
-      ${cameraModsData.map(c=>`<tr><td>${c.factory_name}</td><td>${c.place_name||''}</td><td>${c.camera_name}</td><td>${c.problem_description||''}</td><td>${c.status}</td><td>${c.priority}</td></tr>`).join('')}
+      ${cameraModsData.map(c=>`<tr><td>${c.factory_name}</td><td>${esc(c.place_name||'')}</td><td>${esc(c.camera_name)}</td><td>${esc(c.problem_description||'')}</td><td>${c.status}</td><td>${c.priority}</td></tr>`).join('')}
     </table>`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
@@ -7738,13 +7740,13 @@ function renderLightingList(){
     return `
     <div class="site-card">
       <div style="display:flex;justify-content:space-between">
-        <div><div class="site-name" style="font-size:14px">${l.place_name}</div><div class="site-meta">${l.factory_name}</div></div>
+        <div><div class="site-name" style="font-size:14px">${esc(l.place_name)}</div><div class="site-meta">${l.factory_name}</div></div>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
           <span class="pill ${PRIORITY_COLOR[l.priority]}">${l.priority}</span>
           <span class="pill ${LIGHTING_STATUS_COLOR[l.status]}">${l.status}</span>
         </div>
       </div>
-      ${l.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${l.problem_description}</p>`:''}
+      ${l.problem_description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${esc(l.problem_description)}</p>`:''}
       <div class="row2" style="margin-top:8px">
         <div>
           <div style="font-size:10.5px;color:var(--muted-2);text-align:center;margin-bottom:4px">قبل</div>
@@ -7774,9 +7776,9 @@ function renderLightingList(){
 function openLightingRepairForm(lightingId){
   const l = lightingData.find(x=>x.id===lightingId);
   openModal(`
-    <div class="modal-head"><h3>🛠️ تسجيل عملية إصلاح — ${l.place_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🛠️ تسجيل عملية إصلاح — ${esc(l.place_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>نوع العملية</label><input class="input" id="lr_type" placeholder="مثال: استبدال لمبة / إصلاح سلك"></div>
-    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="lr_problem">${l.problem_description||''}</textarea></div>
+    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="lr_problem">${esc(l.problem_description||'')}</textarea></div>
     <div class="field"><label>سبب المشكلة (إن كان معروفًا)</label><input class="input" id="lr_cause"></div>
     <div class="field"><label>الإجراء الذي تم تنفيذه</label><textarea class="input" id="lr_action"></textarea></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="lr_notes"></textarea></div>
@@ -7805,20 +7807,20 @@ function openLightingTimeline(lightingId){
   const l = lightingData.find(x=>x.id===lightingId);
   const repairs = getLightingRepairs(lightingId).sort((a,b)=> new Date(b.created_at)-new Date(a.created_at));
   openModal(`
-    <div class="modal-head"><h3>📜 السجل الكامل — ${l.place_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">تسجيل: ${new Date(l.created_at).toLocaleString('ar-EG')} — المشكلة الأصلية: ${l.problem_description||'—'}</p>
+    <div class="modal-head"><h3>📜 السجل الكامل — ${esc(l.place_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">تسجيل: ${new Date(l.created_at).toLocaleString('ar-EG')} — المشكلة الأصلية: ${esc(l.problem_description||'—')}</p>
     ${repairs.map(r=>`<div class="site-card" style="padding:10px 12px">
       <div style="display:flex;justify-content:space-between"><b style="font-size:12.5px">${r.repair_type||'عملية إصلاح'}</b><span style="font-size:10px;color:var(--muted-2)">${new Date(r.created_at).toLocaleString('ar-EG')}</span></div>
       <p style="font-size:11.5px;color:var(--muted);margin-top:4px">${r.status_before} → <b style="color:var(--success)">${r.status_after}</b></p>
-      ${r.problem_description? `<p style="font-size:11.5px;color:var(--muted)"><b>المشكلة:</b> ${r.problem_description}</p>`:''}
-      ${r.problem_cause? `<p style="font-size:11.5px;color:var(--muted)"><b>السبب:</b> ${r.problem_cause}</p>`:''}
-      ${r.action_taken? `<p style="font-size:11.5px;color:var(--muted)"><b>الإجراء:</b> ${r.action_taken}</p>`:''}
-      ${r.notes? `<p style="font-size:11.5px;color:var(--muted)">${r.notes}</p>`:''}
+      ${r.problem_description? `<p style="font-size:11.5px;color:var(--muted)"><b>المشكلة:</b> ${esc(r.problem_description)}</p>`:''}
+      ${r.problem_cause? `<p style="font-size:11.5px;color:var(--muted)"><b>السبب:</b> ${esc(r.problem_cause)}</p>`:''}
+      ${r.action_taken? `<p style="font-size:11.5px;color:var(--muted)"><b>الإجراء:</b> ${esc(r.action_taken)}</p>`:''}
+      ${r.notes? `<p style="font-size:11.5px;color:var(--muted)">${esc(r.notes)}</p>`:''}
       <div class="row2" style="margin-top:6px">
         ${r.photo_before_url? `<img src="${r.photo_before_url}" style="width:100%;height:70px;object-fit:cover;border-radius:6px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_before_url}')">`:''}
         ${r.photo_after_url? `<img src="${r.photo_after_url}" style="width:100%;height:70px;object-fit:cover;border-radius:6px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_after_url}')">`:''}
       </div>
-      <div style="font-size:10px;color:var(--muted-2);margin-top:4px">بواسطة: ${r.created_by_name||'—'}</div>
+      <div style="font-size:10px;color:var(--muted-2);margin-top:4px">بواسطة: ${esc(r.created_by_name||'—')}</div>
     </div>`).join('')}
   `);
 }
@@ -7830,14 +7832,14 @@ function openLightingForm(factoryId, id){
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة احتياج إضاءة':'تعديل'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>المصنع</label><select class="input" id="lt_factory">${factoriesData.map(f=>`<option value="${f.id}" ${(d.factory_name===f.name)?'selected':''}>${f.name}</option>`).join('')}</select></div>
-    <div class="field"><label>المكان</label><input class="input" id="lt_place" value="${d.place_name||''}"></div>
-    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="lt_problem">${d.problem_description||''}</textarea></div>
+    <div class="field"><label>المكان</label><input class="input" id="lt_place" value="${esc(d.place_name||'')}"></div>
+    <div class="field"><label>وصف المشكلة</label><textarea class="input" id="lt_problem">${esc(d.problem_description||'')}</textarea></div>
     <div class="field"><label>نوع احتياج الإضاءة</label><input class="input" id="lt_type" value="${d.need_type||''}" placeholder="مثال: كشاف جديد / استبدال لمبة"></div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="lt_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
       <div class="field"><label>الحالة</label><select class="input" id="lt_status">${['تحتاج إضاءة','تم الإبلاغ','قيد التنفيذ','تم الإصلاح','مغلقة'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="lt_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="lt_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveLightingForm('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
@@ -7957,11 +7959,11 @@ function renderDownCamsList(){
         <div class="site-name" style="font-size:14px">${c.device_name}</div>
         <span class="pill ${FAULT_SEVERITY_COLOR[c.severity]}">${c.severity}</span>
       </div>
-      ${c.description||c.fault_type? `<div class="site-meta">${c.fault_type||''}${c.fault_type&&c.description?' — ':''}${c.description||''}</div>`:''}
+      ${c.description||c.fault_type? `<div class="site-meta">${c.fault_type||''}${c.fault_type&&c.description?' — ':''}${esc(c.description||'')}</div>`:''}
       <div class="site-meta">انقطعت: ${new Date(c.reported_at).toLocaleString('ar-EG')}</div>
       ${c.resolved_at? `<div class="site-meta" style="color:var(--success)">اشتغلت: ${new Date(c.resolved_at).toLocaleString('ar-EG')}</div>`:''}
       ${photo? `<img src="${photo}" style="width:100%;max-height:160px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${photo}')">`:''}
-      ${c.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${c.notes}</p>`:''}
+      ${c.notes? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${esc(c.notes)}</p>`:''}
       ${isAdmin()? `<div class="btn-row" style="margin-top:8px">
         <button class="btn sm" onclick="openEditDownCamName('${c.id}')">✏️ تعديل الاسم</button>
         <label class="btn sm" style="cursor:pointer">${photo?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadDownCamPhoto('${c.id}',this)"></label>
@@ -8027,7 +8029,7 @@ function openEditDownCamName(id){
   openModal(`
     <div class="modal-head"><h3>✏️ تعديل بيانات الكاميرا</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>اسم الكاميرا</label><input class="input" id="edc_name" value="${c.device_name}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="edc_notes">${c.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="edc_notes">${esc(c.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveEditDownCamName('${id}')">💾 حفظ</button>
   `);
 }
@@ -8129,7 +8131,7 @@ async function exportLightingPdf(){
   el.innerHTML = `<h2 style="text-align:center">تقرير احتياجات الإضاءة</h2>
     <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
       <tr style="background:#0B1220;color:#fff"><th>المصنع</th><th>المكان</th><th>المشكلة</th><th>الأولوية</th><th>الحالة</th></tr>
-      ${lightingData.map(l=>`<tr><td>${l.factory_name}</td><td>${l.place_name}</td><td>${l.problem_description||''}</td><td>${l.priority}</td><td>${l.status}</td></tr>`).join('')}
+      ${lightingData.map(l=>`<tr><td>${l.factory_name}</td><td>${esc(l.place_name)}</td><td>${esc(l.problem_description||'')}</td><td>${l.priority}</td><td>${l.status}</td></tr>`).join('')}
     </table>`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
@@ -8197,16 +8199,16 @@ function renderRoomNeedsList(){
   host.innerHTML = list.map(r=>`
     <div class="site-card">
       <div style="display:flex;justify-content:space-between">
-        <div class="site-name" style="font-size:14px">${r.title}</div>
+        <div class="site-name" style="font-size:14px">${esc(r.title)}</div>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
           <span class="pill ${PRIORITY_COLOR[r.priority]}">${r.priority}</span>
           <span class="pill ${ROOMNEED_STATUS_COLOR[r.status]}">${r.status}</span>
         </div>
       </div>
-      ${r.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${r.description}</p>`:''}
+      ${r.description? `<p style="font-size:12px;color:var(--muted);margin-top:6px">${esc(r.description)}</p>`:''}
       <div style="font-size:10.5px;color:var(--muted-2);margin-top:4px">أُضيف: ${fmtDateAr(r.created_at.slice(0,10))}${r.fulfilled_date?` · نُفِّذ: ${fmtDateAr(r.fulfilled_date)}`:''}</div>
       ${(r.photo_url && (isAdmin()||hasPerm('view_roomneeds_images')))? `<img src="${r.photo_url}" style="width:100%;max-height:150px;object-fit:cover;border-radius:8px;margin-top:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
-      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
+      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(r.notes)}</p>`:''}
       <div class="btn-row" style="margin-top:8px">
         ${(isAdmin()||hasPerm('upload_roomneeds_images')) ? `<label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال الصورة':'📷 رفع صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRoomNeedPhoto('${r.id}',this)"></label>` : ''}
         ${(r.photo_url && (isAdmin()||hasPerm('delete_roomneeds_images'))) ? `<button class="btn sm danger" onclick="removeRoomNeedPhoto('${r.id}')">🗑 حذف الصورة</button>` : ''}
@@ -8224,14 +8226,14 @@ function openRoomNeedForm(id){
   const d = r || {title:'', description:'', priority:'متوسطة', status:'لم يتم التنفيذ', notes:'', fulfilled_date:''};
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة احتياج جديد':'تعديل احتياج'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <div class="field"><label>عنوان الاحتياج</label><input class="input" id="rn_title" value="${d.title}" placeholder="مثال: كرسي مكتب جديد"></div>
-    <div class="field"><label>الوصف</label><textarea class="input" id="rn_desc">${d.description||''}</textarea></div>
+    <div class="field"><label>عنوان الاحتياج</label><input class="input" id="rn_title" value="${esc(d.title)}" placeholder="مثال: كرسي مكتب جديد"></div>
+    <div class="field"><label>الوصف</label><textarea class="input" id="rn_desc">${esc(d.description||'')}</textarea></div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="rn_priority">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${d.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
       <div class="field"><label>الحالة</label><select class="input" id="rn_status">${['لم يتم التنفيذ','قيد التنفيذ','تم التنفيذ'].map(s=>`<option ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>تاريخ التنفيذ/التوفير (إن وُجد)</label><input class="input" type="date" id="rn_fulfilled" value="${d.fulfilled_date||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="rn_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="rn_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveRoomNeedForm('${isNew?'':id}')">💾 حفظ</button>
   `);
 }
@@ -8322,7 +8324,7 @@ function renderRoomEntryReportsList(){
         <b style="font-size:13px">📅 ${fmtDateAr(r.report_date)} ${r.time_from?`(${r.time_from} - ${r.time_to||''})`:''}</b>
         <span class="pill">${(r.people||[]).length} شخص</span>
       </div>
-      <div style="font-size:11.5px;color:var(--muted);margin-top:4px">${r.visiting_entity||''} — بواسطة ${r.created_by_name||''}</div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:4px">${esc(r.visiting_entity||'')} — بواسطة ${esc(r.created_by_name||'')}</div>
       <div class="btn-row" style="margin-top:6px">
         <button class="btn sm" onclick="openRoomEntryReportForm('${r.factory_id}','${r.id}')">👁️ عرض / تعديل</button>
         <button class="btn sm" onclick="exportRoomEntryReport('${r.id}')">🖨️ طباعة / تصدير</button>
@@ -8359,7 +8361,7 @@ function renderRoomEntryReportForm(){
     <div class="modal-head"><h3>🚪 تقرير دخول غرفة التحكم — ${f?f.name:''}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="row2">
       <div class="field"><label>التاريخ</label><input class="input" type="date" id="rer_date" value="${s.report_date}"></div>
-      <div class="field"><label>جهة/إدارة الزيارة</label><input class="input" id="rer_entity" value="${s.visiting_entity}"></div>
+      <div class="field"><label>جهة/إدارة الزيارة</label><input class="input" id="rer_entity" value="${esc(s.visiting_entity)}"></div>
     </div>
     <div class="row2">
       <div class="field"><label>الوقت من</label><input class="input" type="time" id="rer_from" value="${s.time_from}"></div>
@@ -8379,10 +8381,10 @@ function renderRoomEntryReportForm(){
     <button class="btn sm block" onclick="addRerRow('review_results')">➕ إضافة نتيجة</button>
 
     <div class="section-title"><h2 style="font-size:13px">✍️ الاعتمادات</h2></div>
-    <div class="field"><label>مسؤول الغرفة</label><input class="input" id="rer_officer" value="${s.room_officer_name}"></div>
-    <div class="field"><label>مشرف الغرفة</label><input class="input" id="rer_supervisor" value="${s.room_supervisor_name}"></div>
-    <div class="field"><label>مدير الأمن</label><input class="input" id="rer_security" value="${s.security_manager_name}"></div>
-    <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="rer_notes">${s.notes}</textarea></div>
+    <div class="field"><label>مسؤول الغرفة</label><input class="input" id="rer_officer" value="${esc(s.room_officer_name)}"></div>
+    <div class="field"><label>مشرف الغرفة</label><input class="input" id="rer_supervisor" value="${esc(s.room_supervisor_name)}"></div>
+    <div class="field"><label>مدير الأمن</label><input class="input" id="rer_security" value="${esc(s.security_manager_name)}"></div>
+    <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="rer_notes">${esc(s.notes)}</textarea></div>
 
     <button class="btn primary block" style="margin-top:10px" onclick="saveRoomEntryReport()">💾 حفظ التقرير</button>
   `);
@@ -8399,20 +8401,20 @@ function renderRerPersonRow(p,i){
 function renderRerEventRow(e,i){
   return `<div class="site-card" id="rerEvent_${i}" style="margin-top:6px;padding:8px">
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted-2)"><span>${i+1}-</span><button class="btn sm danger" style="padding:2px 8px" onclick="removeRerRow('events',${i})">🗑</button></div>
-    <div class="field"><label>وصف الحدث</label><textarea class="input" oninput="updateRerField('events',${i},'description',this.value)">${e.description||''}</textarea></div>
+    <div class="field"><label>وصف الحدث</label><textarea class="input" oninput="updateRerField('events',${i},'description',this.value)">${esc(e.description||'')}</textarea></div>
     <div class="row2">
       <div class="field"><label>التاريخ/الوقت</label><input class="input" type="text" placeholder="اختياري" oninput="updateRerField('events',${i},'event_datetime',this.value)" value="${e.event_datetime||''}"></div>
       <div class="field"><label>الكاميرا/الموقع</label><input class="input" oninput="updateRerField('events',${i},'location_or_camera',this.value)" value="${e.location_or_camera||''}"></div>
     </div>
-    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('events',${i},'notes',this.value)" value="${e.notes||''}"></div>
+    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('events',${i},'notes',this.value)" value="${esc(e.notes||'')}"></div>
   </div>`;
 }
 function renderRerResultRow(r,i){
   return `<div class="site-card" id="rerResult_${i}" style="margin-top:6px;padding:8px">
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted-2)"><span>${i+1}-</span><button class="btn sm danger" style="padding:2px 8px" onclick="removeRerRow('review_results',${i})">🗑</button></div>
     <div class="field"><label>نتيجة المراجعة</label><textarea class="input" oninput="updateRerField('review_results',${i},'result',this.value)">${r.result||''}</textarea></div>
-    <div class="field"><label>التفاصيل</label><input class="input" oninput="updateRerField('review_results',${i},'details',this.value)" value="${r.details||''}"></div>
-    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('review_results',${i},'notes',this.value)" value="${r.notes||''}"></div>
+    <div class="field"><label>التفاصيل</label><input class="input" oninput="updateRerField('review_results',${i},'details',this.value)" value="${esc(r.details||'')}"></div>
+    <div class="field"><label>ملاحظات</label><input class="input" oninput="updateRerField('review_results',${i},'notes',this.value)" value="${esc(r.notes||'')}"></div>
   </div>`;
 }
 function updateRerField(listName, idx, field, value){ rerFormState[listName][idx][field] = value; }
@@ -8460,13 +8462,13 @@ async function exportRoomEntryReport(reportId){
   const bodyHtml = `
     <h1>تقرير دخول غرفة التحكم المركزية</h1>
     <p style="text-align:center">التاريخ: ${fmtDateAr(r.report_date)} — التوقيت: من ${r.time_from||'—'} إلى ${r.time_to||'—'}</p>
-    <p style="text-align:center">يسمح بما يلي دخول غرفة التحكم المركزية من مصنع: <b>${f?f.name:''}</b>${r.visiting_entity?` — جهة الزيارة: ${r.visiting_entity}`:''}</p>
+    <p style="text-align:center">يسمح بما يلي دخول غرفة التحكم المركزية من مصنع: <b>${f?f.name:''}</b>${r.visiting_entity?` — جهة الزيارة: ${esc(r.visiting_entity)}`:''}</p>
     <h2>الأشخاص المسموح لهم بالدخول</h2>
     <table><tr><th>الاسم</th><th>الإدارة التابعة لها</th></tr>${(r.people||[]).map(p=>`<tr><td>${p.name||''}</td><td>${p.department||''}</td></tr>`).join('')}</table>
-    ${(r.events||[]).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.map(e=>`<tr><td>${e.description||''}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${e.notes||''}</td></tr>`).join('')}</table>`:''}
-    ${(r.review_results||[]).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.map(res=>`<tr><td>${res.result||''}</td><td>${res.details||''}</td><td>${res.notes||''}</td></tr>`).join('')}</table>`:''}
+    ${(r.events||[]).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.map(e=>`<tr><td>${esc(e.description||'')}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</table>`:''}
+    ${(r.review_results||[]).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.map(res=>`<tr><td>${res.result||''}</td><td>${esc(res.details||'')}</td><td>${esc(res.notes||'')}</td></tr>`).join('')}</table>`:''}
     <h2>الاعتمادات</h2>
-    <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${r.room_officer_name||''}</td><td>${r.room_supervisor_name||''}</td><td>${r.security_manager_name||''}</td></tr></table>
+    <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'')}</td><td>${esc(r.room_supervisor_name||'')}</td><td>${esc(r.security_manager_name||'')}</td></tr></table>
   `;
   const headers = ['الاسم','الإدارة التابعة لها'];
   const data = (r.people||[]).map(p=>[p.name||'', p.department||'']);
@@ -8533,14 +8535,14 @@ function renderNotesList(){
     const f = n.factory_id ? factoriesData.find(x=>x.id===n.factory_id) : null;
     return `<div class="site-card" style="${n.pinned?'border-color:var(--accent)':''}${n.archived?';opacity:0.6':''}">
       <div style="display:flex;justify-content:space-between;align-items:start">
-        <b style="font-size:13.5px">${n.pinned?'📌 ':''}${n.title||'(بدون عنوان)'}</b>
+        <b style="font-size:13.5px">${n.pinned?'📌 ':''}${esc(n.title||'(بدون عنوان)')}</b>
         <span style="font-size:10.5px;color:${priorityColor[n.priority]||'var(--muted)'}">⚠️ ${n.priority}</span>
       </div>
       <div style="font-size:10.5px;color:var(--muted-2);margin-top:2px">
         ${f?`🏭 ${f.name}`:'🌐 عامة'} ${n.section?` — 📂 ${n.section}`:''} — 📅 ${fmtDateAr(n.created_at?.slice(0,10)||'')} — بواسطة ${n.created_by_name||''}
       </div>
       <div style="font-size:10.5px;margin-top:2px"><span class="pill">📌 ${n.status}</span></div>
-      <p style="font-size:12.5px;margin-top:6px;white-space:pre-wrap;line-height:1.6">${n.body||''}</p>
+      <p style="font-size:12.5px;margin-top:6px;white-space:pre-wrap;line-height:1.6">${esc(n.body||'')}</p>
       ${n.attachment_url? `<img src="${n.attachment_url}" style="max-width:120px;border-radius:8px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${n.attachment_url}')">`:''}
       <div class="btn-row" style="margin-top:8px">
         <button class="btn sm" onclick="openNoteForm('${n.id}')">✏️ تعديل</button>
@@ -8591,14 +8593,14 @@ function openNoteForm(noteId){
   openModal(`
     <div class="modal-head"><h3>📝 ${n?'تعديل':'إضافة'} ملاحظة</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <input type="hidden" id="note_id" value="${n?.id||''}">
-    <div class="field"><label>عنوان الملاحظة</label><input class="input" id="note_title" value="${n?.title||''}"></div>
-    <div class="field"><label>نص الملاحظة</label><textarea class="input" id="note_body" style="min-height:140px;font-size:14px;line-height:1.7" dir="rtl">${n?.body||''}</textarea></div>
+    <div class="field"><label>عنوان الملاحظة</label><input class="input" id="note_title" value="${esc(n?.title||'')}"></div>
+    <div class="field"><label>نص الملاحظة</label><textarea class="input" id="note_body" style="min-height:140px;font-size:14px;line-height:1.7" dir="rtl">${esc(n?.body||'')}</textarea></div>
     <div class="row2">
       <div class="field"><label>المصنع (اختياري)</label><select class="input" id="note_factory">
         <option value="">🌐 ملاحظة عامة (بدون مصنع)</option>
         ${factoriesData.map(f=>`<option value="${f.id}" ${n?.factory_id===f.id?'selected':''}>${f.name}</option>`).join('')}
       </select></div>
-      <div class="field"><label>القسم المرتبط (اختياري)</label><input class="input" id="note_section" value="${n?.section||''}" placeholder="مثال: الكاميرات، الصيانة..."></div>
+      <div class="field"><label>القسم المرتبط (اختياري)</label><input class="input" id="note_section" value="${esc(n?.section||'')}" placeholder="مثال: الكاميرات، الصيانة..."></div>
     </div>
     <div class="row2">
       <div class="field"><label>الأولوية</label><select class="input" id="note_priority">
@@ -8720,10 +8722,10 @@ function renderFenceSectionsList(){
     const imgs = fenceSectionImages[s.id]||[];
     return `<div class="site-card" style="cursor:pointer" onclick="openFenceSectionDetail('${s.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <b style="font-size:13.5px">${s.section_name}</b>
+        <b style="font-size:13.5px">${esc(s.section_name)}</b>
         <span class="pill">${statusIcon[s.execution_status]||''} ${s.execution_status}</span>
       </div>
-      <div style="font-size:11px;color:var(--muted-2);margin-top:3px">${s.side||''} ${s.wire_installed_length?`— ${s.wire_installed_length} متر مركّب`:''} ${s.remaining_length?`— ${s.remaining_length} متر متبقي`:''}</div>
+      <div style="font-size:11px;color:var(--muted-2);margin-top:3px">${esc(s.side||'')} ${s.wire_installed_length?`— ${s.wire_installed_length} متر مركّب`:''} ${s.remaining_length?`— ${s.remaining_length} متر متبقي`:''}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:2px">📷 ${imgs.length} صورة</div>
     </div>`;
   }).join('');
@@ -8733,19 +8735,19 @@ function openFenceSectionDetail(id){
   const s = fenceSectionsData.find(x=>x.id===id); if(!s) return;
   const imgs = fenceSectionImages[id]||[];
   openModal(`
-    <div class="modal-head"><h3>🧱 ${s.section_name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
-    <p style="font-size:12px;color:var(--muted)"><b>الجهة:</b> ${s.side||'—'} — <b>حالة التنفيذ:</b> ${s.execution_status}</p>
+    <div class="modal-head"><h3>🧱 ${esc(s.section_name)}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <p style="font-size:12px;color:var(--muted)"><b>الجهة:</b> ${esc(s.side||'—')} — <b>حالة التنفيذ:</b> ${s.execution_status}</p>
     <p style="font-size:12px;color:var(--muted)"><b>إجمالي طول السور:</b> ${s.total_fence_length||'—'} م — <b>المركَّب:</b> ${s.wire_installed_length||0} م — <b>المتبقي:</b> ${s.remaining_length||0} م</p>
-    <p style="font-size:12px;color:var(--muted)"><b>نوع السلك:</b> ${s.wire_type||'—'} — <b>تاريخ التركيب:</b> ${s.install_date?fmtDateAr(s.install_date):'—'}</p>
-    <p style="font-size:12px;color:var(--muted)"><b>المقاول المنفذ:</b> ${s.contractor||'—'} — <b>حالة السلك:</b> ${s.wire_condition}</p>
-    ${s.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${s.notes}</p>`:''}
-    <p style="font-size:10.5px;color:var(--muted-2)">أضافه: ${s.created_by_name||''} — ${fmtDateAr((s.created_at||'').slice(0,10))}</p>
+    <p style="font-size:12px;color:var(--muted)"><b>نوع السلك:</b> ${esc(s.wire_type||'—')} — <b>تاريخ التركيب:</b> ${s.install_date?fmtDateAr(s.install_date):'—'}</p>
+    <p style="font-size:12px;color:var(--muted)"><b>المقاول المنفذ:</b> ${esc(s.contractor||'—')} — <b>حالة السلك:</b> ${esc(s.wire_condition)}</p>
+    ${s.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${esc(s.notes)}</p>`:''}
+    <p style="font-size:10.5px;color:var(--muted-2)">أضافه: ${esc(s.created_by_name||'')} — ${fmtDateAr((s.created_at||'').slice(0,10))}</p>
     ${imgs.length? `<div class="section-title"><h2 style="font-size:12.5px">📷 الصور (${imgs.length})</h2></div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
         ${imgs.map(img=>`<div>
           <img src="${img.image_url}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${img.image_url}')">
           ${img.image_phase!=='عام'?`<div style="font-size:9.5px;text-align:center;color:var(--accent)">${img.image_phase}</div>`:''}
-          ${img.caption?`<div style="font-size:9px;text-align:center;color:var(--muted-2)">${img.caption}</div>`:''}
+          ${img.caption?`<div style="font-size:9px;text-align:center;color:var(--muted-2)">${esc(img.caption)}</div>`:''}
         </div>`).join('')}
       </div>`:'<p style="font-size:11px;color:var(--muted-2)">لا توجد صور مضافة.</p>'}
     <div class="btn-row" style="margin-top:10px">
@@ -8773,7 +8775,7 @@ function openFenceSectionForm(factoryId, sectionId){
     <div class="modal-head"><h3>🧱 ${s?'تعديل':'إضافة'} جزء من السور</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <input type="hidden" id="fs_id" value="${s?.id||''}">
     <input type="hidden" id="fs_factory" value="${factoryId}">
-    <div class="field"><label>اسم/وصف الجزء</label><input class="input" id="fs_name" value="${s?.section_name||''}" placeholder="مثال: السور الخلفي"></div>
+    <div class="field"><label>اسم/وصف الجزء</label><input class="input" id="fs_name" value="${esc(s?.section_name||'')}" placeholder="مثال: السور الخلفي"></div>
     <div class="field"><label>الجهة</label><select class="input" id="fs_side">
       ${['شمالي','جنوبي','شرقي','غربي','السور الخلفي','سور الشحن','بوابة','أخرى (إدخال يدوي)'].map(o=>`<option ${s?.side===o?'selected':''}>${o}</option>`).join('')}
     </select></div>
@@ -8791,11 +8793,11 @@ function openFenceSectionForm(factoryId, sectionId){
       </select></div>
     </div>
     <div class="row2">
-      <div class="field"><label>نوع السلك الشائك</label><input class="input" id="fs_wire_type" value="${s?.wire_type||''}"></div>
+      <div class="field"><label>نوع السلك الشائك</label><input class="input" id="fs_wire_type" value="${esc(s?.wire_type||'')}"></div>
       <div class="field"><label>تاريخ التركيب</label><input type="date" class="input" id="fs_install_date" value="${s?.install_date||''}"></div>
     </div>
-    <div class="field"><label>الجهة/المقاول المنفذ</label><input class="input" id="fs_contractor" value="${s?.contractor||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="fs_notes">${s?.notes||''}</textarea></div>
+    <div class="field"><label>الجهة/المقاول المنفذ</label><input class="input" id="fs_contractor" value="${esc(s?.contractor||'')}"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="fs_notes">${esc(s?.notes||'')}</textarea></div>
 
     <div class="section-title"><h2 style="font-size:12.5px">📷 الصور</h2></div>
     ${s && (fenceSectionImages[s.id]||[]).length ? `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:8px">
@@ -8896,7 +8898,7 @@ function renderBulkRoomNeedCard(it, i){
       <div class="site-name" style="font-size:13px">الصنف ${i+1}</div>
       ${bulkRoomNeedItems.length>1? `<button class="btn sm danger" onclick="removeBulkRoomNeedCard(${i})">🗑 حذف البطاقة</button>`:''}
     </div>
-    <div class="field"><label>اسم الصنف</label><input class="input" data-i="${i}" data-f="title" value="${it.title}" oninput="updateBulkRoomNeedField(this)" placeholder="مثال: ماوس"></div>
+    <div class="field"><label>اسم الصنف</label><input class="input" data-i="${i}" data-f="title" value="${esc(it.title)}" oninput="updateBulkRoomNeedField(this)" placeholder="مثال: ماوس"></div>
     <div class="row2">
       <div class="field"><label>النوع/الماركة</label><input class="input" data-i="${i}" data-f="item_type" value="${it.item_type}" oninput="updateBulkRoomNeedField(this)" placeholder="مثال: Logitech"></div>
       <div class="field"><label>الكمية</label><input class="input" type="number" min="1" data-i="${i}" data-f="quantity" value="${it.quantity}" oninput="updateBulkRoomNeedField(this)"></div>
@@ -8905,9 +8907,9 @@ function renderBulkRoomNeedCard(it, i){
       <div class="field"><label>الوحدة</label><input class="input" data-i="${i}" data-f="unit" value="${it.unit}" oninput="updateBulkRoomNeedField(this)" placeholder="قطعة/متر/علبة"></div>
       <div class="field"><label>الأولوية</label><select class="input" data-i="${i}" data-f="priority" onchange="updateBulkRoomNeedField(this)">${['منخفضة','متوسطة','عالية','عاجلة'].map(p=>`<option ${it.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>الوصف</label><input class="input" data-i="${i}" data-f="description" value="${it.description}" oninput="updateBulkRoomNeedField(this)"></div>
-    <div class="field"><label>سبب الاحتياج</label><input class="input" data-i="${i}" data-f="reason" value="${it.reason}" oninput="updateBulkRoomNeedField(this)"></div>
-    <div class="field"><label>ملاحظات</label><input class="input" data-i="${i}" data-f="notes" value="${it.notes}" oninput="updateBulkRoomNeedField(this)"></div>
+    <div class="field"><label>الوصف</label><input class="input" data-i="${i}" data-f="description" value="${esc(it.description)}" oninput="updateBulkRoomNeedField(this)"></div>
+    <div class="field"><label>سبب الاحتياج</label><input class="input" data-i="${i}" data-f="reason" value="${esc(it.reason)}" oninput="updateBulkRoomNeedField(this)"></div>
+    <div class="field"><label>ملاحظات</label><input class="input" data-i="${i}" data-f="notes" value="${esc(it.notes)}" oninput="updateBulkRoomNeedField(this)"></div>
   </div>`;
 }
 function updateBulkRoomNeedField(el){
@@ -8937,7 +8939,7 @@ function previewBulkRoomNeeds(){
     ${empty>0? `<p style="font-size:11px;color:var(--muted-2)">تم تجاهل ${empty} بطاقة فاضية من غير اسم.</p>`:''}
     <div class="site-card" style="max-height:280px;overflow-y:auto">
       ${valid.map((it,i)=>`<div style="padding:6px 0;border-bottom:1px solid var(--border-soft)">
-        <b>${i+1}. ${it.title}</b> <span style="color:var(--muted)">— ${it.quantity} ${it.unit}${it.item_type?' — '+it.item_type:''}</span>
+        <b>${i+1}. ${esc(it.title)}</b> <span style="color:var(--muted)">— ${it.quantity} ${it.unit}${it.item_type?' — '+it.item_type:''}</span>
         <span class="pill ${PRIORITY_COLOR[it.priority]}" style="font-size:9px;margin-right:6px">${it.priority}</span>
       </div>`).join('')}
     </div>
@@ -9027,7 +9029,7 @@ async function exportRoomNeedsPdf(){
   el.innerHTML = `<h2 style="text-align:center">تقرير احتياجات الغرفة</h2>
     <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="5">
       <tr style="background:#0B1220;color:#fff"><th>العنوان</th><th>الوصف</th><th>الأولوية</th><th>الحالة</th></tr>
-      ${roomNeedsData.map(r=>`<tr><td>${r.title}</td><td>${r.description||''}</td><td>${r.priority}</td><td>${r.status}</td></tr>`).join('')}
+      ${roomNeedsData.map(r=>`<tr><td>${esc(r.title)}</td><td>${esc(r.description||'')}</td><td>${r.priority}</td><td>${r.status}</td></tr>`).join('')}
     </table>`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
@@ -9139,7 +9141,7 @@ async function loadLayouts(factoryId){
         : `<img data-thumb="${l.file_url}" data-thumbkey="${l.file_url}|${l.updated_at||l.created_at||''}" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" style="width:100%;height:110px;object-fit:cover;border-radius:8px;cursor:zoom-in;background:var(--bg-2)" onclick="openImageLightbox('${l.file_url}')">`}
       <div style="font-size:12.5px;font-weight:700;margin-top:6px">${l.layout_name}</div>
       <div style="font-size:11px;margin-top:3px"><span class="pill ok">📷 ${countCamerasInLayout(l)} كاميرا</span></div>
-      ${l.notes? `<div style="font-size:10.5px;color:var(--muted)">${l.notes}</div>`:''}
+      ${l.notes? `<div style="font-size:10.5px;color:var(--muted)">${esc(l.notes)}</div>`:''}
       ${l.original_file_url? `<div style="font-size:9.5px;color:var(--amber);margin-top:2px">✏️ مُعدَّلة</div>`:''}
       ${l.file_type==='pdf' ? `<button class="btn sm block" style="margin-top:6px" onclick="openPdfLayoutViewer('${l.id}')">🗺️ فتح كخريطة مرئية</button>`:''}
       ${l.file_type==='image' ? `<button class="btn sm block" style="margin-top:6px" onclick="openLayoutServerMarkers('${l.id}','${factoryId}')">🧩 العناصر التفاعلية على الخريطة</button>`:''}
@@ -11994,7 +11996,7 @@ function openServerForm(factoryId, serverId){
       <div class="field"><label>RAID Controller</label><input class="input" id="sv_raidctrl" value="${d.raid_controller||''}"></div></div>
       <div class="row2"><div class="field"><label>عدد الهاردات في RAID</label><input class="input" type="number" id="sv_raiddrives" value="${d.raid_drives_count||''}"></div>
       <div class="field"><label>Hot Spare</label><input class="input" type="number" id="sv_hotspare" value="${d.raid_hot_spare||0}"></div></div>
-      <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="sv_notes">${d.notes||''}</textarea></div>
+      <div class="field"><label>ملاحظات عامة</label><textarea class="input" id="sv_notes">${esc(d.notes||'')}</textarea></div>
     </div>
     <button class="btn primary block" style="margin-top:10px" onclick="saveServerForm('${factoryId}','${isNew?'':serverId}')">💾 حفظ</button>
   `);
@@ -12128,7 +12130,7 @@ function openTowerForm(factoryId, towerId){
       <div class="field"><label>المسافة التقريبية (كم)</label><input class="input" type="number" step="0.1" id="tw_dist" value="${d.distance_km||''}"></div>
     </div>
     <div class="field"><label>الطرف الآخر للوصلة</label><input class="input" id="tw_otherend" value="${d.other_end||''}" placeholder="مثال: مصنع الدولية - الغرفة المركزية"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="tw_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="tw_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveTowerForm('${factoryId}','${isNew?'':towerId}')">💾 حفظ</button>
   `);
 }
@@ -12302,7 +12304,7 @@ async function showWirelessLinkDetails(linkId){
       <div class="mini"><div class="n" style="font-size:11px">${l.speed||'—'}</div><div class="t">Speed</div></div>
     </div>
     ${l.last_check_date? `<p style="font-size:11px;color:var(--muted);margin-top:8px">آخر فحص: ${fmtDateAr(l.last_check_date)}</p>`:''}
-    ${l.notes? `<p style="font-size:11px;color:var(--muted)">${l.notes}</p>`:''}
+    ${l.notes? `<p style="font-size:11px;color:var(--muted)">${esc(l.notes)}</p>`:''}
     ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn danger block" style="margin-top:10px" onclick="deleteWirelessLink('${l.id}')">🗑 حذف الرابط</button>`:''}
   `);
 }
@@ -12364,7 +12366,7 @@ function renderServerProfileModal(activeTab){
       <p style="font-size:12px;color:var(--muted)"><b>الشبكة:</b> ${sw?'🔌 '+sw.switch_name+(s.switch_port?' — Port '+s.switch_port:''):'—'}</p>
       <p style="font-size:12px;color:var(--muted)"><b>UPS:</b> ${ups?'🔋 '+ups.ups_name:'—'}</p>
       ${s.has_raid? `<p style="font-size:12px;color:var(--muted)"><b>RAID:</b> ${s.raid_level||''} (${s.raid_drives_count||0} هارد، Hot Spare: ${s.raid_hot_spare||0})</p>`:''}
-      ${s.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${s.notes}</p>`:''}
+      ${s.notes? `<p style="font-size:12px;color:var(--muted)"><b>ملاحظات:</b> ${esc(s.notes)}</p>`:''}
     </div>`;
   } else if(activeTab===1){
     body = `
@@ -12451,7 +12453,7 @@ function openDriveForm(serverId, driveId){
       <div class="field"><label>المساحة المستخدمة (GB)</label><input class="input" type="number" id="dr_used" value="${d.used_gb||''}"></div>
       <div class="field"><label>المساحة المتاحة (GB)</label><input class="input" type="number" id="dr_free" value="${d.free_gb||''}"></div>
     </div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="dr_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="dr_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveDriveForm('${serverId}','${isNew?'':driveId}')">💾 حفظ</button>
   `);
 }
@@ -12657,7 +12659,7 @@ function showTowerDetailsPopup(towerId){
     ${t.brand||t.model? `<p style="font-size:11.5px;color:var(--muted);margin-top:8px"><b>الجهاز:</b> ${t.brand||''} ${t.model||''}</p>`:''}
     ${t.ip_address? `<p style="font-size:11.5px;color:var(--muted)"><b>IP:</b> ${t.ip_address}</p>`:''}
     ${t.direction? `<p style="font-size:11.5px;color:var(--muted)"><b>الاتجاه:</b> ${t.direction}</p>`:''}
-    ${t.notes? `<p style="font-size:11.5px;color:var(--muted)">${t.notes}</p>`:''}
+    ${t.notes? `<p style="font-size:11.5px;color:var(--muted)">${esc(t.notes)}</p>`:''}
     ${(isAdmin()||hasPerm('edit_network_map'))? `<button class="btn primary block" style="margin-top:10px" onclick="openTowerForm('${t.factory_id}','${t.id}')">✏️ تعديل بيانات البرج</button>`:''}
   `);
 }
@@ -12890,7 +12892,7 @@ function showSwitchDetailsPopup(switchId){
     <p style="font-size:12px;margin-top:10px"><b>النوع:</b> ${sw.switch_type||'—'} &nbsp; <b>الموديل:</b> ${sw.brand||''} ${sw.model||''}</p>
     <p style="font-size:12px"><b>Rack:</b> ${rack?rack.rack_name:'—'} &nbsp; <b>سويتش رئيسي:</b> ${uplink?uplink.switch_name:'هو نفسه رئيسي'}</p>
     ${linkedServers.length? `<p style="font-size:12px"><b>السيرفرات المتصلة:</b> ${linkedServers.map(s=>s.server_name).join('، ')}</p>`:''}
-    ${sw.notes? `<p style="font-size:11px;color:var(--muted)">${sw.notes}</p>`:''}
+    ${sw.notes? `<p style="font-size:11px;color:var(--muted)">${esc(sw.notes)}</p>`:''}
     <button class="btn block" style="margin-top:10px" onclick="openNetworkMap('${sw.factory_id}')">→ رجوع للخريطة</button>
   `);
 }
@@ -12931,7 +12933,7 @@ function renderRacksList(factoryId){
         <div><div class="site-name" style="font-size:14px">${r.rack_name}</div><div class="site-meta">${r.location||'—'}</div></div>
         ${r.photo_url? `<img src="${r.photo_url}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${r.photo_url}')">`:''}
       </div>
-      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${r.notes}</p>`:''}
+      ${r.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(r.notes)}</p>`:''}
       ${rackServers.length ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ الأجهزة: ${rackServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}${s.rack_u?' (U'+s.rack_u+')':''}</span>`).join(' ')}</div>` : ''}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${r.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadRackPhoto('${r.id}','${factoryId}',this)"></label>
@@ -12950,7 +12952,7 @@ function openRackForm(factoryId, rackId){
     <div class="modal-head"><h3>${isNew?'إضافة راك':'تعديل راك'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="field"><label>اسم/رقم الراك</label><input class="input" id="rk_name" value="${d.rack_name}" placeholder="مثال: Rack 01"></div>
     <div class="field"><label>المكان</label><input class="input" id="rk_location" value="${d.location||''}" placeholder="مثال: غرفة السيرفرات"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="rk_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="rk_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveRackForm('${factoryId}','${isNew?'':rackId}')">💾 حفظ</button>
   `);
 }
@@ -13014,7 +13016,7 @@ function renderSwitchesList(factoryId){
       </div>
       ${sw.brand||sw.model? `<div style="font-size:11px;color:var(--muted)">${sw.brand||''} ${sw.model||''}</div>`:''}
       ${(sw.connected_cameras||[]).length? `<div style="margin-top:6px">${(sw.connected_cameras||[]).map(c=>`<span class="tag-chip" style="display:inline-block;background:var(--bg-2);border:1px solid var(--border-soft);border-radius:8px;padding:3px 8px;font-size:10.5px;margin:2px">${c}</span>`).join('')}</div>`:''}
-      ${sw.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${sw.notes}</p>`:''}
+      ${sw.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(sw.notes)}</p>`:''}
       ${(()=>{ const swServers = serversData.filter(s=>s.switch_id===sw.id); return swServers.length? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ سيرفرات متصلة: ${swServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}${s.switch_port?' (Port '+s.switch_port+')':''}</span>`).join(' ')}</div>` : ''; })()}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${sw.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadSwitchPhoto('${sw.id}','${factoryId}',this)"></label>
@@ -13065,14 +13067,14 @@ function openSwitchForm(factoryId, switchId){
       <div class="field" style="margin-top:8px">
         ${networkCamerasData.length ? `<div style="max-height:180px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:10px;padding:8px" id="sw_cameras_box">
           ${networkCamerasData.map(c=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:5px 2px;cursor:pointer">
-            <input type="checkbox" class="sw_cam_chk" value="${c.camera_name}" ${(d.connected_cameras||[]).includes(c.camera_name)?'checked':''} style="accent-color:var(--accent)">
-            ${c.camera_name} ${c.status!=='تعمل'?'<span class=\"pill bad\" style=\"font-size:9px\">'+c.status+'</span>':''}
+            <input type="checkbox" class="sw_cam_chk" value="${esc(c.camera_name)}" ${(d.connected_cameras||[]).includes(c.camera_name)?'checked':''} style="accent-color:var(--accent)">
+            ${esc(c.camera_name)} ${c.status!=='تعمل'?'<span class=\"pill bad\" style=\"font-size:9px\">'+c.status+'</span>':''}
           </label>`).join('')}
         </div>` : `<p style="font-size:11px;color:var(--muted-2)">لا توجد كاميرات مسجّلة لهذا المصنع بعد.</p>`}
         <p style="font-size:10px;color:var(--muted-2);margin-top:4px">⚠️ لو حددت كاميرات هنا، هيتم استخدام عددها بدل الرقم اللي كتبته فوق.</p>
       </div>
     </details>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="sw_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="sw_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveSwitchForm('${factoryId}','${isNew?'':switchId}')">💾 حفظ</button>
   `);
 }
@@ -13173,7 +13175,7 @@ async function loadUpsData(factoryId){
       ${u.last_maintenance_date? `<div style="font-size:10.5px;color:var(--muted-2)">آخر صيانة: ${fmtDateAr(u.last_maintenance_date)}</div>`:''}
       ${u.photo_url? `<img src="${u.photo_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:zoom-in" onclick="openImageLightbox('${u.photo_url}')">`:''}
       ${(()=>{ const upsServers = serversData.filter(s=>s.ups_id===u.id); return upsServers.length? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">🖥️ يعتمد عليه: ${upsServers.map(s=>`<span class="pill" style="cursor:pointer" onclick="openServerProfile('${s.id}')">${s.server_name}</span>`).join(' ')}</div>` : ''; })()}
-      ${u.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${u.notes}</p>`:''}
+      ${u.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(u.notes)}</p>`:''}
       ${isAdmin()? `<div class="btn-row">
         <label class="btn sm" style="cursor:pointer">${u.photo_url?'استبدال صورة':'📷 صورة'}<input type="file" accept="image/*" style="display:none" onchange="uploadUpsPhoto('${u.id}','${factoryId}',this)"></label>
         ${u.photo_url? `<button class="btn sm danger" onclick="removeUpsPhoto('${u.id}','${factoryId}')">🗑 الصورة</button>`:''}
@@ -13202,7 +13204,7 @@ function openUpsForm(factoryId, upsId){
       <div class="field"><label>الموديل</label><input class="input" id="up_model" value="${d.model||''}"></div>
     </div>
     <div class="field"><label>تاريخ آخر صيانة</label><input class="input" type="date" id="up_maint" value="${d.last_maintenance_date||''}"></div>
-    <div class="field"><label>ملاحظات</label><textarea class="input" id="up_notes">${d.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="up_notes">${esc(d.notes||'')}</textarea></div>
     <button class="btn primary block" onclick="saveUpsForm('${factoryId}','${isNew?'':upsId}')">💾 حفظ</button>
   `);
 }
@@ -13373,16 +13375,16 @@ async function exportSectionPicker(section, factoryId, __collect){
           <div style="page-break-inside:avoid;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:18px">
             <h2 style="margin-top:0">تقرير دخول غرفة التحكم المركزية</h2>
             <p><b>المصنع:</b> ${fname}</p>
-            <p><b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الدخول:</b> ${r.visiting_entity||'—'}</p>
+            <p><b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الدخول:</b> ${esc(r.visiting_entity||'—')}</p>
             <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>الوقت إلى:</b> ${r.time_to||'—'}</p>
             <h3>الأشخاص المسموح لهم بالدخول</h3>
             ${people.length ? `<table><tr><th>م</th><th>الاسم</th><th>الإدارة/القسم</th></tr>${people.map((p,i)=>`<tr><td>${i+1}</td><td>${p.name||'—'}</td><td>${p.department||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد أشخاص مسجّلين لهذا التقرير.</p>`}
             <h3>لمراجعة الحدث الآتي</h3>
-            ${events.length ? `<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${(e.description||'—').replace(/\n/g,'<br>')}</td><td>${e.event_datetime||'—'}</td><td>${e.location_or_camera||'—'}</td><td>${e.notes||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد أحداث مسجّلة لهذا التقرير.</p>`}
+            ${events.length ? `<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${(e.description||'—').replace(/\n/g,'<br>')}</td><td>${e.event_datetime||'—'}</td><td>${e.location_or_camera||'—'}</td><td>${esc(e.notes||'—')}</td></tr>`).join('')}</table>` : `<p>لا يوجد أحداث مسجّلة لهذا التقرير.</p>`}
             <h3>نتيجة المراجعة والفحص</h3>
-            ${results.length ? `<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((res,i)=>`<tr><td>${i+1}</td><td>${(res.result||'—').replace(/\n/g,'<br>')}</td><td>${(res.details||'—').replace(/\n/g,'<br>')}</td><td>${res.notes||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد نتائج مراجعة مسجّلة لهذا التقرير.</p>`}
+            ${results.length ? `<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((res,i)=>`<tr><td>${i+1}</td><td>${(res.result||'—').replace(/\n/g,'<br>')}</td><td>${(res.details||'—').replace(/\n/g,'<br>')}</td><td>${esc(res.notes||'—')}</td></tr>`).join('')}</table>` : `<p>لا يوجد نتائج مراجعة مسجّلة لهذا التقرير.</p>`}
             <h3>الاعتمادات</h3>
-            <table><tr><th>مسؤول غرفة التحكم</th><th>المشرف</th><th>مدير الأمن</th></tr><tr><td>${r.room_officer_name||'—'}</td><td>${r.room_supervisor_name||'—'}</td><td>${r.security_manager_name||'—'}</td></tr></table>
+            <table><tr><th>مسؤول غرفة التحكم</th><th>المشرف</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'—')}</td><td>${esc(r.room_supervisor_name||'—')}</td><td>${esc(r.security_manager_name||'—')}</td></tr></table>
             ${r.notes? `<p><b>ملاحظات عامة:</b> ${r.notes.replace(/\n/g,'<br>')}</p>`:''}
           </div>`;
       });
@@ -13659,7 +13661,7 @@ function unifiedBuildTableHtml(headers, rows, opts){
 function unifiedChartsHtml(opts){
   if(!opts?.chartImages?.length) return '';
   return `<div style="margin:14px 0;text-align:center">
-    ${opts.chartImages.map(c=>`<div style="display:inline-block;margin:6px;vertical-align:top;page-break-inside:avoid"><img src="${c.dataUrl}" style="max-width:320px;border-radius:8px"><div style="font-size:10px;color:#666">${c.title}</div></div>`).join('')}
+    ${opts.chartImages.map(c=>`<div style="display:inline-block;margin:6px;vertical-align:top;page-break-inside:avoid"><img src="${c.dataUrl}" style="max-width:320px;border-radius:8px"><div style="font-size:10px;color:#666">${esc(c.title)}</div></div>`).join('')}
   </div>`;
 }
 async function unifiedExportPdf(title, headers, rows, opts){
@@ -14471,7 +14473,7 @@ async function buildFullFactoryReportHtml(d){
     هذه الأقسام (المخزن، مشتملات الغرفة، احتياجات الغرفة) مشتركة على مستوى غرفة المراقبة المركزية ككل وليست مرتبطة بمصنع محدد في تصميم النظام الحالي — لذلك لا تظهر ضمن تقرير مصنع بعينه. يمكن مراجعتها من أقسامها المستقلة في التطبيق.</p>`;
 
   // 20) ملاحظات
-  html += h2('18. ملاحظات') + (f?.notes ? `<p style="font-size:12px">${f.notes}</p>` : `<p style="color:#999;font-style:italic;font-size:11px">لا توجد ملاحظات إضافية مسجلة.</p>`);
+  html += h2('18. ملاحظات') + (f?.notes ? `<p style="font-size:12px">${esc(f.notes)}</p>` : `<p style="color:#999;font-style:italic;font-size:11px">لا توجد ملاحظات إضافية مسجلة.</p>`);
 
   html += `<p style="text-align:center;color:#888;margin-top:24px;font-size:10.5px;border-top:1px dashed #ccc;padding-top:8px">— تقرير شامل تلقائي من نظام غرفة المراقبة المركزية — إعداد وتشغيل: إبراهيم رمضان —</p></div>`;
   return html;
@@ -15223,7 +15225,7 @@ async function buildAllReportHtml(d){
   if(d.cameraMods && d.cameraMods.length) html += section('الكاميرات المطلوب تعديلها (قبل/بعد)', d.cameraMods.map(c=>`
     <div style="display:inline-block;text-align:center;margin:6px;vertical-align:top">
       <div style="display:flex;gap:4px">${imgTag(c.photo_before_url,80)}${imgTag(c.photo_after_url,80)}</div>
-      <div style="font-size:10px;color:#555">${c.camera_name} — ${c.status}</div>
+      <div style="font-size:10px;color:#555">${esc(c.camera_name)} — ${c.status}</div>
     </div>`).join(''));
   if(d.servers && d.servers.length) html += section('Servers', table(['المصنع','الاسم','الحالة','IP','OS','صورة'], d.servers.map(s=>{
     const img = (d.serverImages||[]).find(im=>im.server_id===s.id);
@@ -15593,11 +15595,11 @@ function renderMigrationTool(){
         <div style="display:flex;align-items:center;gap:10px">
           ${c.photo_url? `<img src="${c.photo_url}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${c.photo_url}')">` : `<div style="width:52px;height:52px;border-radius:8px;background:var(--panel-2);display:flex;align-items:center;justify-content:center">📷</div>`}
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:700">${c.camera_name}</div>
+            <div style="font-size:13px;font-weight:700">${esc(c.camera_name)}</div>
             <div style="font-size:10.5px;color:var(--muted-2)">${f?f.name:'مصنع غير معروف'} — انقطعت: ${new Date(c.down_date).toLocaleDateString('ar-EG')}</div>
           </div>
         </div>
-        ${c.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${c.notes}</p>`:''}
+        ${c.notes? `<p style="font-size:11px;color:var(--muted);margin-top:6px">${esc(c.notes)}</p>`:''}
         <div class="btn-row" style="margin-top:8px">
           <button class="btn sm" style="background:var(--success);color:#fff" onclick="migrateDownCam('${c.id}', true)">✅ اشتغلت</button>
           <button class="btn sm" style="background:var(--danger);color:#fff" onclick="migrateDownCam('${c.id}', false)">🔴 لسه واقفة</button>
@@ -15648,7 +15650,7 @@ async function loadOnCallCard(){
     const {data, error} = await supa.from('oncall_schedule').select('*').eq('duty_date', today).limit(1).single();
     if(error) throw error;
     host.innerHTML = `<div class="site-card" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(150deg,var(--panel-2),var(--panel));margin-top:12px">
-      <div><div style="font-size:10.5px;color:var(--muted)">👤 المناوب اليوم</div><div style="font-weight:800;font-family:'Tajawal';font-size:15px;color:var(--accent)">${data.display_name}</div>${data.notes?`<div style="font-size:10.5px;color:var(--muted-2)">${data.notes}</div>`:''}</div>
+      <div><div style="font-size:10.5px;color:var(--muted)">👤 المناوب اليوم</div><div style="font-weight:800;font-family:'Tajawal';font-size:15px;color:var(--accent)">${esc(data.display_name)}</div>${data.notes?`<div style="font-size:10.5px;color:var(--muted-2)">${esc(data.notes)}</div>`:''}</div>
       ${isAdmin()?`<button class="btn sm" onclick="openOnCallManager()">📅 إدارة</button>`:''}
     </div>`;
   }catch(e){
@@ -15670,7 +15672,7 @@ async function openOnCallManager(){
     <button class="btn primary block" onclick="saveOnCall()">💾 حفظ</button>
     <div class="section-title"><h2 style="font-size:12px">الجدول القادم</h2></div>
     ${list.length ? list.map(o=>`<div class="site-card" style="padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
-      <div><b>${fmtDateAr(o.duty_date)}</b> — ${o.display_name}</div>
+      <div><b>${fmtDateAr(o.duty_date)}</b> — ${esc(o.display_name)}</div>
       <button class="btn sm danger" onclick="deleteOnCall('${o.id}')">🗑</button>
     </div>`).join('') : '<div class="empty">لا يوجد جدول مستقبلي بعد.</div>'}
   `;
