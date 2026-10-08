@@ -13783,7 +13783,7 @@ async function unifiedExport(format, title, classic){
   toast('جاري التجهيز...');
   try{
     let __tplDone = false;
-    if(!classic && !(opts&&opts.customBodyHtml&&(format==='pdf'||format==='word')) && (format==='pdf'||format==='word'||format==='pptx')){
+    if(!classic && (format==='pdf'||format==='word'||format==='pptx')){
       try{ __tplDone = await tplTryExport(format, title, headers, rows, opts); }
       catch(e){ console.error('tpl',e); toast('⚠️ تعذّر التصميم الجديد، تم استخدام الشكل السابق'); __tplDone = false; }
     }
@@ -14090,7 +14090,7 @@ async function unifiedExportExcel(title, headers, rows, opts){
     headerRowOffset += 1;
   }
   const hr = ws.getRow(1+headerRowOffset);
-  finalHeaders.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF12716A'}}; c.alignment={horizontal:'center'}; });
+  finalHeaders.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true,color:{argb:'FFFFFFFF'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb: opts?.customBodyHtml ? 'FF4F46E5' : 'FF12716A'}}; c.alignment={horizontal:'center'}; });
   hr.height = 24;
   rows.forEach((r,i)=>{
     const rowIdx = i+2+headerRowOffset;
@@ -14206,6 +14206,27 @@ function unifiedExportJson(title, rows, opts){
   saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.json`);
 }
 async function unifiedExportImage(title, headers, rows, opts){
+  const __m = (typeof tpMatch==='function') ? tpMatch(title, headers, rows, opts) : null;
+  if(__m && __m.key==='roomentry'){
+    const slides = tpBuild(__m.key, __m.cfg, title, headers, rows, opts);
+    await tpPrepare(slides, 110);
+    const cvs = slides.map(sl=>tpDrawSlide(sl,110));
+    const stamp = new Date().toISOString().slice(0,10);
+    if(cvs.length<=10){
+      const gap = 14, W = cvs[0].width, H = cvs.reduce((a,x)=>a+x.height,0) + gap*(cvs.length-1);
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const g = cv.getContext('2d'); g.fillStyle = '#DCE1E9'; g.fillRect(0,0,W,H);
+      let y = 0; cvs.forEach(x=>{ g.drawImage(x,0,y); y += x.height + gap; });
+      const blob = await new Promise(res=> cv.toBlob(res,'image/png',0.95));
+      if(blob) await saveOrShareFile(blob, `${title}-${stamp}.png`);
+    } else {
+      const ok = await ensureZipLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة ZIP'); return; }
+      const zip = new JSZip();
+      for(let i=0;i<cvs.length;i++){ const b = await new Promise(res=> cvs[i].toBlob(res,'image/png',0.95)); zip.file(`${String(i+1).padStart(2,'0')}.png`, b); }
+      await saveOrShareFile(await zip.generateAsync({type:'blob'}), `${title}-${stamp}.zip`);
+    }
+    return;
+  }
   if(opts?.customBodyHtml){
     const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة الصور'); return; }
     const el = document.createElement('div');
@@ -14258,13 +14279,22 @@ async function unifiedExportZip(title, headers, rows, opts){
   folder.file('البيانات.csv', '\ufeff'+[headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n'));
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
-  const docxBlob = await buildDocxBlobFromHtml(title, opts?.customBodyHtml ? opts.customBodyHtml : `${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`);
+  let __tplZip = false;
+  try{
+    const __m = (typeof tpMatch==='function') ? tpMatch(title, headers, rows, opts) : null;
+    if(__m && __m.key==='roomentry' && await ensurePptxLib()){
+      const slides = tpBuild(__m.key, __m.cfg, title, headers, rows, opts);
+      for(const f of ['pdf','docx','pptx']){ const out = await tpOutput(f, slides, title); if(out && out.blob) folder.file('التقرير.'+out.ext, out.blob); }
+      __tplZip = true;
+    }
+  }catch(e){ console.error('zip tpl', e); __tplZip = false; }
+  const docxBlob = __tplZip ? null : await buildDocxBlobFromHtml(title, opts?.customBodyHtml ? opts.customBodyHtml : `${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`);
   if(docxBlob) folder.file('التقرير.docx', docxBlob);
   if(opts?.chartImages?.length){
     const chartsFolder = folder.folder('الرسوم البيانية');
     opts.chartImages.forEach(c=> chartsFolder.file(`${c.title}.png`, c.dataUrl.split(',')[1], {base64:true}));
   }
-  if(await ensurePdfLib()){
+  if(!__tplZip && await ensurePdfLib()){
     const el = document.createElement('div');
     el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px">${opts?.customBodyHtml ? opts.customBodyHtml : `<h1 style="text-align:center">${title}</h1>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`}</div>`;
     document.body.appendChild(el);
@@ -17320,7 +17350,8 @@ const TP_SIGS = {
   'الصنف|النوع|الرصيد|ملاحظات':'store',
   'المصنع|العدد|الشركة المصنعة|الدقة|النوع':'camtypes',
   'العدد|الشركة المصنعة|الدقة|النوع':'camtypes',
-  'رقم التقرير|المصنع|التاريخ|من|إلى|جهة الزيارة|اسم الشخص|الإدارة|وصف الحدث|نتيجة المراجعة والفحص|مسؤول الغرفة|مشرف الغرفة|مدير الأمن':'roomentry'
+  'رقم التقرير|المصنع|التاريخ|من|إلى|جهة الزيارة|اسم الشخص|الإدارة|وصف الحدث|نتيجة المراجعة والفحص|مسؤول الغرفة|مشرف الغرفة|مدير الأمن':'roomentry',
+  'البند|البيان|التفاصيل':'roomentry'
 };
 // إعداد كل قسم: القالب + شكل البطاقة + الإحصاءات
 const TP_CFG = {
@@ -17412,7 +17443,82 @@ function tpTableChunks(c, headers, rows, perSlide, mk, startN, label){
   for(let i=0;i<rows.length;i+=perSlide){ mk(rows.slice(i,i+perSlide), i, n++); }
   return n;
 }
+
+/* ===== تقارير دخول غرفة التحكم: شرائح مخصّصة لكل تقرير (نفس التصميم في كل الصيغ) ===== */
+function tpBuildRoomEntry(cfg, title, opts){
+  const reports = (opts.rawObjects||[]).filter(Boolean);
+  const bars = tpDist(tpCountBy(reports, tpFactoryName), 'insert');
+  const D = {records:reports.length, photos:null, sites:new Set(reports.map(tpFactoryName).filter(Boolean)).size, recs:[], bars, status:[], panels:[], chartTitle:`إجمالي تقارير دخول الغرفة: ${reports.length}`};
+  const c = tpCtx('indigo', title, title); c.title = title; c.date = tpDate();
+  const th = c.th;
+  tpIndigoCover(c,title,D);
+  let n = 2;
+  if(reports.length>1) tpIndigoStats(c,{pageTitle:'الرسوم البيانية',chartTitle:D.chartTitle,bars:D.bars},D,n++);
+  const str = v=> v==null?'':String(v);
+  const label = (s,text,y)=> s.ops.push(c.R(12.45,y+0.05,0.12,0.3,th.brand,{r:0.05}), c.T(text,0.5,y,11.8,0.4,15,th.ink,{bold:true,min:10}));
+  const card = (s,x,y,w,h,lab,val,vs)=> s.ops.push(c.R(x,y,w,h,th.white,{r:0.1}), c.T(lab,x+0.15,y+0.08,w-0.3,0.3,11,th.mute,{noFit:true}), c.T(val||'—',x+0.15,y+0.4,w-0.3,h-0.5,vs||16,th.ink,{bold:true,min:9}));
+  const table = (s,y,headers,rows,headH,rowH)=>{
+    const h = headH + rows.length*rowH + 0.2;
+    s.ops.push(c.R(0.5,y,12.33,h,th.white,{r:0.1}));
+    s.ops.push(tpTableSlide(c,{x:0.7,y:y+0.1,w:11.93,headers,rows,headH,rowH,headFill:th.soft,headColor:th.ink,headSize:12,bodySize:13,bb:th.soft}));
+    return y+h;
+  };
+  const page = (ttl)=>{ const s = c.newSlide(th.bg); tpIndigoChrome(c,s,ttl,n++,D); return s; };
+  const chunk = (arr,k)=>{ const o=[]; for(let i=0;i<arr.length;i+=k) o.push(arr.slice(i,i+k)); return o.length?o:[[]]; };
+
+  reports.forEach(r=>{
+    const fname = tpFactoryName(r)||'—';
+    const ttl = `تقرير دخول غرفة التحكم المركزية — ${fname}`;
+    const people  = (r.people||[]).filter(p=>p&&(p.name||p.department));
+    const events  = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
+    const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
+
+    // 1) بيانات التقرير + الأشخاص
+    const pChunks = [people.slice(0,5), ...chunk(people.slice(5),9).filter(x=>x.length)];
+    pChunks.forEach((pc,pi)=>{
+      const s = page(ttl);
+      let y = 1.35;
+      if(pi===0){
+        const w=2.95, g=0.177, xs=[0,1,2,3].map(i=>0.5+(3-i)*(w+g));
+        card(s,xs[0],y,w,0.95,'المصنع',fname,16);
+        card(s,xs[1],y,w,0.95,'التاريخ',fmtDateAr(r.report_date),16);
+        card(s,xs[2],y,w,0.95,'التوقيت',`من ${r.time_from||'—'} إلى ${r.time_to||'—'}`,15);
+        card(s,xs[3],y,w,0.95,'جهة/إدارة الزيارة',str(r.visiting_entity)||'—',15);
+        y = 2.5;
+      }
+      label(s, pi===0?'الأشخاص المسموح لهم بالدخول':'الأشخاص المسموح لهم بالدخول (تابع)', y); y += 0.5;
+      if(!pc.length){ s.ops.push(c.R(0.5,y,12.33,0.9,th.white,{r:0.1}), c.T('لا يوجد أشخاص مسجّلين لهذا التقرير.',0.8,y,11.73,0.9,14,th.mute,{noFit:true})); }
+      else table(s,y,['م','الاسم','الإدارة التابعة لها'], pc.map((p,i)=>[String((pi===0?0:5+(pi-1)*9)+i+1), str(p.name), str(p.department)]), 0.5, 0.52);
+    });
+
+    // 2) الحدث + نتيجة المراجعة
+    const evRows = events.map((e,i)=>[String(i+1), str(e.description), str(e.event_datetime), str(e.location_or_camera), str(e.notes)]);
+    const reRows = results.map((x,i)=>[String(i+1), str(x.result), str(x.details), str(x.notes)]);
+    const evH = ['م','وصف الحدث','التاريخ/الوقت','الكاميرا/الموقع','ملاحظات'], reH = ['م','نتيجة المراجعة والفحص','التفاصيل','ملاحظات'];
+    if(evRows.length<=2 && reRows.length<=2 && (evRows.length||reRows.length)){
+      const s = page(ttl); let y = 1.35;
+      if(evRows.length){ label(s,'لمراجعة الحدث الآتي',y); y = table(s,y+0.45,evH,evRows,0.45,0.85)+0.15; }
+      if(reRows.length){ label(s,'نتيجة المراجعة والفحص تبين الآتي',y); y = table(s,y+0.45,reH,reRows,0.45,0.85); }
+    } else {
+      chunk(evRows,4).filter(x=>x.length).forEach((ch,i)=>{ const s=page(ttl); label(s,i?'لمراجعة الحدث الآتي (تابع)':'لمراجعة الحدث الآتي',1.35); table(s,1.8,evH,ch,0.5,1.0); });
+      chunk(reRows,4).filter(x=>x.length).forEach((ch,i)=>{ const s=page(ttl); label(s,i?'نتيجة المراجعة والفحص (تابع)':'نتيجة المراجعة والفحص تبين الآتي',1.35); table(s,1.8,reH,ch,0.5,1.0); });
+    }
+
+    // 3) الاعتمادات
+    const s = page(ttl); label(s,'الاعتمادات',1.35);
+    const w=3.95, g=0.24;
+    [['مسؤول الغرفة',r.room_officer_name],['مشرف الغرفة',r.room_supervisor_name],['مدير الأمن',r.security_manager_name]].forEach((a,i)=>{
+      const x = 0.5+(2-i)*(w+g);
+      card(s,x,1.9,w,1.7,a[0],str(a[1])||'—',20);
+      s.ops.push(c.L(x+0.3,3.3,x+w-0.3,3.3,th.line,1));
+    });
+    if(r.notes){ s.ops.push(c.R(0.5,3.9,12.33,2.8,th.white,{r:0.1}), c.T('ملاحظات عامة',0.8,4.0,11.73,0.35,12,th.mute,{noFit:true}), c.T(str(r.notes),0.8,4.4,11.73,2.2,15,th.ink,{min:9,valign:'top'})); }
+  });
+  tpIndigoClosing(c,title);
+  return c.slides;
+}
 function tpBuild(key, cfg, title, headers, rows, opts){
+  if(key==='roomentry' && opts && Array.isArray(opts.rawObjects) && opts.rawObjects.length) return tpBuildRoomEntry(cfg, title, opts);
   const D = tpPrepData(key,cfg,headers,rows,opts);
   const c = tpCtx(cfg.theme, title, title); c.title = title; c.date = tpDate();
   const th = c.th;
