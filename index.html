@@ -6254,14 +6254,14 @@ async function renderCameraFormModal(factoryId, camId){
 /* ============================================================================
    🔗 ربط تلقائي بين الكاميرات وقسم الأعطال — بدون تكرار، وبسجل تاريخي كامل
    ============================================================================ */
-async function autoCreateFaultFromCamera(cam, factoryId){
+async function autoCreateFaultFromCamera(cam, factoryId, opts={}){
   try{
     // 🎯 منع التكرار الصارم: نتأكد الأول إن مفيش عطل مفتوح بالفعل لنفس الكاميرا
     // قبل ما نعمل أي حاجة — عشان فتح الصفحة تاني أو حفظ متكرر ميعملش عطل جديد
     const {data: existingOpen} = await supa.from('faults').select('id')
       .eq('camera_id', cam.id).eq('source_type','camera')
       .not('status','in','("تم الإصلاح","مغلق")');
-    if(existingOpen && existingOpen.length){ return; } // فيه عطل مفتوح بالفعل — منعمل حاجة
+    if(existingOpen && existingOpen.length){ return false; } // فيه عطل مفتوح بالفعل — منعمل حاجة
 
     const f = factoriesData.find(x=>x.id===factoryId);
     const payload = {
@@ -6286,10 +6286,35 @@ async function autoCreateFaultFromCamera(cam, factoryId){
         ({error, data} = await supa.from('faults').insert(minimal).select().single());
       }
     }
-    if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); toast('🚫 تعذّر إنشاء العطل التلقائي: '+(error.message||'')); return; }
+    if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); toast('🚫 تعذّر إنشاء العطل التلقائي: '+(error.message||'')); return false; }
     await logAudit('إنشاء عطل تلقائي من كاميرا', `${cam.camera_name} (${f?f.name:''})`);
-    toast(`🔴 تم إنشاء سجل عطل تلقائيًا للكاميرا "${cam.camera_name}"`);
-  }catch(e){ console.error('[AUTO FAULT] خطأ غير متوقع:', e); }
+    if(!opts.silent) toast(`🔴 تم إنشاء سجل عطل تلقائيًا للكاميرا "${cam.camera_name}"`);
+    return true;
+  }catch(e){ console.error('[AUTO FAULT] خطأ غير متوقع:', e); return false; }
+}
+/* مزامنة: أي كاميرا حالتها "عطل" في أي مصنع ومالهاش عطل مفتوح في قسم الأعطال
+   (مثلًا اتغيّرت حالتها قبل تفعيل الربط) بيتعملها سجل عطل — مرة واحدة بدون تكرار */
+let __camFaultSyncRunning = false;
+async function syncMissingCameraFaults(){
+  if(!isAdmin() || __camFaultSyncRunning || !navigator.onLine) return 0;
+  // مرة واحدة فقط لكل جهاز — عشان لو حذفت عطل بإيدك بعد كده ميرجعش يتسجّل تاني
+  try{ if(localStorage.getItem('camFaultSyncDone_v1')) return 0; }catch(e){}
+  __camFaultSyncRunning = true;
+  let created = 0;
+  try{
+    const {data: down, error} = await supa.from('cameras').select('*').eq('status','عطل');
+    if(error || !down) return 0;
+    const {data: open, error: e2} = await supa.from('faults').select('camera_id').not('camera_id','is',null).not('status','in','("تم الإصلاح","مغلق")');
+    if(e2) return 0;
+    const has = new Set((open||[]).map(x=>x.camera_id));
+    for(const c of down){
+      if(has.has(c.id)) continue;
+      if(await autoCreateFaultFromCamera(c, c.factory_id, {silent:true})) created++;
+    }
+    try{ localStorage.setItem('camFaultSyncDone_v1','1'); }catch(e){}
+  }catch(e){ console.warn('[CAMERA→FAULT SYNC]', e); }
+  finally{ __camFaultSyncRunning = false; }
+  return created;
 }
 async function autoCloseFaultFromCamera(cam){
   try{
@@ -6380,8 +6405,13 @@ async function quickUpdateCameraStatus(camId, newStatus){
     const wasDown = old.status!=='تعمل', isDown = newStatus!=='تعمل';
     if(wasDown!==isDown) await syncFactoryCameraCounts(old.factory_id, 0, isDown?1:-1);
     await logAudit('تغيير حالة كاميرا', old.camera_name, old.status, newStatus);
-    toast('✅ تم التحديث'); loadCameras(old.factory_id); loadFactories();
-  }catch(e){ toast('🚫 تعذّر التحديث'); }
+    toast('✅ تم التحديث');
+    // 🎯 نفس الربط التلقائي مع قسم الأعطال الموجود في فورم التعديل — لأي مصنع
+    const updatedCam = {...old, status:newStatus};
+    if(newStatus==='عطل' && old.status!=='عطل') await autoCreateFaultFromCamera(updatedCam, old.factory_id);
+    else if(newStatus==='تعمل' && old.status==='عطل') await autoCloseFaultFromCamera(updatedCam);
+    loadCameras(old.factory_id); loadFactories();
+  }catch(e){ console.error(e); toast('🚫 تعذّر التحديث'); }
 }
 async function trackCameraSla(oldCam, newStatus){
   if(oldCam.status==='عطل' && newStatus==='تعمل' && oldCam.fault_date){
@@ -6835,6 +6865,8 @@ function renderFaultsPlaceholder(){
 }
 const FAULT_SEVERITY_COLOR = {'عالية':'bad','متوسطة':'warn','منخفضة':'ok'};
 async function loadFaults(){
+  const syncedFaults = await syncMissingCameraFaults();
+  if(syncedFaults) toast(`🔴 تم تسجيل ${syncedFaults} عطل لكاميرات حالتها "عطل" ولم يكن لها سجل`);
   try{
     const {data, error} = await supa.from('faults').select('*').order('reported_at',{ascending:false}).limit(300);
     if(error) throw error;
