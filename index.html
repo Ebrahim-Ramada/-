@@ -8631,14 +8631,26 @@ async function exportRoomEntryReport(reportId){
     <p style="text-align:center">يسمح بما يلي دخول غرفة التحكم المركزية من مصنع: <b>${f?f.name:''}</b>${r.visiting_entity?` — جهة الزيارة: ${esc(r.visiting_entity)}`:''}</p>
     <h2>الأشخاص المسموح لهم بالدخول</h2>
     <table><tr><th>الاسم</th><th>الإدارة التابعة لها</th></tr>${(r.people||[]).map(p=>`<tr><td>${p.name||''}</td><td>${p.department||''}</td></tr>`).join('')}</table>
-    ${(r.events||[]).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.map(e=>`<tr><td>${esc(e.description||'')}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</table>`:''}
-    ${(r.review_results||[]).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.map(res=>`<tr><td>${res.result||''}</td><td>${esc(res.details||'')}</td><td>${esc(res.notes||'')}</td></tr>`).join('')}</table>`:''}
+    ${(r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes)).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes)).map(e=>`<tr><td>${esc(e.description||'')}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</table>`:''}
+    ${(r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes)).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.filter(x=>x&&(x.result||x.details||x.notes)).map(res=>`<tr><td>${esc(res.result||'')}</td><td>${esc(res.details||'')}</td><td>${esc(res.notes||'')}</td></tr>`).join('')}</table>`:''}
     <h2>الاعتمادات</h2>
     <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'')}</td><td>${esc(r.room_supervisor_name||'')}</td><td>${esc(r.security_manager_name||'')}</td></tr></table>
   `;
-  const headers = ['الاسم','الإدارة التابعة لها'];
-  const data = (r.people||[]).map(p=>[p.name||'', p.department||'']);
-  openUnifiedExportPicker(`${f?f.name:''} - تقرير دخول غرفة التحكم - ${r.report_date}`, headers, data, { rawObjects: r.people, customBodyHtml: bodyHtml });
+  // جدول مسطّح كامل (للصيغ اللي بتعتمد على الجداول: Excel / PowerPoint / CSV / صورة / ZIP) — بيشمل كل بنود التقرير
+  const headers = ['البند','البيان','التفاصيل'];
+  const joinD = (arr)=> arr.filter(x=>x && String(x).trim()).join(' — ');
+  const data = [
+    ['التاريخ', fmtDateAr(r.report_date), `من ${r.time_from||'—'} إلى ${r.time_to||'—'}`],
+    ['جهة الزيارة', r.visiting_entity||'—', f?f.name:'']
+  ];
+  (r.people||[]).forEach((p,i)=> data.push([`الشخص ${i+1}`, p.name||'', p.department||'']));
+  (r.events||[]).filter(e=>e && (e.description||e.event_datetime||e.location_or_camera||e.notes)).forEach((e,i)=>
+    data.push([`وصف الحدث ${i+1}`, e.description||'', joinD([e.event_datetime&&('التاريخ/الوقت: '+e.event_datetime), e.location_or_camera&&('الكاميرا/الموقع: '+e.location_or_camera), e.notes&&('ملاحظات: '+e.notes)])]));
+  (r.review_results||[]).filter(x=>x && (x.result||x.details||x.notes)).forEach((x,i)=>
+    data.push([`نتيجة المراجعة والفحص ${i+1}`, x.result||'', joinD([x.details&&('التفاصيل: '+x.details), x.notes&&('ملاحظات: '+x.notes)])]));
+  data.push(['مسؤول الغرفة', r.room_officer_name||'—', ''], ['مشرف الغرفة', r.room_supervisor_name||'—', ''], ['مدير الأمن', r.security_manager_name||'—', '']);
+  if(r.notes) data.push(['ملاحظات عامة', r.notes, '']);
+  openUnifiedExportPicker(`${f?f.name:''} - تقرير دخول غرفة التحكم - ${r.report_date}`, headers, data, { rawObjects: [r], customBodyHtml: bodyHtml });
   await logAudit('طباعة/تصدير تقرير دخول غرفة التحكم', `${f?f.name:''} — ${r.report_date}`);
 }
 /* ============================================================================
@@ -13562,14 +13574,14 @@ async function exportSectionPicker(section, factoryId, __collect){
       reports.forEach((r,ridx)=>{
         const fname = factoriesData.find(x=>x.id===r.factory_id)?.name || '';
         const people = (r.people&&r.people.length) ? r.people : [{name:'—',department:'—'}];
-        people.forEach(p=> flatRows.push([`#${ridx+1}`, fname, fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', (r.events||[]).length, (r.review_results||[]).length, r.room_officer_name||'', r.room_supervisor_name||'', r.security_manager_name||'']));
+        people.forEach(p=> flatRows.push([`#${ridx+1}`, fname, fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', (r.events||[]).filter(e=>e&&(e.description||e.location_or_camera)).map((e,i,a)=>(a.length>1?`${i+1}) `:'')+[e.description, e.location_or_camera&&('('+e.location_or_camera+')')].filter(Boolean).join(' ')).join(' | ')||'—', (r.review_results||[]).filter(x=>x&&(x.result||x.details)).map((x,i,a)=>(a.length>1?`${i+1}) `:'')+[x.result, x.details].filter(Boolean).join(' — ')).join(' | ')||'—', r.room_officer_name||'', r.room_supervisor_name||'', r.security_manager_name||'']));
       });
 
       const byFactory = {}; reports.forEach(r=>{ const fn=factoriesData.find(x=>x.id===r.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
       const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي تقارير دخول الغرفة: ${reports.length}`)].filter(Boolean);
       return {
         title:'تقارير دخول غرفة التحكم المركزية — كل المصانع',
-        headers:['رقم التقرير','المصنع','التاريخ','من','إلى','جهة الزيارة','اسم الشخص','الإدارة','عدد الأحداث','عدد نتائج المراجعة','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'],
+        headers:['رقم التقرير','المصنع','التاريخ','من','إلى','جهة الزيارة','اسم الشخص','الإدارة','وصف الحدث','نتيجة المراجعة والفحص','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'],
         data: flatRows, raw: reports, chartImages, customBodyHtml
       };
     },
@@ -13771,7 +13783,7 @@ async function unifiedExport(format, title, classic){
   toast('جاري التجهيز...');
   try{
     let __tplDone = false;
-    if(!classic && (format==='pdf'||format==='word'||format==='pptx')){
+    if(!classic && !(opts&&opts.customBodyHtml&&(format==='pdf'||format==='word')) && (format==='pdf'||format==='word'||format==='pptx')){
       try{ __tplDone = await tplTryExport(format, title, headers, rows, opts); }
       catch(e){ console.error('tpl',e); toast('⚠️ تعذّر التصميم الجديد، تم استخدام الشكل السابق'); __tplDone = false; }
     }
@@ -14067,7 +14079,7 @@ async function unifiedExportExcel(title, headers, rows, opts){
   const maxImgsPerRow = hasImgs ? Math.max(1, ...rows.map((_,i)=>unifiedRowImages(opts,i).length)) : 0;
   const finalHeaders = hasImgs ? [...headers, ...Array.from({length:maxImgsPerRow}, (_,k)=> maxImgsPerRow>1?`صورة ${k+1}`:'صورة')] : headers;
   const ws = wb.addWorksheet(title.slice(0,28), {views:[{rightToLeft:true, state:'frozen', ySplit:1}]});
-  ws.columns = finalHeaders.map(()=>({width:18}));
+  ws.columns = finalHeaders.map(()=>({width: opts?.customBodyHtml ? 36 : 18}));
   let headerRowOffset = 0;
   if(opts?.chartImages?.length){
     // نضيف الرسوم البيانية كصور فعلية فوق الجدول مباشرة
@@ -14082,7 +14094,7 @@ async function unifiedExportExcel(title, headers, rows, opts){
   hr.height = 24;
   rows.forEach((r,i)=>{
     const rowIdx = i+2+headerRowOffset;
-    r.forEach((val,ci)=>{ ws.getCell(rowIdx, ci+1).value = val==null?'':val; });
+    r.forEach((val,ci)=>{ const cell = ws.getCell(rowIdx, ci+1); cell.value = val==null?'':val; if(opts?.customBodyHtml){ cell.alignment = {wrapText:true, vertical:'top', horizontal:'right'}; } });
     if(hasImgs){
       ws.getRow(rowIdx).height = 60;
       unifiedRowImages(opts,i).forEach((im,k)=>{
@@ -14194,6 +14206,20 @@ function unifiedExportJson(title, rows, opts){
   saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.json`);
 }
 async function unifiedExportImage(title, headers, rows, opts){
+  if(opts?.customBodyHtml){
+    const ok = await ensurePdfLib(); if(!ok){ toast('⚠️ تعذّر تحميل مكتبة الصور'); return; }
+    const el = document.createElement('div');
+    el.style.cssText = 'width:900px;background:#fff';
+    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:18px;color:#0B1220;background:#fff"><style>table{width:100%;border-collapse:collapse;margin:6px 0 12px}th,td{border:1px solid #333;padding:6px;font-size:13px;text-align:right}th{background:#e8edf5}</style>${opts.customBodyHtml}</div>`;
+    document.body.appendChild(el);
+    try{
+      const canvas = await html2pdf().set({html2canvas:{scale:2,backgroundColor:'#ffffff'}}).from(el).toCanvas().get('canvas');
+      const blob = await new Promise(res=> canvas.toBlob(res,'image/png',0.95));
+      el.remove();
+      if(blob) await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.png`);
+    }catch(e){ el.remove(); throw e; }
+    return;
+  }
   const chartH = opts?.chartImages?.length ? 200 : 0;
   const W = 1000, rowH = 34, headH = 50, padTop = 90;
   const H = padTop + chartH + headH + rows.length*rowH + 40;
@@ -14232,7 +14258,7 @@ async function unifiedExportZip(title, headers, rows, opts){
   folder.file('البيانات.csv', '\ufeff'+[headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\n'));
   const allUrls = unifiedAllImageUrls(rows, opts);
   if(allUrls.length) await urlsToDataUris(allUrls);
-  const docxBlob = await buildDocxBlobFromHtml(title, `${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`);
+  const docxBlob = await buildDocxBlobFromHtml(title, opts?.customBodyHtml ? opts.customBodyHtml : `${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`);
   if(docxBlob) folder.file('التقرير.docx', docxBlob);
   if(opts?.chartImages?.length){
     const chartsFolder = folder.folder('الرسوم البيانية');
@@ -14240,7 +14266,7 @@ async function unifiedExportZip(title, headers, rows, opts){
   }
   if(await ensurePdfLib()){
     const el = document.createElement('div');
-    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px"><h1 style="text-align:center">${title}</h1>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}</div>`;
+    el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px">${opts?.customBodyHtml ? opts.customBodyHtml : `<h1 style="text-align:center">${title}</h1>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`}</div>`;
     document.body.appendChild(el);
     const pdfBlob = await html2pdf().set({margin:8, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
     el.remove();
@@ -15132,8 +15158,8 @@ async function buildAllExcelWorkbook(d){
     d.layoutMarkers.map(m=>[m.marker_type, m.ref_label||'', m.x_pct, m.y_pct]));
   if(d.roomEntryReports?.length){
     const rerRows = [];
-    d.roomEntryReports.forEach(r=>{ (r.people&&r.people.length?r.people:[{name:'—',department:'—'}]).forEach(p=> rerRows.push([d.sites.find(s=>s.id===r.factory_id)?.name||'', fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||''])); });
-    sheetFromRows('تقارير دخول غرفة التحكم', ['المصنع','التاريخ','من','إلى','جهة الزيارة','الاسم','الإدارة'], rerRows);
+    d.roomEntryReports.forEach(r=>{ (r.people&&r.people.length?r.people:[{name:'—',department:'—'}]).forEach(p=> rerRows.push([d.sites.find(s=>s.id===r.factory_id)?.name||'', fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', (r.events||[]).map(e=>[e.description,e.location_or_camera].filter(Boolean).join(' ')).filter(Boolean).join(' | '), (r.review_results||[]).map(x=>[x.result,x.details].filter(Boolean).join(' — ')).filter(Boolean).join(' | ')])); });
+    sheetFromRows('تقارير دخول غرفة التحكم', ['المصنع','التاريخ','من','إلى','جهة الزيارة','الاسم','الإدارة','وصف الحدث','نتيجة المراجعة والفحص'], rerRows);
   }
   if(d.fenceSections?.length) sheetFromRows('تأمين الأسوار بالسلك الشائك', ['المصنع','الجزء','الجهة','حالة التنفيذ','المركَّب (م)','المتبقي (م)','حالة السلك','تاريخ التركيب','المقاول','ملاحظات'],
     d.fenceSections.map(s=>[d.sites.find(x=>x.id===s.factory_id)?.name||'', s.section_name, s.side||'', s.execution_status, s.wire_installed_length||0, s.remaining_length||0, s.wire_condition, s.install_date?fmtDateAr(s.install_date):'', s.contractor||'', s.notes||'']));
@@ -15357,8 +15383,8 @@ async function buildAllReportHtml(d){
     ${d.wirelessLinks?.length? table(['من','إلى','الحالة'], d.wirelessLinks.map(l=>[d.towers.find(t=>t.id===l.from_tower_id)?.tower_name||'', l.to_tower_id?(d.towers.find(t=>t.id===l.to_tower_id)?.tower_name||'الغرفة المركزية'):'الغرفة المركزية', l.status||''])):''}`);
   if(d.roomEntryReports?.length){
     const rerRowsHtml = [];
-    d.roomEntryReports.forEach(r=>{ (r.people&&r.people.length?r.people:[{name:'—',department:'—'}]).forEach(p=> rerRowsHtml.push([d.sites.find(s=>s.id===r.factory_id)?.name||'', fmtDateAr(r.report_date), r.visiting_entity||'', p.name||'', p.department||''])); });
-    html += section('تقارير دخول غرفة التحكم المركزية', table(['المصنع','التاريخ','جهة الزيارة','الاسم','الإدارة'], rerRowsHtml));
+    d.roomEntryReports.forEach(r=>{ (r.people&&r.people.length?r.people:[{name:'—',department:'—'}]).forEach(p=> rerRowsHtml.push([d.sites.find(s=>s.id===r.factory_id)?.name||'', fmtDateAr(r.report_date), r.visiting_entity||'', p.name||'', p.department||'', (r.events||[]).map(e=>e.description||'').filter(Boolean).join(' | '), (r.review_results||[]).map(x=>[x.result,x.details].filter(Boolean).join(' — ')).filter(Boolean).join(' | ')])); });
+    html += section('تقارير دخول غرفة التحكم المركزية', table(['المصنع','التاريخ','جهة الزيارة','الاسم','الإدارة','وصف الحدث','نتيجة المراجعة والفحص'], rerRowsHtml));
   }
   if(d.fenceSections?.length) html += section('🧱 تأمين الأسوار بالسلك الشائك', table(
     ['المصنع','الجزء','الجهة','حالة التنفيذ','المركَّب (م)','المتبقي (م)','حالة السلك','صور'],
@@ -17294,7 +17320,7 @@ const TP_SIGS = {
   'الصنف|النوع|الرصيد|ملاحظات':'store',
   'المصنع|العدد|الشركة المصنعة|الدقة|النوع':'camtypes',
   'العدد|الشركة المصنعة|الدقة|النوع':'camtypes',
-  'رقم التقرير|المصنع|التاريخ|من|إلى|جهة الزيارة|اسم الشخص|الإدارة|عدد الأحداث|عدد نتائج المراجعة|مسؤول الغرفة|مشرف الغرفة|مدير الأمن':'roomentry'
+  'رقم التقرير|المصنع|التاريخ|من|إلى|جهة الزيارة|اسم الشخص|الإدارة|وصف الحدث|نتيجة المراجعة والفحص|مسؤول الغرفة|مشرف الغرفة|مدير الأمن':'roomentry'
 };
 // إعداد كل قسم: القالب + شكل البطاقة + الإحصاءات
 const TP_CFG = {
