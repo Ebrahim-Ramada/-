@@ -6287,6 +6287,13 @@ async function autoCreateFaultFromCamera(cam, factoryId, opts={}){
       }
     }
     if(error){ console.error('[AUTO FAULT] تعذّر إنشاء عطل تلقائي:', error); toast('🚫 تعذّر إنشاء العطل التلقائي: '+(error.message||'')); return false; }
+    // 📷 صورة الكاميرا تتنقل مع العطل وتظهر في صور العطل مباشرة
+    if(cam.photo_url && data && data.id){
+      try{
+        const {error: imgErr} = await supa.from('fault_images').insert({fault_id:data.id, image_url:cam.photo_url, created_by:currentProfile.id});
+        if(imgErr) console.warn('[AUTO FAULT] تعذّر إرفاق صورة الكاميرا بالعطل:', imgErr);
+      }catch(e){ console.warn('[AUTO FAULT] تعذّر إرفاق صورة الكاميرا بالعطل:', e); }
+    }
     await logAudit('إنشاء عطل تلقائي من كاميرا', `${cam.camera_name} (${f?f.name:''})`);
     if(!opts.silent) toast(`🔴 تم إنشاء سجل عطل تلقائيًا للكاميرا "${cam.camera_name}"`);
     return true;
@@ -6877,9 +6884,37 @@ async function loadFaults(){
     if(host) host.innerHTML = `<div class="empty">⚠️ تعذّر تحميل بيانات الأعطال: ${e.message||'تحقق من تفعيل جدول faults'}</div>`;
     return;
   }
-  try{ const {data} = await supa.from('fault_images').select('*').order('sort_order'); faultImagesData = data||[]; }
+  let faultImagesLoaded = false;
+  try{ const {data, error} = await supa.from('fault_images').select('*').order('sort_order'); if(error) throw error; faultImagesData = data||[]; faultImagesLoaded = true; }
   catch(e){ faultImagesData = []; }
+  if(faultImagesLoaded && await backfillCameraFaultPhotos()){
+    try{ const {data} = await supa.from('fault_images').select('*').order('sort_order'); faultImagesData = data||[]; }catch(e){}
+  }
   renderFaultsList();
+}
+/* مرة واحدة لكل جهاز: الأعطال المفتوحة المحوَّلة من كاميرا ومن غير صور
+   (اتسجّلت قبل ربط الصورة) بتاخد صورة الكاميرا بتاعتها */
+async function backfillCameraFaultPhotos(){
+  if(!isAdmin() || !navigator.onLine) return 0;
+  try{ if(localStorage.getItem('camFaultPhotoSyncDone_v1')) return 0; }catch(e){}
+  let added = 0;
+  try{
+    const withImg = new Set(faultImagesData.map(im=>im.fault_id));
+    const targets = faultsData.filter(x=> x.camera_id && !withImg.has(x.id) && x.status!=='تم الإصلاح' && x.status!=='مغلق');
+    if(targets.length){
+      const {data: cams, error} = await supa.from('cameras').select('id, photo_url').in('id', [...new Set(targets.map(x=>x.camera_id))]);
+      if(error) return 0;
+      const photoBy = {}; (cams||[]).forEach(c=>{ if(c.photo_url) photoBy[c.id] = c.photo_url; });
+      const rows = targets.filter(x=>photoBy[x.camera_id]).map(x=>({fault_id:x.id, image_url:photoBy[x.camera_id], created_by:currentProfile.id}));
+      if(rows.length){
+        const {error: insErr} = await supa.from('fault_images').insert(rows);
+        if(insErr){ console.warn('[FAULT PHOTO SYNC]', insErr); return 0; }
+        added = rows.length;
+      }
+    }
+    try{ localStorage.setItem('camFaultPhotoSyncDone_v1','1'); }catch(e){}
+  }catch(e){ console.warn('[FAULT PHOTO SYNC]', e); }
+  return added;
 }
 let faultImagesData = [];
 function getFaultImages(faultId){ return faultImagesData.filter(im=>im.fault_id===faultId); }
