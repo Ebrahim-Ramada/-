@@ -13689,6 +13689,17 @@ function renderReportsCenterView(){
       <button class="qbtn" onclick="exportSectionPicker('ups')"><span class="qicon">🔋</span> UPS</button>
       <button class="qbtn" onclick="openAuditLogExportPicker()"><span class="qicon">🔐</span> سجل التدقيق</button>
       <button class="qbtn" onclick="exportSectionPicker('room_entry_reports')"><span class="qicon">🚪</span> تقارير دخول غرفة التحكم</button>
+      <button class="qbtn" onclick="exportSectionPicker('fence_sections')"><span class="qicon">🧱</span> تأمين الأسوار</button>
+      <button class="qbtn" onclick="exportSectionPicker('notes')"><span class="qicon">📝</span> الملاحظات</button>
+      <button class="qbtn" onclick="exportSectionPicker('cameras')"><span class="qicon">📷</span> كاميرات المصانع</button>
+      <button class="qbtn" onclick="exportSectionPicker('downcams_current')"><span class="qicon">🔴</span> الكاميرات المنقطعة حاليًا</button>
+      <button class="qbtn" onclick="exportSectionPicker('replaced_cameras')"><span class="qicon">🔄</span> الكاميرات التي تم تبديلها</button>
+      <button class="qbtn" onclick="exportSectionPicker('recurring_faults')"><span class="qicon">⚠️</span> أجهزة متكررة الأعطال</button>
+      <button class="qbtn" onclick="exportSectionPicker('shift_handovers')"><span class="qicon">🔄</span> تسليم واستلام الشيفت</button>
+      <button class="qbtn" onclick="exportSectionPicker('tasks')"><span class="qicon">📋</span> المهام</button>
+      <button class="qbtn" onclick="exportSectionPicker('oncall')"><span class="qicon">🧑‍🔧</span> جدول المناوبات</button>
+      <button class="qbtn" onclick="exportSectionPicker('towers')"><span class="qicon">📡</span> أبراج الشبكة</button>
+      <button class="qbtn" onclick="exportSectionPicker('wireless_links')"><span class="qicon">📶</span> الروابط اللاسلكية</button>
       <button class="qbtn" onclick="openCameraTypeStatsExportPicker('all')"><span class="qicon">📊</span> أنواع الكاميرات بالمصانع</button>
     </div>
     <div class="section-title"><h2 style="font-size:13px">تصدير شامل لكل التطبيق</h2></div>
@@ -13888,6 +13899,74 @@ async function exportSectionPicker(section, factoryId, __collect){
       const rows=(data||[]); return { title:'الكاميرات المُضافة', headers:['المصنع','الاسم','الكود','الشركة','الدقة','الحالة'],
         data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, c.camera_number||'', c.brand||'', c.resolution||'', c.status]), raw:rows,
         getImageUrl: i=> rows[i].photo_url };
+    },
+    downcams_current: async()=>{
+      const {data} = await supa.from('cameras').select('*');
+      const rows=(data||[]).filter(c=>c.status && c.status!=='تعمل');
+      const byFactory = {}; rows.forEach(c=>{ const fn=factoriesData.find(x=>x.id===c.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات المنقطعة حاليًا: ${rows.length}`)].filter(Boolean);
+      return { title:'الكاميرات المنقطعة حاليًا', headers:['المصنع','الكاميرا','الحالة','تاريخ الانقطاع','الموقع','ملاحظات'],
+        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, c.status, c.fault_date?fmtDateAr(c.fault_date):'', c.location||'', c.notes||'']), raw:rows,
+        chartImages, getImageUrls: i=> rows[i].photo_url ? [{label:'صورة', url:rows[i].photo_url}] : [] };
+    },
+    replaced_cameras: async()=>{
+      const {data, error} = await supa.from('replaced_cameras').select('*').order('created_at',{ascending:false});
+      if(error) throw error;
+      const rows=(data||[]);
+      const byFactory = {}; rows.forEach(c=>{ const fn=factoriesData.find(x=>x.id===c.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات المُبدَّلة: ${rows.length}`)].filter(Boolean);
+      return { title:'الكاميرات التي تم تبديلها', headers:['المصنع','الكاميرا الأولى','الكاميرا الثانية','تاريخ التبديل','ملاحظات'],
+        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.old_name||c.camera_name||'', c.new_name||'', c.replaced_date?fmtDateAr(c.replaced_date):'', c.notes||'']), raw:rows, chartImages,
+        getImageUrls: i=>{ const c=rows[i]; const l=[]; if(c.old_photo_url) l.push({label:c.old_name||c.camera_name||'الأولى', url:c.old_photo_url}); if(c.new_photo_url) l.push({label:c.new_name||'الثانية', url:c.new_photo_url}); return l; } };
+    },
+    recurring_faults: async()=>{
+      const {data} = await supa.from('faults').select('*');
+      const groups = {};
+      (data||[]).forEach(f=>{ const k=f.factory_id+'|'+(f.device_name||''); (groups[k]=groups[k]||[]).push(f); });
+      const rows = Object.values(groups).filter(g=>g.length>=2).sort((a,b)=>b.length-a.length).map(g=>({factory_id:g[0].factory_id, device_name:g[0].device_name, count:g.length, last:g.map(x=>x.reported_at).sort().pop(), types:[...new Set(g.map(x=>x.fault_type).filter(Boolean))].join('، ')}));
+      const byDev = {}; rows.slice(0,10).forEach(r=>{ byDev[r.device_name]=r.count; });
+      const chartImages = [buildGenericBarChartPng(byDev, 'أكثر الأجهزة تكرارًا للأعطال')].filter(Boolean);
+      return { title:'أجهزة متكررة الأعطال', headers:['المصنع','الجهاز','عدد الأعطال','أنواع الأعطال','آخر عطل'],
+        data: rows.map(r=>[factoriesData.find(x=>x.id===r.factory_id)?.name||'', r.device_name, r.count, r.types, new Date(r.last).toLocaleDateString('ar-EG')]), raw:rows, chartImages };
+    },
+    shift_handovers: async()=>{
+      const {data} = await supa.from('shift_handovers').select('*').order('created_at',{ascending:false});
+      const rows=(data||[]);
+      const byStatus = {}; rows.forEach(h=>{ byStatus[h.status]=(byStatus[h.status]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byStatus, `إجمالي التسليمات: ${rows.length}`)].filter(Boolean);
+      return { title:'تسليم واستلام الشيفت', headers:['التاريخ','الشيفت','المصنع','سلّم','استلم','الحالة','أهم ما حدث','الأعطال المكتشفة','أمور مفتوحة','متابعات','تعليمات للشيفت التالي'],
+        data: rows.map(h=>[fmtDateAr((h.created_at||'').slice(0,10)), h.shift_name||'', h.factory_id?(factoriesData.find(x=>x.id===h.factory_id)?.name||''):'عام', h.handed_by_name||'', h.received_by_name||'', h.status||'', h.summary||'', h.faults_found||'', h.open_issues||'', h.follow_up_notes||'', h.instructions||'']), raw:rows, chartImages };
+    },
+    tasks: async()=>{
+      const {data} = await supa.from('tasks').select('*').order('created_at',{ascending:false});
+      const rows=(data||[]);
+      const byStatus = {}; rows.forEach(t=>{ byStatus[t.status]=(byStatus[t.status]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byStatus, `إجمالي المهام: ${rows.length}`)].filter(Boolean);
+      return { title:'المهام', headers:['المهمة','المسؤول','المصنع','الأولوية','الحالة','الاستحقاق','التفاصيل','ملاحظات'],
+        data: rows.map(t=>[t.title||'', t.assigned_to_name||'', t.factory_id?(factoriesData.find(x=>x.id===t.factory_id)?.name||''):'', t.priority||'', t.status||'', t.due_date?fmtDateAr(t.due_date):'', t.description||'', t.notes||'']), raw:rows, chartImages };
+    },
+    oncall: async()=>{
+      const {data} = await supa.from('oncall_schedule').select('*').order('duty_date',{ascending:false});
+      const rows=(data||[]);
+      return { title:'جدول المناوبات', headers:['التاريخ','المناوب','ملاحظات'], data: rows.map(o=>[fmtDateAr(o.duty_date), o.display_name||'', o.notes||'']), raw:rows };
+    },
+    towers: async()=>{
+      const {data} = await supa.from('antenna_towers').select('*').order('tower_name');
+      const rows=(data||[]);
+      let imgs=[]; try{ const ids=rows.map(r=>r.id); if(ids.length){ const {data:im}=await supa.from('tower_images').select('*').in('tower_id',ids); imgs=im||[]; } }catch(e){}
+      const byStatus = {}; rows.forEach(t=>{ byStatus[t.status]=(byStatus[t.status]||0)+1; });
+      const chartImages = [buildGenericBarChartPng(byStatus, `إجمالي الأبراج: ${rows.length}`)].filter(Boolean);
+      return { title:'أبراج الشبكة', headers:['المصنع','البرج','الرقم','الحالة','الموقع','النوع','الارتفاع','عدد الأنتن','التردد','IP','الطرف الآخر'],
+        data: rows.map(t=>[factoriesData.find(x=>x.id===t.factory_id)?.name||'', t.tower_name, t.tower_number||'', t.status||'', t.location||'', t.tower_type||'', t.height||'', t.antenna_count??'', t.frequency||'', t.ip_address||'', t.other_end||'']), raw:rows, chartImages,
+        getImageUrls: i=> imgs.filter(im=>im.tower_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
+    },
+    wireless_links: async()=>{
+      const [{data}, {data:tw}] = await Promise.all([ supa.from('wireless_links').select('*'), supa.from('antenna_towers').select('id,tower_name,factory_id') ]);
+      const towers = tw||[];
+      const nm = id=> towers.find(t=>t.id===id)?.tower_name||'';
+      const rows=(data||[]).map(r=>({...r, factory_id: towers.find(t=>t.id===r.from_tower_id)?.factory_id}));
+      return { title:'الروابط اللاسلكية', headers:['المصنع','الرابط','من','إلى','Frequency','Channel','Bandwidth','Speed','الإشارة','الجودة','الحالة','آخر فحص'],
+        data: rows.map(r=>[factoriesData.find(x=>x.id===r.factory_id)?.name||'', r.link_name||'', nm(r.from_tower_id), r.to_central_hub?'الغرفة المركزية':nm(r.to_tower_id), r.frequency||'', r.channel||'', r.bandwidth||'', r.speed||'', r.signal_strength||'', r.link_quality||'', r.status||'', r.last_check_date?fmtDateAr(r.last_check_date):'']), raw:rows };
     },
     screens: async()=>{
       const {data} = await supa.from('screens').select('*');
