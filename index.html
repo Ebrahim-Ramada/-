@@ -2178,6 +2178,10 @@ function renderCurrentView(){
   else if(currentView==='mytasks') { host.innerHTML = renderMyTasksView(); loadMyTasks(); }
   else if(currentView==='shifthandover') { host.innerHTML = renderShiftHandoverView(); loadShiftHandovers(); }
   else if(currentView==='escalated') { host.innerHTML = renderEscalatedFaultsView(); loadEscalatedFaults(); }
+  else if(currentView==='replacedcameras') {
+    host.innerHTML = renderReplacedCamerasPlaceholder(currentViewCtx);
+    if(currentViewCtx) loadReplacedCamerasForFactory(currentViewCtx); else loadReplacedCamerasFactoryPicker();
+  }
   else if(currentView==='addedcameras') {
     host.innerHTML = renderAddedCamerasPlaceholder(currentViewCtx);
     if(currentViewCtx) loadAddedCamerasForFactory(currentViewCtx); else loadAddedCamerasFactoryPicker();
@@ -3135,6 +3139,7 @@ function renderDashboard(){
             ${tile('t-blue','switch','Switches',"goTo('switchesstats')")}
             ${tile('t-navy','server','Racks',"goTo('racksstats')")}
             ${tile('t-green','cameraPlus','الكاميرات التي تم إضافتها',"goTo('addedcameras')")}
+            ${tile('t-teal','swap','الكاميرات التي تم تبديلها',"goTo('replacedcameras')")}
             ${tile('t-orange','clipboard',`احتياجات الغرفة<br><small style="font-weight:600;opacity:.9">${dashSummary.roomNeeds.total} (${dashSummary.roomNeeds.notDone} لم يُنفَّذ)</small>`,"goTo('roomneeds')", dashSummary.roomNeeds.notDone>0?dashSummary.roomNeeds.notDone:null, dashSummary.roomNeeds.notDone>0)}
           </div>
           ${dashSummary.roomNeeds.total>0 ? `
@@ -5520,6 +5525,141 @@ async function removeAddedCamPhoto(camId){
     toast('✅ تم حذف الصورة'); loadAddedCamerasForFactory(c?c.factory_id:currentViewCtx);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحذف: '+(e.message||'')); }
 }
+
+/* ============================================================
+   🔄 الكاميرات التي تم تبديلها — قسم مستقل (جدول replaced_cameras)
+   كل مصنع: اسم الكاميرا + صورتين جنب بعض (قبل / بعد التبديل)
+   ============================================================ */
+let replacedCamsData = [];
+let replacedCamsFilter = { text:'' };
+let replacedCamsPending = { old:null, nw:null };
+const REPLACED_CAM_SETUP_MSG = '⚠️ القسم ده محتاج تشغيل ملف <b>replaced_cameras.sql</b> مرة واحدة في Supabase (SQL Editor).';
+function replacedCamErrHtml(e){ const miss=/replaced_cameras|schema cache|does not exist/i.test((e&&e.message)||''); return `<div class="empty">${miss?REPLACED_CAM_SETUP_MSG:'⚠️ تعذّر التحميل: '+esc((e&&e.message)||'')}</div>`; }
+function renderReplacedCamerasPlaceholder(factoryId){
+  if(!factoryId){
+    return `<div class="view active">
+      <div class="section-title" style="margin-top:0"><h2>🔄 الكاميرات التي تم تبديلها</h2></div>
+      <p style="font-size:11px;color:var(--muted-2);margin-top:-6px">اختر المصنع لعرض أو تسجيل الكاميرات التي تم تبديلها (صورة قبل وبعد).</p>
+      <div id="replacedCamsPickerHost"><div class="empty">جاري التحميل...</div></div>
+    </div>`;
+  }
+  const f = factoriesData.find(x=>x.id===factoryId);
+  return `<div class="view active">
+    <div class="section-title" style="margin-top:0"><h2>🔄 ${f?esc(f.name):''}</h2>
+      ${isAdmin()? `<button class="btn primary sm" onclick="openReplacedCamForm('${factoryId}')">+ إضافة</button>`:''}
+    </div>
+    <button class="btn sm" onclick="goTo('replacedcameras')">→ رجوع لكل المصانع</button>
+    <div class="field" style="margin-top:8px"><input class="input" placeholder="🔍 دوّر باسم الكاميرا..." value="${esc(replacedCamsFilter.text)}" oninput="replacedCamsFilter.text=this.value; renderReplacedCamerasList()"></div>
+    <div id="replacedCamsListHost"><div class="empty">جاري التحميل...</div></div>
+  </div>`;
+}
+async function loadReplacedCamerasFactoryPicker(){
+  const host = document.getElementById('replacedCamsPickerHost'); if(!host) return;
+  let all = [];
+  try{ const {data, error} = await supa.from('replaced_cameras').select('factory_id'); if(error) throw error; all = data||[]; }
+  catch(e){ host.innerHTML = replacedCamErrHtml(e); return; }
+  if(!factoriesData.length){ host.innerHTML = '<div class="empty">لا توجد مصانع مسجّلة بعد.</div>'; return; }
+  const counts = {}; all.forEach(c=>{ counts[c.factory_id]=(counts[c.factory_id]||0)+1; });
+  host.innerHTML = factoriesData.map(f=>{ const n=counts[f.id]||0; return `<div class="site-card" style="cursor:pointer" onclick="goTo('replacedcameras','${f.id}')">
+    <div style="display:flex;justify-content:space-between;align-items:center"><div class="site-name" style="font-size:14px">${esc(f.name)}</div><span class="pill ${n>0?'ok':''}">${n} كاميرا</span></div></div>`; }).join('');
+}
+async function loadReplacedCamerasForFactory(factoryId){
+  const host = document.getElementById('replacedCamsListHost'); if(!host) return;
+  try{
+    const {data, error} = await supa.from('replaced_cameras').select('*').eq('factory_id', factoryId).order('created_at',{ascending:false});
+    if(error) throw error; replacedCamsData = data||[];
+  }catch(e){ replacedCamsData=[]; host.innerHTML = replacedCamErrHtml(e); return; }
+  renderReplacedCamerasList();
+}
+function renderReplacedCamerasList(){
+  const host = document.getElementById('replacedCamsListHost'); if(!host) return;
+  const q = replacedCamsFilter.text.trim().toLowerCase();
+  const list = replacedCamsData.filter(c=>!q || (c.old_name||'').toLowerCase().includes(q) || (c.new_name||'').toLowerCase().includes(q) || (c.camera_name||'').toLowerCase().includes(q));
+  if(!list.length){ host.innerHTML = `<div class="empty">${replacedCamsData.length?'لا توجد نتائج مطابقة.':'لا توجد كاميرات مُبدَّلة لهذا المصنع بعد.'+(isAdmin()?' اضغط "+ إضافة" للبدء.':'')}</div>`; return; }
+  const img = (url,name)=> `<div style="flex:1;min-width:0;text-align:center">
+      ${url? `<img src="${esc(url)}" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="openImageLightbox('${esc(url)}')">`
+           : `<div style="width:100%;aspect-ratio:4/3;border-radius:8px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted-2);font-size:11px">بدون صورة</div>`}
+      <div style="font-size:12.5px;font-weight:700;margin-top:5px;word-break:break-word">${esc(name||'—')}</div></div>`;
+  const arrows = `<div style="flex:none;align-self:center;font-size:22px;color:var(--accent);padding-bottom:22px">⇄</div>`;
+  host.innerHTML = list.map(c=>`
+    <div class="site-card">
+      <div style="display:flex;gap:6px">${img(c.old_photo_url,c.old_name||c.camera_name)}${arrows}${img(c.new_photo_url,c.new_name)}</div>
+      ${c.replaced_date? `<div style="font-size:10.5px;color:var(--muted-2);margin-top:6px">📅 ${fmtDateAr(c.replaced_date)}</div>`:''}
+      ${c.notes? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(c.notes)}</div>`:''}
+      ${isAdmin()? `<div class="btn-row"><button class="btn sm" onclick="openReplacedCamForm('${c.factory_id}','${c.id}')">✏️ تعديل</button><button class="btn sm danger" onclick="deleteReplacedCam('${c.id}')">🗑 حذف</button></div>`:''}
+    </div>`).join('');
+}
+function openReplacedCamForm(factoryId, id){
+  if(!isAdmin()){ toast('🚫 هذه العملية متاحة للأدمن فقط'); return; }
+  const c = id ? replacedCamsData.find(x=>x.id===id) : null;
+  const d = c ? {...c, old_name:c.old_name||c.camera_name||'', new_name:c.new_name||''} : {old_name:'',new_name:'',old_photo_url:'',new_photo_url:'',replaced_date:new Date().toISOString().slice(0,10),notes:''};
+  replacedCamsPending = { old:null, nw:null };
+  const box = (k,url,name,ph)=>`<div style="flex:1;min-width:0">
+      <label style="display:block;cursor:pointer">
+        <div style="position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;border:1px dashed var(--border);background:var(--panel-2);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:30px">
+          <span id="rc_ph_${k}" style="${url?'display:none':''}">📷</span>
+          <img id="rc_prev_${k}" ${url?`src="${esc(url)}"`:''} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;${url?'':'display:none;'}">
+        </div>
+        <span class="btn sm block" style="margin-top:6px">📷 اختيار / التقاط</span>
+        <input type="file" accept="image/*" style="display:none" onchange="rcPickPhoto('${k}',this)">
+      </label>
+      <input class="input" id="rc_name_${k}" value="${esc(name)}" placeholder="${ph}" style="margin-top:6px;text-align:center">
+    </div>`;
+  openModal(`
+    <div class="modal-head"><h3>${c?'تعديل كاميرا مُبدَّلة':'+ كاميرا تم تبديلها'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      ${box('old',d.old_photo_url,d.old_name,'اسم الكاميرا')}
+      <div style="flex:none;align-self:center;font-size:22px;color:var(--accent);padding-bottom:70px">⇄</div>
+      ${box('nw',d.new_photo_url,d.new_name,'اسم الكاميرا')}
+    </div>
+    <div class="field"><label>تاريخ التبديل</label><input class="input" type="date" id="rc_date" value="${esc(d.replaced_date||'')}"></div>
+    <div class="field"><label>ملاحظات</label><textarea class="input" id="rc_notes">${esc(d.notes||'')}</textarea></div>
+    <button class="btn primary block" id="rc_saveBtn" onclick="saveReplacedCamForm('${factoryId}','${id||''}')">💾 حفظ</button>`);
+}
+function rcPickPhoto(k, inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  replacedCamsPending[k] = file;
+  const p = document.getElementById('rc_prev_'+k); p.src = URL.createObjectURL(file); p.style.display='block';
+  const ph = document.getElementById('rc_ph_'+k); if(ph) ph.style.display='none';
+}
+async function rcUpload(file, tag){
+  const compressed = await compressImageFile(file);
+  const path = `replaced-${tag}-${Date.now()}.jpg`;
+  const {error} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+  if(error) throw error;
+  return supa.storage.from('camera-photos').getPublicUrl(path).data.publicUrl;
+}
+async function saveReplacedCamForm(factoryId, id){
+  if(!isAdmin()){ toast('🚫 هذه العملية متاحة للأدمن فقط'); return; }
+  const oldName = document.getElementById('rc_name_old').value.trim();
+  const newName = document.getElementById('rc_name_nw').value.trim();
+  if(!oldName && !newName){ toast('اكتب اسم الكاميرا'); return; }
+  const btn = document.getElementById('rc_saveBtn'); if(btn){ btn.disabled=true; btn.textContent='جاري الحفظ ورفع الصور...'; }
+  try{
+    const payload = { factory_id:factoryId, old_name:oldName, new_name:newName, camera_name:[oldName,newName].filter(Boolean).join(' ⇄ '),
+      replaced_date:document.getElementById('rc_date').value||null, notes:document.getElementById('rc_notes').value.trim(), updated_at:new Date().toISOString() };
+    if(replacedCamsPending.old) payload.old_photo_url = await rcUpload(replacedCamsPending.old,'old');
+    if(replacedCamsPending.nw)  payload.new_photo_url = await rcUpload(replacedCamsPending.nw,'new');
+    let error;
+    if(id) ({error} = await supa.from('replaced_cameras').update(payload).eq('id', id));
+    else ({error} = await supa.from('replaced_cameras').insert({...payload, created_by: currentProfile?currentProfile.id:null}));
+    if(error) throw error;
+    const f = factoriesData.find(x=>x.id===factoryId);
+    await logAudit(id?'تعديل كاميرا مُبدَّلة':'إضافة كاميرا مُبدَّلة', `${payload.camera_name}${f?' — '+f.name:''}`);
+    closeModal(); toast('✅ تم الحفظ'); loadReplacedCamerasForFactory(factoryId);
+  }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+((e&&e.message)||'')); if(btn){ btn.disabled=false; btn.textContent='💾 حفظ'; } }
+}
+function deleteReplacedCam(id){
+  if(!isAdmin()){ toast('🚫 هذه العملية متاحة للأدمن فقط'); return; }
+  const c = replacedCamsData.find(x=>x.id===id); if(!c) return;
+  confirmDeleteWithPassword(async ()=>{
+    const {error} = await supa.from('replaced_cameras').delete().eq('id', id);
+    if(error) throw error;
+    await logAudit('حذف كاميرا مُبدَّلة', c.camera_name);
+    closeModal(); toast('تم الحذف'); loadReplacedCamerasForFactory(c.factory_id);
+  }, `الكاميرا المُبدَّلة "${esc(c.camera_name)}"`);
+}
+
 async function printAddedCamerasStats(){
   let allCams = [];
   try{ const {data, error} = await supa.from('added_cameras').select('*'); if(error) throw error; allCams = data||[]; }
@@ -8444,6 +8584,7 @@ function renderRoomEntryReportsPlaceholder(factoryId){
       <button class="btn primary sm" onclick="openRoomEntryReportForm('${factoryId}')">+ تقرير جديد</button>
     </div>
     <button class="btn sm" onclick="goTo('roomentryreports')">→ رجوع لكل المصانع</button>
+    <button class="btn primary sm block" style="margin-top:8px" onclick="exportFactoryRoomEntryReports('${factoryId}')">🖨️ طباعة / تصدير كل تقارير ${f?f.name:'المصنع'} (كل التقارير في ملف واحد)</button>
     <div class="field" style="margin-top:8px"><input class="input" id="rer_search" placeholder="🔍 بحث بالاسم أو الإدارة..." value="${roomEntryFilter.text}" oninput="roomEntryFilter.text=this.value; renderRoomEntryReportsList()"></div>
     <div class="row2">
       <div class="field"><label style="font-size:10.5px">من تاريخ</label><input class="input" type="date" value="${roomEntryFilter.dateFrom}" onchange="roomEntryFilter.dateFrom=this.value; renderRoomEntryReportsList()"></div>
@@ -8619,6 +8760,50 @@ async function saveRoomEntryReport(){
     }
     closeModal(); toast('✅ تم الحفظ بنجاح'); loadRoomEntryReportsForFactory(s.factoryId);
   }catch(e){ console.error(e); toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+}
+
+/* ---- تصدير كل تقارير مصنع محدد في ملف واحد (بنفس تصميم القسم في كل الصيغ) ---- */
+async function exportFactoryRoomEntryReports(factoryId){
+  const f = factoriesData.find(x=>x.id===factoryId);
+  toast('جاري تجهيز كل تقارير المصنع...');
+  let reports = [];
+  try{
+    const {data,error} = await supa.from('control_room_entry_reports').select('*').eq('factory_id',factoryId).order('report_date',{ascending:false});
+    if(error) throw error; reports = data||[];
+  }catch(e){ toast('🚫 تعذّر تحميل التقارير: '+(e.message||'')); return; }
+  if(!reports.length){ toast('لا توجد تقارير دخول مسجّلة لهذا المصنع'); return; }
+  const fname = f?f.name:'';
+  const nl = v=> esc(v==null?'':v).replace(/\n/g,'<br>');
+  const sections = reports.map((r,ri)=>{
+    const people = (r.people||[]).filter(p=>p&&(p.name||p.department));
+    const events = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
+    const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
+    return `<div style="page-break-inside:avoid;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:18px">
+      <h2 style="margin-top:0">تقرير دخول غرفة التحكم المركزية (${ri+1})</h2>
+      <p><b>المصنع:</b> ${esc(fname)} &nbsp;&nbsp; <b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة الزيارة:</b> ${esc(r.visiting_entity||'—')}</p>
+      <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>إلى:</b> ${r.time_to||'—'}</p>
+      <h3>الأشخاص المسموح لهم بالدخول</h3>
+      ${people.length?`<table><tr><th>م</th><th>الاسم</th><th>الإدارة</th></tr>${people.map((p,i)=>`<tr><td>${i+1}</td><td>${esc(p.name||'—')}</td><td>${esc(p.department||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد أشخاص مسجّلين.</p>'}
+      <h3>لمراجعة الحدث الآتي</h3>
+      ${events.length?`<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${nl(e.description||'—')}</td><td>${esc(e.event_datetime||'—')}</td><td>${esc(e.location_or_camera||'—')}</td><td>${nl(e.notes||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد أحداث مسجّلة.</p>'}
+      <h3>نتيجة المراجعة والفحص</h3>
+      ${results.length?`<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((x,i)=>`<tr><td>${i+1}</td><td>${nl(x.result||'—')}</td><td>${nl(x.details||'—')}</td><td>${nl(x.notes||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد نتائج مراجعة مسجّلة.</p>'}
+      <h3>الاعتمادات</h3>
+      <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'—')}</td><td>${esc(r.room_supervisor_name||'—')}</td><td>${esc(r.security_manager_name||'—')}</td></tr></table>
+      ${r.notes?`<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
+    </div>`;
+  });
+  const bodyHtml = `<h1 style="text-align:center">تقارير دخول غرفة التحكم المركزية — ${esc(fname)} (${reports.length} تقرير)</h1>` + sections.join('');
+  const headers = ['رقم التقرير','المصنع','التاريخ','من','إلى','جهة الزيارة','اسم الشخص','الإدارة','وصف الحدث','نتيجة المراجعة والفحص','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'];
+  const data = [];
+  reports.forEach((r,ri)=>{
+    const people = (r.people&&r.people.length) ? r.people : [{name:'—',department:'—'}];
+    const evTxt = (r.events||[]).filter(e=>e&&(e.description||e.location_or_camera)).map((e,i,a)=>(a.length>1?`${i+1}) `:'')+[e.description, e.location_or_camera&&('('+e.location_or_camera+')')].filter(Boolean).join(' ')).join(' | ')||'—';
+    const reTxt = (r.review_results||[]).filter(x=>x&&(x.result||x.details)).map((x,i,a)=>(a.length>1?`${i+1}) `:'')+[x.result,x.details].filter(Boolean).join(' — ')).join(' | ')||'—';
+    people.forEach(p=> data.push([`#${ri+1}`, fname, fmtDateAr(r.report_date), r.time_from||'', r.time_to||'', r.visiting_entity||'', p.name||'', p.department||'', evTxt, reTxt, r.room_officer_name||'', r.room_supervisor_name||'', r.security_manager_name||'']));
+  });
+  openUnifiedExportPicker(`${fname} - كل تقارير دخول غرفة التحكم`, headers, data, { rawObjects: reports, customBodyHtml: bodyHtml });
+  await logAudit('طباعة/تصدير كل تقارير دخول غرفة التحكم للمصنع', `${fname} — ${reports.length} تقرير`);
 }
 /* -------- التصدير — نفس النظام الموحّد بكل الصيغ الثمانية، بترتيب النموذج الورقي -------- */
 async function exportRoomEntryReport(reportId){
@@ -17453,7 +17638,7 @@ function tpBuildRoomEntry(cfg, title, opts){
   const th = c.th;
   tpIndigoCover(c,title,D);
   let n = 2;
-  if(reports.length>1) tpIndigoStats(c,{pageTitle:'الرسوم البيانية',chartTitle:D.chartTitle,bars:D.bars},D,n++);
+  if(D.sites>1) tpIndigoStats(c,{pageTitle:'الرسوم البيانية',chartTitle:D.chartTitle,bars:D.bars},D,n++);
   const str = v=> v==null?'':String(v);
   const label = (s,text,y)=> s.ops.push(c.R(12.45,y+0.05,0.12,0.3,th.brand,{r:0.05}), c.T(text,0.5,y,11.8,0.4,15,th.ink,{bold:true,min:10}));
   const card = (s,x,y,w,h,lab,val,vs)=> s.ops.push(c.R(x,y,w,h,th.white,{r:0.1}), c.T(lab,x+0.15,y+0.08,w-0.3,0.3,11,th.mute,{noFit:true}), c.T(val||'—',x+0.15,y+0.4,w-0.3,h-0.5,vs||16,th.ink,{bold:true,min:9}));
