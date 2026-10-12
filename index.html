@@ -7715,6 +7715,34 @@ function renderCameraModsPlaceholder(factoryId){
   </div>`;
 }
 let cameraModsTab = 'الكل';
+/* 🧹 منع تكرار الكاميرات في كل التقارير المطبوعة: كل كاميرا تظهر مرة واحدة فقط (نفس المصنع + نفس الاسم بعد التوحيد).
+   لو لها أكتر من سجل: نفضّل السجل المفتوح (لسه محتاج تعديل)، ولو متساويين نأخذ الأحدث. */
+function camModNameKey(n){
+  return String(n||'').replace(/[\u0660-\u0669]/g, d=>String(d.charCodeAt(0)-0x0660)).replace(/\u0640/g,'')
+    .replace(/[أإآ]/g,'ا').replace(/\s+/g,' ').trim().toLowerCase();
+}
+function dedupCameraMods(rows){
+  const map = new Map();
+  (rows||[]).forEach(c=>{
+    const key = `${c.factory_id}::${camModNameKey(c.camera_name)}`;
+    const ex = map.get(key);
+    if(!ex){ map.set(key,c); return; }
+    const exOpen = ex.status!=='تم التعديل', curOpen = c.status!=='تم التعديل';
+    if(curOpen && !exOpen) map.set(key,c);
+    else if(curOpen===exOpen && new Date(c.created_at||0) > new Date(ex.created_at||0)) map.set(key,c);
+  });
+  return [...map.values()];
+}
+/* نفس القائمة الظاهرة على الشاشة (حسب التبويب والبحث) بدون تكرار — للطباعة من داخل شاشة المصنع */
+function getVisibleCameraMods(){
+  const f = cameraModsFilter;
+  const list = cameraModsData.filter(c=>
+    (!f.text || (c.camera_name||'').includes(f.text) || (c.factory_name||'').includes(f.text)) &&
+    (!f.status || c.status===f.status) && (!f.priority || c.priority===f.priority) &&
+    (cameraModsTab==='الكل' || (cameraModsTab==='تم التعديل' ? c.status==='تم التعديل' : c.status!=='تم التعديل')));
+  return dedupCameraMods(list);
+}
+
 function setCameraModsTab(tab){ cameraModsTab = tab; renderCameraModsList(); renderCurrentView(); }
 async function loadCameraModsFactoryPicker(){
   const host = document.getElementById('cameraModsFactoryPickerHost');
@@ -7921,7 +7949,7 @@ async function exportCameraModsExcel(){
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('كاميرات للتعديل', {views:[{rightToLeft:true}]});
   ws.addRow(['المصنع','المكان','الكاميرا','النوع','المشكلة','المطلوب','الحالة','الأولوية','التاريخ']).font={bold:true};
-  cameraModsData.forEach(c=> ws.addRow([c.factory_name,c.place_name,c.camera_name,c.camera_type,c.problem_description,c.required_change,c.status,c.priority,new Date(c.created_at).toLocaleDateString('ar-EG')]));
+  getVisibleCameraMods().forEach(c=> ws.addRow([c.factory_name,c.place_name,c.camera_name,c.camera_type,c.problem_description,c.required_change,c.status,c.priority,new Date(c.created_at).toLocaleDateString('ar-EG')]));
   ws.columns.forEach(c=>c.width=20);
   const buf = await wb.xlsx.writeBuffer();
   await saveOrShareFile(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), `كاميرات-للتعديل-${new Date().toISOString().slice(0,10)}.xlsx`);
@@ -7933,7 +7961,7 @@ async function exportCameraModsPdf(){
   el.innerHTML = `<h2 style="text-align:center">تقرير الكاميرات التي تحتاج تعديل</h2>
     <table style="width:100%;border-collapse:collapse;font-size:10.5px" border="1" cellpadding="4">
       <tr style="background:#0B1220;color:#fff"><th>المصنع</th><th>المكان</th><th>الكاميرا</th><th>المشكلة</th><th>الحالة</th><th>الأولوية</th></tr>
-      ${cameraModsData.map(c=>`<tr><td>${c.factory_name}</td><td>${esc(c.place_name||'')}</td><td>${esc(c.camera_name)}</td><td>${esc(c.problem_description||'')}</td><td>${c.status}</td><td>${c.priority}</td></tr>`).join('')}
+      ${getVisibleCameraMods().map(c=>`<tr><td>${c.factory_name}</td><td>${esc(c.place_name||'')}</td><td>${esc(c.camera_name)}</td><td>${esc(c.problem_description||'')}</td><td>${c.status}</td><td>${c.priority}</td></tr>`).join('')}
     </table>`;
   document.body.appendChild(el);
   const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
@@ -13865,16 +13893,7 @@ async function exportSectionPicker(section, factoryId, __collect){
       // منع التكرار: كل كاميرا (camera_id لو موجود، وإلا المصنع+الاسم كبديل) تظهر مرة واحدة بس
       // في التقرير — وعند وجود أكتر من سجل لنفس الكاميرا، نفضّل السجل اللي لسه "قيد الانتظار"
       // (يعني لسه فعليًا محتاج تعديل) على أي سجل قديم اتقفل بالفعل
-      const dedupMap = new Map();
-      allRows.forEach(c=>{
-        const key = c.camera_id || `${c.factory_id}::${(c.camera_name||'').trim()}`;
-        const existing = dedupMap.get(key);
-        if(!existing) { dedupMap.set(key, c); return; }
-        const existingIsOpen = existing.status!=='تم التعديل', currentIsOpen = c.status!=='تم التعديل';
-        if(currentIsOpen && !existingIsOpen) dedupMap.set(key, c); // نفضّل المفتوح على المقفول
-        else if(currentIsOpen===existingIsOpen && new Date(c.created_at||0) > new Date(existing.created_at||0)) dedupMap.set(key, c); // أو الأحدث لو نفس الحالة
-      });
-      const rows = [...dedupMap.values()];
+      const rows = dedupCameraMods(allRows);
       const duplicatesRemoved = allRows.length - rows.length;
       const byFactory = {}; rows.forEach(c=>{ byFactory[c.factory_name||'—']=(byFactory[c.factory_name||'—']||0)+1; });
       const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات التي تحتاج تعديل: ${rows.length}${duplicatesRemoved>0?' (بعد استبعاد '+duplicatesRemoved+' تكرار)':''}`)].filter(Boolean);
@@ -14794,7 +14813,7 @@ async function gatherFullFactoryData(factoryId){
   const maintenance = (preventiveTasks||[]).filter(t=> deviceNames.has(t.target_name));
   let cameraTypeGroups = [];
   try{ const {data} = await supa.from('camera_type_counts').select('*').eq('factory_id', factoryId); cameraTypeGroups = data||[]; }catch(e){}
-  return { f, s, cameras, screens, faults, lighting, cameraMods, racks, switches, servers, ups, layouts, maintenance, maintenanceLog, drives, restoredCameras, cameraTypeGroups };
+  return { f, s, cameras, screens, faults, lighting, cameraMods: dedupCameraMods(cameraMods), racks, switches, servers, ups, layouts, maintenance, maintenanceLog, drives, restoredCameras, cameraTypeGroups };
 }
 
 function fmtNoData(list, msg){ return list.length ? null : `<p style="color:#999;font-style:italic;font-size:11px">${msg||'لا توجد بيانات مسجلة.'}</p>`; }
@@ -15349,6 +15368,7 @@ async function gatherAllAppData(){
     safe('antenna_towers'), safe('wireless_links'), safe('control_room_entry_reports', q=>q.order('report_date',{ascending:false})),
     safe('fence_sections'), safe('fence_section_images')
   ]);
+  data.cameraMods = dedupCameraMods(data.cameraMods);
   return data;
 }
 
