@@ -8802,26 +8802,8 @@ async function exportFactoryRoomEntryReports(factoryId){
   if(!reports.length){ toast('لا توجد تقارير دخول مسجّلة لهذا المصنع'); return; }
   const fname = f?f.name:'';
   const nl = v=> esc(v==null?'':v).replace(/\n/g,'<br>');
-  const sections = reports.map((r,ri)=>{
-    const people = (r.people||[]).filter(p=>p&&(p.name||p.department));
-    const events = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
-    const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
-    return `<div style="page-break-inside:avoid;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:18px">
-      <h2 style="margin-top:0">تقرير دخول غرفة التحكم المركزية (${ri+1})</h2>
-      <p><b>المصنع:</b> ${esc(fname)} &nbsp;&nbsp; <b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة الزيارة:</b> ${esc(r.visiting_entity||'—')}</p>
-      <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>إلى:</b> ${r.time_to||'—'}</p>
-      <h3>الأشخاص المسموح لهم بالدخول</h3>
-      ${people.length?`<table><tr><th>م</th><th>الاسم</th><th>الإدارة</th></tr>${people.map((p,i)=>`<tr><td>${i+1}</td><td>${esc(p.name||'—')}</td><td>${esc(p.department||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد أشخاص مسجّلين.</p>'}
-      <h3>لمراجعة الحدث الآتي</h3>
-      ${events.length?`<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${nl(e.description||'—')}</td><td>${esc(e.event_datetime||'—')}</td><td>${esc(e.location_or_camera||'—')}</td><td>${nl(e.notes||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد أحداث مسجّلة.</p>'}
-      <h3>نتيجة المراجعة والفحص</h3>
-      ${results.length?`<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((x,i)=>`<tr><td>${i+1}</td><td>${nl(x.result||'—')}</td><td>${nl(x.details||'—')}</td><td>${nl(x.notes||'—')}</td></tr>`).join('')}</table>`:'<p>لا يوجد نتائج مراجعة مسجّلة.</p>'}
-      <h3>الاعتمادات</h3>
-      <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'—')}</td><td>${esc(r.room_supervisor_name||'—')}</td><td>${esc(r.security_manager_name||'—')}</td></tr></table>
-      ${r.notes?`<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
-    </div>`;
-  });
-  const bodyHtml = `<h1 style="text-align:center">تقارير دخول غرفة التحكم المركزية — ${esc(fname)} (${reports.length} تقرير)</h1>` + sections.join('');
+  const sections = reports.map((r,ri)=> roomEntryPageHtml(r, fname, {last:ri===reports.length-1}));
+  const bodyHtml = sections.join('');
   const headers = ['رقم التقرير','المصنع','التاريخ','من','إلى','جهة الزيارة','اسم الشخص','الإدارة','وصف الحدث','نتيجة المراجعة والفحص','مسؤول الغرفة','مشرف الغرفة','مدير الأمن'];
   const data = [];
   reports.forEach((r,ri)=>{
@@ -8834,21 +8816,46 @@ async function exportFactoryRoomEntryReports(factoryId){
   await logAudit('طباعة/تصدير كل تقارير دخول غرفة التحكم للمصنع', `${fname} — ${reports.length} تقرير`);
 }
 /* -------- التصدير — نفس النظام الموحّد بكل الصيغ الثمانية، بترتيب النموذج الورقي -------- */
+
+/* 📄 كل تقرير دخول غرفة تحكم = ورقة A4 واحدة (PDF / Word / الطباعة).
+   عرض ثابت 720px + تصغير تلقائي للخط حسب كمية البيانات عشان التقرير يفضل في صفحة واحدة. */
+let __rePgSeq = 0;
+function roomEntryPageHtml(r, fname, opts){
+  opts = opts||{};
+  const people = (r.people||[]).filter(p=>p&&(p.name||p.department));
+  const events = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
+  const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
+  const nl = v=> esc(v==null?'':v).replace(/\n/g,'<br>');
+  const LN = (t,cpl)=> String(t||'').split('\n').reduce((a,l)=>a+Math.max(1,Math.ceil(l.length/cpl)),0);
+  let est = 330 + (r.notes? 30+LN(r.notes,95)*17 : 0);
+  est += people.length ? 28+people.length*27 : 24;
+  est += events.length ? 28+events.reduce((a,e)=>a+14+17*Math.max(LN(e.description,30),LN(e.notes,22),LN(e.location_or_camera,16),LN(e.event_datetime,14)),0) : 24;
+  est += results.length ? 28+results.reduce((a,x)=>a+14+17*Math.max(LN(x.result,34),LN(x.details,34),LN(x.notes,22)),0) : 24;
+  const sc = Math.min(1, 930/est);
+  const fs = Math.max(7, Math.round(13*sc*10)/10), pad = Math.max(2, Math.round(6*sc));
+  const cls = 'rePg'+(++__rePgSeq);
+  const tbl = (heads, rows)=> `<table><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr>${rows.map(r2=>`<tr>${r2.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
+  return `<div class="re-pg ${cls}" data-pg="1" data-sz="${Math.round(fs*1.45)}" style="direction:rtl;font-family:Arial;width:720px;box-sizing:border-box;margin:0 auto;padding:20px;border:1px solid #333;color:#0B1220;font-size:${fs}px;page-break-inside:avoid;page-break-after:${opts.last?'auto':'always'}">
+    <style>.${cls} table{width:100%;border-collapse:collapse;margin:4px 0 8px}.${cls} th,.${cls} td{border:1px solid #333;padding:${pad}px;font-size:${fs}px;text-align:right;vertical-align:top}.${cls} th{background:#e8edf5}.${cls} h2{font-size:${(fs*1.5).toFixed(1)}px;margin:0 0 6px;text-align:center}.${cls} h3{font-size:${(fs*1.15).toFixed(1)}px;margin:8px 0 4px}.${cls} p{margin:2px 0}</style>
+    <h2>تقرير دخول غرفة التحكم المركزية</h2>
+    <p><b>المصنع:</b> ${esc(fname||'')} &nbsp;&nbsp; <b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الزيارة:</b> ${esc(r.visiting_entity||'—')}</p>
+    <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>الوقت إلى:</b> ${r.time_to||'—'}</p>
+    <h3>الأشخاص المسموح لهم بالدخول</h3>
+    ${people.length? tbl(['م','الاسم','الإدارة التابع لها'], people.map((p,i)=>[i+1,esc(p.name||'—'),esc(p.department||'—')])) : '<p>لا يوجد أشخاص مسجّلين.</p>'}
+    <h3>لمراجعة الحدث الآتي</h3>
+    ${events.length? tbl(['م','وصف الحدث','التاريخ/الوقت','الكاميرا/الموقع','ملاحظات'], events.map((e,i)=>[i+1,nl(e.description||'—'),esc(e.event_datetime||'—'),esc(e.location_or_camera||'—'),nl(e.notes||'—')])) : '<p>لا توجد أحداث مسجّلة.</p>'}
+    <h3>نتيجة المراجعة والفحص تبين الآتي</h3>
+    ${results.length? tbl(['م','نتيجة المراجعة','التفاصيل','ملاحظات'], results.map((x,i)=>[i+1,nl(x.result||'—'),nl(x.details||'—'),nl(x.notes||'—')])) : '<p>لا يوجد نتائج مراجعة مسجّلة.</p>'}
+    <h3>الاعتمادات</h3>
+    ${tbl(['مسؤول الغرفة','مشرف الغرفة','مدير الأمن'], [[esc(r.room_officer_name||'—'),esc(r.room_supervisor_name||'—'),esc(r.security_manager_name||'—')]])}
+    ${r.notes? `<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
+  </div>`;
+}
 async function exportRoomEntryReport(reportId){
   const r = roomEntryReportsData.find(x=>x.id===reportId);
   if(!r){ toast('التقرير غير موجود'); return; }
   const f = factoriesData.find(x=>x.id===r.factory_id);
-  const bodyHtml = `
-    <h1>تقرير دخول غرفة التحكم المركزية</h1>
-    <p style="text-align:center">التاريخ: ${fmtDateAr(r.report_date)} — التوقيت: من ${r.time_from||'—'} إلى ${r.time_to||'—'}</p>
-    <p style="text-align:center">يسمح بما يلي دخول غرفة التحكم المركزية من مصنع: <b>${f?f.name:''}</b>${r.visiting_entity?` — جهة الزيارة: ${esc(r.visiting_entity)}`:''}</p>
-    <h2>الأشخاص المسموح لهم بالدخول</h2>
-    <table><tr><th>الاسم</th><th>الإدارة التابعة لها</th></tr>${(r.people||[]).map(p=>`<tr><td>${p.name||''}</td><td>${p.department||''}</td></tr>`).join('')}</table>
-    ${(r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes)).length? `<h2>لمراجعة الحدث الآتي</h2><table><tr><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${r.events.filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes)).map(e=>`<tr><td>${esc(e.description||'')}</td><td>${e.event_datetime||''}</td><td>${e.location_or_camera||''}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</table>`:''}
-    ${(r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes)).length? `<h2>نتيجة المراجعة والفحص تبين الآتي</h2><table><tr><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${r.review_results.filter(x=>x&&(x.result||x.details||x.notes)).map(res=>`<tr><td>${esc(res.result||'')}</td><td>${esc(res.details||'')}</td><td>${esc(res.notes||'')}</td></tr>`).join('')}</table>`:''}
-    <h2>الاعتمادات</h2>
-    <table><tr><th>مسؤول الغرفة</th><th>مشرف الغرفة</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'')}</td><td>${esc(r.room_supervisor_name||'')}</td><td>${esc(r.security_manager_name||'')}</td></tr></table>
-  `;
+  const bodyHtml = roomEntryPageHtml(r, f?f.name:'', {last:true});
   // جدول مسطّح كامل (للصيغ اللي بتعتمد على الجداول: Excel / PowerPoint / CSV / صورة / ZIP) — بيشمل كل بنود التقرير
   const headers = ['البند','البيان','التفاصيل'];
   const joinD = (arr)=> arr.filter(x=>x && String(x).trim()).join(' — ');
@@ -13768,29 +13775,8 @@ async function exportSectionPicker(section, factoryId, __collect){
       if(!reports.length) return { title:'تقارير دخول غرفة التحكم المركزية — كل المصانع', headers:['لا توجد بيانات'], data:[[]], raw:[] };
 
       // نبني قسم HTML سردي كامل مستقل لكل تقرير على حدة (بدون دمج تقارير مختلفة في سجل واحد)
-      const reportSections = reports.map(r=>{
-        const fname = factoriesData.find(x=>x.id===r.factory_id)?.name || 'غير محدد';
-        const people = Array.isArray(r.people) ? r.people : [];
-        const events = Array.isArray(r.events) ? r.events : [];
-        const results = Array.isArray(r.review_results) ? r.review_results : [];
-        return `
-          <div style="page-break-inside:avoid;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:18px">
-            <h2 style="margin-top:0">تقرير دخول غرفة التحكم المركزية</h2>
-            <p><b>المصنع:</b> ${fname}</p>
-            <p><b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الدخول:</b> ${esc(r.visiting_entity||'—')}</p>
-            <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>الوقت إلى:</b> ${r.time_to||'—'}</p>
-            <h3>الأشخاص المسموح لهم بالدخول</h3>
-            ${people.length ? `<table><tr><th>م</th><th>الاسم</th><th>الإدارة/القسم</th></tr>${people.map((p,i)=>`<tr><td>${i+1}</td><td>${p.name||'—'}</td><td>${p.department||'—'}</td></tr>`).join('')}</table>` : `<p>لا يوجد أشخاص مسجّلين لهذا التقرير.</p>`}
-            <h3>لمراجعة الحدث الآتي</h3>
-            ${events.length ? `<table><tr><th>م</th><th>الوصف</th><th>التاريخ/الوقت</th><th>الموقع/الكاميرا</th><th>ملاحظات</th></tr>${events.map((e,i)=>`<tr><td>${i+1}</td><td>${(e.description||'—').replace(/\n/g,'<br>')}</td><td>${e.event_datetime||'—'}</td><td>${e.location_or_camera||'—'}</td><td>${esc(e.notes||'—')}</td></tr>`).join('')}</table>` : `<p>لا يوجد أحداث مسجّلة لهذا التقرير.</p>`}
-            <h3>نتيجة المراجعة والفحص</h3>
-            ${results.length ? `<table><tr><th>م</th><th>النتيجة</th><th>التفاصيل</th><th>ملاحظات</th></tr>${results.map((res,i)=>`<tr><td>${i+1}</td><td>${(res.result||'—').replace(/\n/g,'<br>')}</td><td>${(res.details||'—').replace(/\n/g,'<br>')}</td><td>${esc(res.notes||'—')}</td></tr>`).join('')}</table>` : `<p>لا يوجد نتائج مراجعة مسجّلة لهذا التقرير.</p>`}
-            <h3>الاعتمادات</h3>
-            <table><tr><th>مسؤول غرفة التحكم</th><th>المشرف</th><th>مدير الأمن</th></tr><tr><td>${esc(r.room_officer_name||'—')}</td><td>${esc(r.room_supervisor_name||'—')}</td><td>${esc(r.security_manager_name||'—')}</td></tr></table>
-            ${r.notes? `<p><b>ملاحظات عامة:</b> ${r.notes.replace(/\n/g,'<br>')}</p>`:''}
-          </div>`;
-      });
-      const customBodyHtml = `<h1 style="text-align:center">تقارير دخول غرفة التحكم المركزية — جميع المصانع (${reports.length} تقرير)</h1>` + reportSections.join('');
+      const reportSections = reports.map((r,i)=> roomEntryPageHtml(r, factoriesData.find(x=>x.id===r.factory_id)?.name||'غير محدد', {last:i===reports.length-1}));
+      const customBodyHtml = reportSections.join('');
 
       // جدول مسطّح احتياطي (لصيغ زي Excel/CSV اللي مبتدعمش التقرير السردي المخصّص) —
       // بيشمل كل شخص في سطر مستقل مع رقم التقرير عشان تقدر تفرّق بين التقارير المختلفة
@@ -14136,8 +14122,9 @@ async function unifiedExportPdf(title, headers, rows, opts){
     ${unifiedChartsHtml(opts)}
     ${unifiedBuildTableHtml(headers, rows, opts)}
   </div>`;
+  if(opts?.customBodyHtml) el.style.width='752px';
   document.body.appendChild(el);
-  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+  const blob = await html2pdf().set({margin:8, image:{type:'jpeg',quality:0.95}, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['css']}}).from(el).outputPdf('blob');
   el.remove();
   if(!blob || blob.size < 500){ toast('🚫 فشل إنشاء ملف PDF (الملف فارغ أو تالف)'); return; }
   await saveOrShareFile(blob, `${title}-${new Date().toISOString().slice(0,10)}.pdf`);
@@ -14158,7 +14145,8 @@ function base64DataUriToUint8Array(dataUri){
    أي زر "Word" في أي مكان في التطبيق لازم يمرّ من هنا وبس.
    ============================================================================ */
 async function htmlToDocxChildren(bodyHtml){
-  const { Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType } = docx;
+  const { Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, HeadingLevel, AlignmentType, WidthType, ShadingType, PageBreak } = docx;
+  let curSz = 0, pgCount = 0;
   const container = document.createElement('div');
   container.innerHTML = bodyHtml;
   const children = [];
@@ -14189,7 +14177,7 @@ async function htmlToDocxChildren(bodyHtml){
         return new TableCell({
           shading: isHeaderRow ? {type:ShadingType.CLEAR, fill:'0B1220'} : undefined,
           children:[new Paragraph({ bidirectional:true, alignment:AlignmentType.RIGHT,
-            children:[new TextRun({ text: cEl.textContent.trim(), bold: isHeaderRow, color: isHeaderRow?'FFFFFF':'000000', size:18 })] })]
+            children:[new TextRun({ text: cEl.textContent.trim(), bold: isHeaderRow, color: isHeaderRow?'FFFFFF':'000000', size:(curSz||18) })] })]
         });
       });
       return new TableRow({ tableHeader: isHeaderRow, cantSplit: !isHeaderRow, children: cells });
@@ -14205,7 +14193,9 @@ async function htmlToDocxChildren(bodyHtml){
       else if(tag==='h3') children.push(textParagraph(el.textContent, {bold:true, heading:HeadingLevel.HEADING_3}));
       else if(tag==='table'){ const t = walkTable(el); if(t){ children.push(t); children.push(new Paragraph({text:''})); } }
       else if(tag==='img'){ const run = imgToRun(el, 260, 150); if(run) children.push(new Paragraph({alignment:AlignmentType.CENTER, children:[run]})); }
-      else if(tag==='p') children.push(textParagraph(el.textContent, {color:'444444', size:19}));
+      else if(tag==='p') children.push(textParagraph(el.textContent, {color:'444444', size:(curSz||19)}));
+      else if(tag==='style') { /* تجاهل */ }
+      else if(el.classList && el.classList.contains('re-pg')){ if(pgCount++>0) children.push(new Paragraph({children:[new PageBreak()]})); curSz = Math.min(20, Math.max(14, parseInt(el.getAttribute('data-sz'))||18)); walk(el); curSz = 0; }
       else walk(el); // div/section وغيرهم — نغوص جواهم عشان نلاقي المحتوى الحقيقي بداخلهم
     });
   }
@@ -14580,8 +14570,9 @@ async function unifiedExportZip(title, headers, rows, opts){
   if(!__tplZip && await ensurePdfLib()){
     const el = document.createElement('div');
     el.innerHTML = `<div style="direction:rtl;font-family:Arial;padding:14px">${opts?.customBodyHtml ? opts.customBodyHtml : `<h1 style="text-align:center">${title}</h1>${unifiedChartsHtml(opts)}${unifiedBuildTableHtml(headers, rows, opts)}`}</div>`;
+    if(opts?.customBodyHtml) el.style.width='752px';
     document.body.appendChild(el);
-    const pdfBlob = await html2pdf().set({margin:8, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}}).from(el).outputPdf('blob');
+    const pdfBlob = await html2pdf().set({margin:8, html2canvas:{scale:2}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['css']}}).from(el).outputPdf('blob');
     el.remove();
     folder.file('التقرير.pdf', pdfBlob);
   }
