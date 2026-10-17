@@ -8817,38 +8817,44 @@ async function exportFactoryRoomEntryReports(factoryId){
 }
 /* -------- التصدير — نفس النظام الموحّد بكل الصيغ الثمانية، بترتيب النموذج الورقي -------- */
 
-/* 📄 كل تقرير دخول غرفة تحكم = ورقة A4 واحدة (PDF / Word / الطباعة).
+/* 🧹 إخفاء أي عمود فاضي بالكامل (ماعدا عمود "م") — الحقول الفاضية ماتظهرش في الطباعة */
+function rePickCols(heads, rows){
+  const keep = heads.map((h,ci)=> ci===0 || rows.some(r=> String(r[ci]==null?'':r[ci]).replace(/<br\s*\/?>/g,'').trim()!==''));
+  return { heads: heads.filter((h,ci)=>keep[ci]), rows: rows.map(r=> r.filter((c,ci)=>keep[ci])) };
+}
+/* 📄 كل تقرير دخول غرفة تحكم = ورقة A4 واحدة (PDF / Word / الطباعة) — وأي بند فاضي بيتشال من الطباعة.
    عرض ثابت 720px + تصغير تلقائي للخط حسب كمية البيانات عشان التقرير يفضل في صفحة واحدة. */
 let __rePgSeq = 0;
 function roomEntryPageHtml(r, fname, opts){
   opts = opts||{};
-  const people = (r.people||[]).filter(p=>p&&(p.name||p.department));
-  const events = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
-  const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
-  const nl = v=> esc(v==null?'':v).replace(/\n/g,'<br>');
+  const has = v=> v!=null && String(v).trim()!=='';
+  const people = (r.people||[]).filter(p=>p&&(has(p.name)||has(p.department)));
+  const events = (r.events||[]).filter(e=>e&&(has(e.description)||has(e.event_datetime)||has(e.location_or_camera)||has(e.notes)));
+  const results = (r.review_results||[]).filter(x=>x&&(has(x.result)||has(x.details)||has(x.notes)));
+  const nl = v=> has(v)? esc(v).replace(/\n/g,'<br>') : '';
   const LN = (t,cpl)=> String(t||'').split('\n').reduce((a,l)=>a+Math.max(1,Math.ceil(l.length/cpl)),0);
-  let est = 330 + (r.notes? 30+LN(r.notes,95)*17 : 0);
-  est += people.length ? 28+people.length*27 : 24;
-  est += events.length ? 28+events.reduce((a,e)=>a+14+17*Math.max(LN(e.description,30),LN(e.notes,22),LN(e.location_or_camera,16),LN(e.event_datetime,14)),0) : 24;
-  est += results.length ? 28+results.reduce((a,x)=>a+14+17*Math.max(LN(x.result,34),LN(x.details,34),LN(x.notes,22)),0) : 24;
+  let est = 200 + (has(r.notes)? 30+LN(r.notes,95)*17 : 0);
+  est += people.length ? 56+people.length*27 : 0;
+  est += events.length ? 56+events.reduce((a,e)=>a+14+17*Math.max(LN(e.description,30),LN(e.notes,22),LN(e.location_or_camera,16),LN(e.event_datetime,14)),0) : 0;
+  est += results.length ? 56+results.reduce((a,x)=>a+14+17*Math.max(LN(x.result,34),LN(x.details,34),LN(x.notes,22)),0) : 0;
+  est += 90;
   const sc = Math.min(1, 930/est);
   const fs = Math.max(7, Math.round(13*sc*10)/10), pad = Math.max(2, Math.round(6*sc));
   const cls = 'rePg'+(++__rePgSeq);
-  const tbl = (heads, rows)=> `<table><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr>${rows.map(r2=>`<tr>${r2.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
+  const tbl = (heads, rows)=>{ const p = rePickCols(heads, rows); return `<table><tr>${p.heads.map(h=>`<th>${h}</th>`).join('')}</tr>${p.rows.map(r2=>`<tr>${r2.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`; };
+  const meta1 = [ has(fname)?`<b>المصنع:</b> ${esc(fname)}`:'', has(r.report_date)?`<b>التاريخ:</b> ${fmtDateAr(r.report_date)}`:'', has(r.visiting_entity)?`<b>جهة/إدارة الزيارة:</b> ${esc(r.visiting_entity)}`:'' ].filter(Boolean).join(' &nbsp;&nbsp; ');
+  const meta2 = [ has(r.time_from)?`<b>الوقت من:</b> ${esc(r.time_from)}`:'', has(r.time_to)?`<b>الوقت إلى:</b> ${esc(r.time_to)}`:'' ].filter(Boolean).join(' &nbsp;&nbsp; ');
+  const appr = [['مسؤول الغرفة',r.room_officer_name],['مشرف الغرفة',r.room_supervisor_name],['مدير الأمن',r.security_manager_name]].filter(a=>has(a[1]));
   return `<div class="re-pg ${cls}" data-pg="1" data-sz="${Math.round(fs*1.45)}" style="direction:rtl;font-family:Arial;width:720px;box-sizing:border-box;margin:0 auto;padding:20px;border:1px solid #333;color:#0B1220;font-size:${fs}px;page-break-inside:avoid;page-break-after:${opts.last?'auto':'always'}">
     <style>.${cls} table{width:100%;border-collapse:collapse;margin:4px 0 8px}.${cls} th,.${cls} td{border:1px solid #333;padding:${pad}px;font-size:${fs}px;text-align:right;vertical-align:top}.${cls} th{background:#e8edf5}.${cls} h2{font-size:${(fs*1.5).toFixed(1)}px;margin:0 0 6px;text-align:center}.${cls} h3{font-size:${(fs*1.15).toFixed(1)}px;margin:8px 0 4px}.${cls} p{margin:2px 0}</style>
     <h2>تقرير دخول غرفة التحكم المركزية</h2>
-    <p><b>المصنع:</b> ${esc(fname||'')} &nbsp;&nbsp; <b>التاريخ:</b> ${fmtDateAr(r.report_date)} &nbsp;&nbsp; <b>جهة/إدارة الزيارة:</b> ${esc(r.visiting_entity||'—')}</p>
-    <p><b>الوقت من:</b> ${r.time_from||'—'} &nbsp;&nbsp; <b>الوقت إلى:</b> ${r.time_to||'—'}</p>
-    <h3>الأشخاص المسموح لهم بالدخول</h3>
-    ${people.length? tbl(['م','الاسم','الإدارة التابع لها'], people.map((p,i)=>[i+1,esc(p.name||'—'),esc(p.department||'—')])) : '<p>لا يوجد أشخاص مسجّلين.</p>'}
-    <h3>لمراجعة الحدث الآتي</h3>
-    ${events.length? tbl(['م','وصف الحدث','التاريخ/الوقت','الكاميرا/الموقع','ملاحظات'], events.map((e,i)=>[i+1,nl(e.description||'—'),esc(e.event_datetime||'—'),esc(e.location_or_camera||'—'),nl(e.notes||'—')])) : '<p>لا توجد أحداث مسجّلة.</p>'}
-    <h3>نتيجة المراجعة والفحص تبين الآتي</h3>
-    ${results.length? tbl(['م','نتيجة المراجعة','التفاصيل','ملاحظات'], results.map((x,i)=>[i+1,nl(x.result||'—'),nl(x.details||'—'),nl(x.notes||'—')])) : '<p>لا يوجد نتائج مراجعة مسجّلة.</p>'}
-    <h3>الاعتمادات</h3>
-    ${tbl(['مسؤول الغرفة','مشرف الغرفة','مدير الأمن'], [[esc(r.room_officer_name||'—'),esc(r.room_supervisor_name||'—'),esc(r.security_manager_name||'—')]])}
-    ${r.notes? `<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
+    ${meta1?`<p>${meta1}</p>`:''}
+    ${meta2?`<p>${meta2}</p>`:''}
+    ${people.length? `<h3>الأشخاص المسموح لهم بالدخول</h3>`+tbl(['م','الاسم','الإدارة التابع لها'], people.map((p,i)=>[i+1,esc(p.name||''),esc(p.department||'')])) : ''}
+    ${events.length? `<h3>لمراجعة الحدث الآتي</h3>`+tbl(['م','وصف الحدث','التاريخ/الوقت','الكاميرا/الموقع','ملاحظات'], events.map((e,i)=>[i+1,nl(e.description),esc(e.event_datetime||''),esc(e.location_or_camera||''),nl(e.notes)])) : ''}
+    ${results.length? `<h3>نتيجة المراجعة والفحص تبين الآتي</h3>`+tbl(['م','نتيجة المراجعة','التفاصيل','ملاحظات'], results.map((x,i)=>[i+1,nl(x.result),nl(x.details),nl(x.notes)])) : ''}
+    ${appr.length? `<h3>الاعتمادات</h3><table><tr>${appr.map(a=>`<th>${a[0]}</th>`).join('')}</tr><tr>${appr.map(a=>`<td>${esc(a[1])}</td>`).join('')}</tr></table>` : ''}
+    ${has(r.notes)? `<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
   </div>`;
 }
 async function exportRoomEntryReport(reportId){
@@ -17465,7 +17471,7 @@ function tpTableSlide(c, o){
   const cols = cw.map(v=>o.w*v/tot);
   const head = o.headers.map((h,ci)=>({text:h,fill:o.headFill,color:o.headColor,bold:true,size:frFit(h,cols[ci]-0.16,o.headH-0.04,o.headSize,true,7,1.1),bb:o.headBB}));
   const body = o.rows.map((r,ri)=>r.map((v,ci)=>{
-    const t = v===''||v==null?'—':String(v), empty = t==='—';
+    const t = v===''||v==null?(o.blankEmpty?' ':'—'):String(v), empty = t==='—'||t===' ';
     return {text:t,fill:(o.zebra&&ri%2===1)?o.zebra:null,color:empty?th.mute:(o.bodyColor||th.ink),bold:false,size:frFit(t,cols[ci]-0.16,o.rowH-0.04,o.bodySize,false,7,1.1),bb:o.bb};
   }));
   return {t:'table',x:o.x,y:o.y,w:o.w,cols,headH:o.headH,rowH:o.rowH,rows:[head].concat(body),border:o.border||null};
@@ -17741,41 +17747,47 @@ function tpBuildRoomEntry(cfg, title, opts){
   const page = (ttl)=>{ const s = c.newSlide(th.bg); tpIndigoChrome(c,s,ttl,n++,D); return s; };
   const chunk = (arr,k)=>{ const o=[]; for(let i=0;i<arr.length;i+=k) o.push(arr.slice(i,i+k)); return o.length?o:[[]]; };
 
-  // 🎯 كل تقرير = شريحة/ورقة واحدة فقط: بيانات + أشخاص (عمود يمين) + أحداث ونتائج (عمود يسار) + ملاحظات + اعتمادات
+  // 🎯 كل تقرير = شريحة/ورقة واحدة فقط — وأي بند فاضي بيتشال من الطباعة (بطاقة/عمود/قسم/اعتماد)
+  const has = v=> v!=null && String(v).trim()!=='';
   reports.forEach(r=>{
     const fname = tpFactoryName(r)||'—';
     const ttl = `تقرير دخول غرفة التحكم المركزية — ${fname}`;
-    const people  = (r.people||[]).filter(p=>p&&(p.name||p.department));
-    const events  = (r.events||[]).filter(e=>e&&(e.description||e.event_datetime||e.location_or_camera||e.notes));
-    const results = (r.review_results||[]).filter(x=>x&&(x.result||x.details||x.notes));
-    const hasNotes = !!(r.notes && String(r.notes).trim());
+    const people  = (r.people||[]).filter(p=>p&&(has(p.name)||has(p.department)));
+    const events  = (r.events||[]).filter(e=>e&&(has(e.description)||has(e.event_datetime)||has(e.location_or_camera)||has(e.notes)));
+    const results = (r.review_results||[]).filter(x=>x&&(has(x.result)||has(x.details)||has(x.notes)));
+    const hasNotes = has(r.notes);
+    const appr = [['مسؤول الغرفة',r.room_officer_name],['مشرف الغرفة',r.room_supervisor_name],['مدير الأمن',r.security_manager_name]].filter(a2=>has(a2[1]));
     const s = page(ttl);
     const Y1 = 1.3;
-    { const w=2.95, g=0.177;
-      [['المصنع',fname],['التاريخ',fmtDateAr(r.report_date)],['التوقيت',`من ${r.time_from||'—'} إلى ${r.time_to||'—'}`],['جهة/إدارة الزيارة',str(r.visiting_entity)||'—']].forEach((a2,i)=>{
-        const x = 0.5+(3-i)*(w+g);
+    // بطاقات البيانات (الفاضي مايظهرش)
+    const timeTxt = (has(r.time_from)&&has(r.time_to)) ? `من ${r.time_from} إلى ${r.time_to}` : has(r.time_from) ? `من ${r.time_from}` : has(r.time_to) ? `إلى ${r.time_to}` : '';
+    const cards = [['المصنع',fname],['التاريخ',has(r.report_date)?fmtDateAr(r.report_date):''],['التوقيت',timeTxt],['جهة/إدارة الزيارة',has(r.visiting_entity)?str(r.visiting_entity):'']].filter(a2=>has(a2[1]));
+    { const g=0.177, w=(12.33-(cards.length-1)*g)/cards.length;
+      cards.forEach((a2,i)=>{
+        const x = 0.5+(cards.length-1-i)*(w+g);
         s.ops.push(c.R(x,Y1,w,0.72,th.white,{r:0.1}), c.T(a2[0],x+0.12,Y1+0.04,w-0.24,0.24,10,th.mute,{noFit:true}), c.T(a2[1],x+0.12,Y1+0.28,w-0.24,0.4,14,th.ink,{bold:true,min:8}));
       }); }
-    const y1 = 2.2, yb = hasNotes?5.45:6.02, H = yb-y1;
+    const y1 = 2.2, bottom = appr.length?6.02:6.88, notesY = bottom-0.47, yb = hasNotes?notesY-0.1:bottom, H = yb-y1;
     const lab = (x,y,w,text)=> s.ops.push(c.R(x+w-0.12,y+0.06,0.1,0.22,th.brand,{r:0.05}), c.T(text,x,y,w-0.2,0.3,13,th.ink,{bold:true,min:9}));
-    const tbl = (x,y,w,headers,rows,rowH)=>{ const headH=0.3, h=headH+rows.length*rowH+0.12;
-      s.ops.push(c.R(x,y,w,h,th.white,{r:0.08}), tpTableSlide(c,{x:x+0.1,y:y+0.06,w:w-0.2,headers,rows,headH,rowH,headFill:th.soft,headColor:th.ink,headSize:11,bodySize:12,bb:th.soft}));
+    const tbl = (x,y,w,headers,rows,rowH)=>{
+      const pk = rePickCols(headers, rows); const headH=0.3, h=headH+pk.rows.length*rowH+0.12;
+      s.ops.push(c.R(x,y,w,h,th.white,{r:0.08}), tpTableSlide(c,{x:x+0.1,y:y+0.06,w:w-0.2,headers:pk.heads,rows:pk.rows,headH,rowH,headFill:th.soft,headColor:th.ink,headSize:11,bodySize:12,bb:th.soft,blankEmpty:true}));
       return y+h; };
-    // عمود الأشخاص (يمين)
-    const PX=8.63, PW=4.2;
-    lab(PX,y1,PW,'الأشخاص المسموح لهم بالدخول');
-    if(!people.length){ s.ops.push(c.R(PX,y1+0.36,PW,0.6,th.white,{r:0.08}), c.T('لا يوجد أشخاص مسجّلين.',PX+0.15,y1+0.36,PW-0.3,0.6,12,th.mute,{noFit:true})); }
-    else {
-      const avail = H-0.36-0.42;
-      if(people.length<=14){ const rh=Math.max(0.18,Math.min(0.42,avail/people.length)); tbl(PX,y1+0.36,PW,['م','الاسم','الإدارة التابعة لها'],people.map((p,i)=>[String(i+1),str(p.name),str(p.department)]),rh); }
-      else { const half=Math.ceil(people.length/2), rh=Math.max(0.16,Math.min(0.42,avail/half)), w2=(PW-0.1)/2;
-        [people.slice(0,half),people.slice(half)].forEach((pc,k)=>{ if(pc.length) tbl(PX+(1-k)*(w2+0.1),y1+0.36,w2,['م','الاسم','الإدارة'],pc.map((p,i)=>[String(k*half+i+1),str(p.name),str(p.department)]),rh); }); }
-    }
-    // عمود الأحداث ونتيجة المراجعة (يسار)
-    const LX=0.5, LW=7.95;
     const evRows = events.map((e,i)=>[String(i+1), str(e.description), str(e.event_datetime), str(e.location_or_camera), str(e.notes)]);
     const reRows = results.map((x,i)=>[String(i+1), str(x.result), str(x.details), str(x.notes)]);
     const evH = ['م','وصف الحدث','التاريخ/الوقت','الكاميرا/الموقع','ملاحظات'], reH = ['م','نتيجة المراجعة والفحص','التفاصيل','ملاحظات'];
+    const hasLeft = evRows.length || reRows.length;
+    // عمود الأشخاص (يمين) — لو مفيش يسار ياخد العرض كله، ولو مفيش أشخاص مايظهرش
+    const PW = hasLeft ? 4.2 : 12.33, PX = hasLeft ? 8.63 : 0.5;
+    if(people.length){
+      lab(PX,y1,PW,'الأشخاص المسموح لهم بالدخول');
+      const avail = H-0.36-0.42;
+      if(people.length<=14 || !hasLeft && people.length<=22){ const rh=Math.max(0.18,Math.min(0.42,avail/people.length)); tbl(PX,y1+0.36,PW,['م','الاسم','الإدارة التابعة لها'],people.map((p,i)=>[String(i+1),str(p.name),str(p.department)]),rh); }
+      else { const half=Math.ceil(people.length/2), rh=Math.max(0.16,Math.min(0.42,avail/half)), w2=(PW-0.1)/2;
+        [people.slice(0,half),people.slice(half)].forEach((pc,k)=>{ if(pc.length) tbl(PX+(1-k)*(w2+0.1),y1+0.36,w2,['م','الاسم','الإدارة'],pc.map((p,i)=>[String(k*half+i+1),str(p.name),str(p.department)]),rh); }); }
+    }
+    // عمود الأحداث ونتيجة المراجعة (يسار) — لو مفيش أشخاص ياخد العرض كله
+    const LX=0.5, LW = people.length ? 7.95 : 12.33;
     const ln = (t,cpl)=> Math.max(1,Math.ceil(String(t||'').length/cpl));
     const wE = evRows.reduce((a2,x)=>a2+Math.max(ln(x[1],50),ln(x[4],20),ln(x[3],18)),0), wR = reRows.reduce((a2,x)=>a2+Math.max(ln(x[1],45),ln(x[2],40),ln(x[3],18)),0);
     const k = (evRows.length?1:0)+(reRows.length?1:0);
@@ -17784,13 +17796,15 @@ function tpBuildRoomEntry(cfg, title, opts){
       if(evRows.length){ const rh=Math.max(0.2,Math.min(0.9,(availRows*wE/tot)/evRows.length)); lab(LX,y,LW,'لمراجعة الحدث الآتي'); y = tbl(LX,y+0.36,LW,evH,evRows,rh)+0.12; }
       if(reRows.length){ const rh=Math.max(0.2,Math.min(0.9,(availRows*wR/tot)/reRows.length)); lab(LX,y,LW,'نتيجة المراجعة والفحص تبين الآتي'); y = tbl(LX,y+0.36,LW,reH,reRows,rh); }
     }
-    // ملاحظات عامة + الاعتمادات (أسفل الصفحة)
-    if(hasNotes) s.ops.push(c.R(0.5,5.55,12.33,0.5,th.white,{r:0.08}), c.T('ملاحظات عامة: '+str(r.notes).replace(/\s*\n\s*/g,' — '),0.7,5.55,11.93,0.5,12,th.ink,{min:7}));
-    const aw=3.95, ag=0.24;
-    [['مسؤول الغرفة',r.room_officer_name],['مشرف الغرفة',r.room_supervisor_name],['مدير الأمن',r.security_manager_name]].forEach((a2,i)=>{
-      const x = 0.5+(2-i)*(aw+ag);
-      s.ops.push(c.R(x,6.12,aw,0.8,th.white,{r:0.1}), c.T(a2[0],x+0.15,6.16,aw-0.3,0.24,10,th.mute,{noFit:true}), c.T(str(a2[1])||'—',x+0.15,6.4,aw-0.3,0.46,16,th.ink,{bold:true,min:9}));
-    });
+    // ملاحظات عامة + الاعتمادات (الفاضي مايظهرش)
+    if(hasNotes) s.ops.push(c.R(0.5,notesY,12.33,0.5,th.white,{r:0.08}), c.T('ملاحظات عامة: '+str(r.notes).replace(/\s*\n\s*/g,' — '),0.7,notesY,11.93,0.5,12,th.ink,{min:7}));
+    if(appr.length){
+      const ag=0.24, aw=(12.33-(appr.length-1)*ag)/appr.length;
+      appr.forEach((a2,i)=>{
+        const x = 0.5+(appr.length-1-i)*(aw+ag);
+        s.ops.push(c.R(x,6.12,aw,0.8,th.white,{r:0.1}), c.T(a2[0],x+0.15,6.16,aw-0.3,0.24,10,th.mute,{noFit:true}), c.T(str(a2[1]),x+0.15,6.4,aw-0.3,0.46,16,th.ink,{bold:true,min:9}));
+      });
+    }
   });
   tpIndigoClosing(c,title);
   return c.slides;
