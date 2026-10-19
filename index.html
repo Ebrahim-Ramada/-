@@ -5158,6 +5158,7 @@ async function loadCameraTypeStatsForFactory(factoryId){
     const {data} = await q;
     rows = data||[];
   }catch(e){ host.innerHTML = `<div class="empty">⚠️ تحتاج تشغيل schema_part24.sql في Supabase.</div>`; return; }
+  if(rows.length) rows = withUnclassifiedCamRows(rows, factoryId);
   renderCameraTypeStatsContent(rows, factoryId);
 }
 function aggregateCameraTypeRows(rows){
@@ -5286,12 +5287,24 @@ function renderCameraTypeChart(){
   const host = document.getElementById('ctsChartHost');
   if(host) host.innerHTML = bars(byBrand,'الشركات المصنعة') + bars(byRes,'الدقات') + bars(byType,'الأنواع');
 }
+/* 🔗 مطابقة تقارير "أنواع الكاميرات" مع إجمالي المصنع: الفرق بين إجمالي المصنع ومجموع المجموعات المُصنَّفة يظهر صراحةً كصف "غير مُصنَّف" */
+function withUnclassifiedCamRows(rows, factoryId){
+  const out = [...(rows||[])];
+  const fids = (factoryId && factoryId!=='all') ? [factoryId] : (factoriesData||[]).map(f=>f.id);
+  fids.forEach(fid=>{
+    const f = (factoriesData||[]).find(x=>x.id===fid); if(!f) return;
+    const classified = out.filter(r=>r.factory_id===fid).reduce((a,r)=>a+(Number(r.count)||0),0);
+    const diff = (f.cameras_total||0) - classified;
+    if(diff>0 && classified>0) out.push({ id:'unclassified-'+fid, factory_id:fid, count:diff, brand:'غير مُصنَّف', resolution:'غير مُصنَّف', camera_type:'غير مُصنَّف' });
+  });
+  return out;
+}
 async function openCameraTypeStatsExportPicker(factoryId){
   toast('جاري تجميع البيانات...');
   const isAll = factoryId==='all';
   let rows = [];
   try{ let q = supa.from('camera_type_counts').select('*'); if(!isAll) q=q.eq('factory_id',factoryId); const {data}=await q; rows=data||[]; }catch(e){}
-  if(!rows.length){ toast('لا توجد بيانات مسجلة للتصدير'); return; }
+  if(!rows.length){ toast('لا توجد بيانات مسجلة للتصدير'); return; } rows = withUnclassifiedCamRows(rows, factoryId);
   const headers = isAll ? ['المصنع','العدد','الشركة المصنعة','الدقة','النوع'] : ['العدد','الشركة المصنعة','الدقة','النوع'];
   const data = rows.map(r=>{
     const base = [r.count, r.brand||'—', r.resolution||'—', r.camera_type||'—'];
@@ -5318,6 +5331,7 @@ async function printCameraTypeStats(factoryId){
   const f = isAll? null : factoriesData.find(x=>x.id===factoryId);
   let rows = [];
   try{ let q = supa.from('camera_type_counts').select('*'); if(!isAll) q=q.eq('factory_id',factoryId); const {data}=await q; rows=data||[]; }catch(e){}
+  if(rows.length) rows = withUnclassifiedCamRows(rows, factoryId);
   const {byBrand, byRes, byType, total} = aggregateCameraTypeRows(rows);
   const table = (title, obj) => {
     const entries = Object.entries(obj);
@@ -14809,7 +14823,7 @@ async function gatherFullFactoryData(factoryId){
   const deviceNames = new Set([f?.name, ...cameras.map(c=>c.camera_name), ...servers.map(sv=>sv.server_name)]);
   const maintenance = (preventiveTasks||[]).filter(t=> deviceNames.has(t.target_name));
   let cameraTypeGroups = [];
-  try{ const {data} = await supa.from('camera_type_counts').select('*').eq('factory_id', factoryId); cameraTypeGroups = data||[]; }catch(e){}
+  try{ const {data} = await supa.from('camera_type_counts').select('*').eq('factory_id', factoryId); cameraTypeGroups = withUnclassifiedCamRows(data||[], factoryId); }catch(e){}
   return { f, s, cameras, screens, faults, lighting, cameraMods: dedupCameraMods(cameraMods), racks, switches, servers, ups, layouts, maintenance, maintenanceLog, drives, restoredCameras, cameraTypeGroups };
 }
 
@@ -17883,8 +17897,9 @@ async function tplTryExport(format, title, headers, rows, opts){
 
 /* ===== مركز التصدير الشامل بالتصاميم الأربعة ===== */
 async function tplCollectCamTypes(){
-  const {data} = await supa.from('camera_type_counts').select('*'); const rows = data||[];
+  const {data} = await supa.from('camera_type_counts').select('*'); let rows = data||[];
   if(!rows.length) return null;
+  rows = withUnclassifiedCamRows(rows, 'all');
   const headers = ['المصنع','العدد','الشركة المصنعة','الدقة','النوع'];
   const dd = rows.map(r=>[factoriesData.find(x=>x.id===r.factory_id)?.name||'—', r.count, r.brand||'—', r.resolution||'—', r.camera_type||'—']);
   const {byBrand, byRes, byType} = aggregateCameraTypeRows(rows);
