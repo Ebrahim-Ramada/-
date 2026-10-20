@@ -6920,6 +6920,7 @@ async function loadScreens(factoryId){
   host.innerHTML = screensRecordsData.map(s=>`
     <div class="site-card">
       <div class="site-name" style="font-size:14px">${s.screen_name}</div>
+      ${s.photo_url? `<img src="${esc(s.photo_url)}" style="width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin:8px 0;cursor:zoom-in" onclick="openImageLightbox('${esc(s.photo_url)}')">`:''}
       ${s.fault_reason? `<div class="site-meta">السبب: ${s.fault_reason}</div>`:''}
       <div style="margin-top:8px">
         ${isAdmin() ? `<select class="input" style="font-size:12px;padding:6px 8px" onchange="quickUpdateScreenStatus('${s.id}', this.value)">
@@ -6957,7 +6958,8 @@ async function confirmSwitchToIndividualScreens(factoryId){
 function renderScreenFormModal(factoryId, screenId){
   const s = screenId ? screensRecordsData.find(x=>x.id===screenId) : null;
   const isNew = !s;
-  const d = s || {screen_number:'', screen_name:'', status:'تعمل', fault_reason:'', notes:''};
+  const d = s || {screen_number:'', screen_name:'', status:'تعمل', fault_reason:'', notes:'', photo_url:''};
+  screenPhotoPending = null; screenPhotoRemove = false;
   openModal(`
     <div class="modal-head"><h3>${isNew?'إضافة شاشة':'تعديل شاشة'}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <div class="row2">
@@ -6967,22 +6969,50 @@ function renderScreenFormModal(factoryId, screenId){
     <div class="field"><label>اسم الشاشة</label><input class="input" id="sf_name" value="${d.screen_name}"></div>
     <div class="field"><label>سبب العطل</label><input class="input" id="sf_reason" value="${d.fault_reason||''}"></div>
     <div class="field"><label>ملاحظات</label><textarea class="input" id="sf_notes">${esc(d.notes||'')}</textarea></div>
-    <button class="btn primary block" onclick="saveScreenForm('${factoryId}','${isNew?'':screenId}')">💾 حفظ</button>
+    <div class="field"><label>صورة الشاشة</label>
+      <img id="sf_prev" ${d.photo_url?`src="${esc(d.photo_url)}"`:''} style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;margin-bottom:6px;${d.photo_url?'':'display:none'}">
+      <label class="btn sm block" style="cursor:pointer">📷 ${d.photo_url?'استبدال الصورة':'اختيار / التقاط صورة'}<input type="file" accept="image/*" style="display:none" onchange="screenPickPhoto(this)"></label>
+      ${d.photo_url? `<button class="btn sm danger block" id="sf_rmBtn" style="margin-top:6px" onclick="screenRemovePhoto()">🗑 حذف الصورة</button>`:''}
+    </div>
+    <button class="btn primary block" id="sf_saveBtn" onclick="saveScreenForm('${factoryId}','${isNew?'':screenId}')">💾 حفظ</button>
   `);
+}
+let screenPhotoPending = null, screenPhotoRemove = false;
+function screenPickPhoto(inputEl){
+  const file = inputEl.files[0]; if(!file) return;
+  screenPhotoPending = file; screenPhotoRemove = false;
+  const p = document.getElementById('sf_prev'); p.src = URL.createObjectURL(file); p.style.display = 'block';
+}
+function screenRemovePhoto(){
+  screenPhotoPending = null; screenPhotoRemove = true;
+  const p = document.getElementById('sf_prev'); if(p){ p.removeAttribute('src'); p.style.display='none'; }
+  const b = document.getElementById('sf_rmBtn'); if(b) b.style.display='none';
 }
 async function saveScreenForm(factoryId, screenId){
   const name = document.getElementById('sf_name').value.trim();
   if(!name){ toast('أدخل اسم الشاشة'); return; }
+  const btn = document.getElementById('sf_saveBtn'); if(btn){ btn.disabled = true; btn.textContent = 'جاري الحفظ...'; }
   const payload = {
     factory_id: factoryId, screen_number: document.getElementById('sf_number').value.trim(),
     screen_name: name, status: document.getElementById('sf_status').value,
     fault_reason: document.getElementById('sf_reason').value.trim(), notes: document.getElementById('sf_notes').value.trim()
   };
   try{
+    if(screenPhotoPending){
+      const compressed = await compressImageFile(screenPhotoPending);
+      const path = `screen-${Date.now()}.jpg`;
+      const up = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
+      if(up.error) throw up.error;
+      payload.photo_url = supa.storage.from('camera-photos').getPublicUrl(path).data.publicUrl;
+    } else if(screenPhotoRemove){ payload.photo_url = null; }
     if(screenId){ const {error} = await supa.from('screens').update(payload).eq('id', screenId); if(error) throw error; await logAudit('تعديل شاشة', name); }
     else { payload.created_by = currentProfile.id; const {error} = await supa.from('screens').insert(payload); if(error) throw error; await logAudit('إضافة شاشة', name); }
     closeModal(); toast('✅ تم الحفظ'); loadScreens(factoryId); loadFactories();
-  }catch(e){ toast('🚫 تعذّر الحفظ: '+(e.message||'')); }
+  }catch(e){
+    const missing = /photo_url|schema cache|column/i.test((e&&e.message)||'');
+    toast(missing ? '⚠️ شغّل ملف screens_photo.sql في Supabase مرة واحدة لتفعيل صور الشاشات' : '🚫 تعذّر الحفظ: '+((e&&e.message)||''));
+    if(btn){ btn.disabled = false; btn.textContent = '💾 حفظ'; }
+  }
 }
 async function quickUpdateScreenStatus(screenId, newStatus){
   try{
@@ -13995,7 +14025,7 @@ async function exportSectionPicker(section, factoryId, __collect){
     },
     screens: async()=>{
       const {data} = await supa.from('screens').select('*');
-      const rows=(data||[]); return { title:'الشاشات', headers:['المصنع','الرقم','الاسم','الحالة'], data: rows.map(s=>[factoriesData.find(x=>x.id===s.factory_id)?.name||'', s.screen_number||'', s.screen_name, s.status]), raw:rows };
+      const rows=(data||[]); return { title:'الشاشات', headers:['المصنع','الرقم','الاسم','الحالة'], data: rows.map(s=>[factoriesData.find(x=>x.id===s.factory_id)?.name||'', s.screen_number||'', s.screen_name, s.status]), raw:rows, getImageUrl: i=>rows[i].photo_url };
     },
     racks: async()=>{
       const {data} = await supa.from('factory_racks').select('*');
