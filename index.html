@@ -8882,15 +8882,14 @@ function roomEntryPageHtml(r, fname, opts){
   est += events.length ? 56+events.reduce((a,e)=>a+14+17*Math.max(LN(e.description,30),LN(e.notes,22),LN(e.location_or_camera,16),LN(e.event_datetime,14)),0) : 0;
   est += results.length ? 56+results.reduce((a,x)=>a+14+17*Math.max(LN(x.result,34),LN(x.details,34),LN(x.notes,22)),0) : 0;
   est += 90;
-  const sc = Math.min(1, 930/est);
-  const fs = Math.max(7, Math.round(13*sc*10)/10), pad = Math.max(2, Math.round(6*sc));
+  const fs = 16, pad = 6; // تنسيق رسمي إلزامي: 16px وخط عريض لكل العناصر
   const cls = 'rePg'+(++__rePgSeq);
   const tbl = (heads, rows)=>{ const p = rePickCols(heads, rows); return `<table><tr>${p.heads.map(h=>`<th>${h}</th>`).join('')}</tr>${p.rows.map(r2=>`<tr>${r2.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`; };
   const meta1 = [ has(fname)?`<b>المصنع:</b> ${esc(fname)}`:'', has(r.report_date)?`<b>التاريخ:</b> ${fmtDateAr(r.report_date)}`:'', has(r.visiting_entity)?`<b>جهة/إدارة الزيارة:</b> ${esc(r.visiting_entity)}`:'' ].filter(Boolean).join(' &nbsp;&nbsp; ');
   const meta2 = [ has(r.time_from)?`<b>الوقت من:</b> ${esc(r.time_from)}`:'', has(r.time_to)?`<b>الوقت إلى:</b> ${esc(r.time_to)}`:'' ].filter(Boolean).join(' &nbsp;&nbsp; ');
   const appr = [['مسؤول الغرفة',r.room_officer_name],['مشرف الغرفة',r.room_supervisor_name],['مدير الأمن',r.security_manager_name]].filter(a=>has(a[1]));
-  return `<div class="re-pg ${cls}" data-pg="1" data-sz="${Math.round(fs*1.45)}" style="direction:rtl;font-family:Arial;width:720px;box-sizing:border-box;margin:0 auto;padding:20px;border:1px solid #333;color:#0B1220;font-size:${fs}px;page-break-inside:avoid;page-break-after:${opts.last?'auto':'always'}">
-    <style>.${cls} table{width:100%;border-collapse:collapse;margin:4px 0 8px}.${cls} th,.${cls} td{border:1px solid #333;padding:${pad}px;font-size:${fs}px;text-align:right;vertical-align:top}.${cls} th{background:#e8edf5}.${cls} h2{font-size:${(fs*1.5).toFixed(1)}px;margin:0 0 6px;text-align:center}.${cls} h3{font-size:${(fs*1.15).toFixed(1)}px;margin:8px 0 4px}.${cls} p{margin:2px 0}</style>
+  return `<div class="re-pg ${cls}" data-pg="1" data-sz="${Math.round(fs*1.45)}" style="direction:rtl;font-family:Arial;width:720px;box-sizing:border-box;margin:0 auto;padding:20px;border:1px solid #333;color:#0B1220;font-size:${fs}px;font-weight:700;page-break-after:${opts.last?'auto':'always'}">
+    <style>.${cls},.${cls} *{font-size:16px!important;font-weight:700!important;font-family:'Cairo','Segoe UI',Tahoma,Arial,sans-serif!important;direction:rtl}.${cls} tr{page-break-inside:avoid}.${cls} table{width:100%;border-collapse:collapse;margin:4px 0 8px}.${cls} th,.${cls} td{border:1px solid #333;padding:${pad}px;font-size:${fs}px;text-align:right;vertical-align:top}.${cls} th{background:#e8edf5}.${cls} h2{font-size:${(fs*1.5).toFixed(1)}px;margin:0 0 6px;text-align:center}.${cls} h3{font-size:${(fs*1.15).toFixed(1)}px;margin:8px 0 4px}.${cls} p{margin:2px 0}</style>
     <h2>تقرير دخول غرفة التحكم المركزية</h2>
     ${meta1?`<p>${meta1}</p>`:''}
     ${meta2?`<p>${meta2}</p>`:''}
@@ -8901,6 +8900,108 @@ function roomEntryPageHtml(r, fname, opts){
     ${has(r.notes)? `<p><b>ملاحظات عامة:</b> ${nl(r.notes)}</p>`:''}
   </div>`;
 }
+
+/* ============================================================
+   📊 التقرير السنوي الشامل لغرفة المراقبة المركزية (PowerPoint حقيقي .pptx + PDF)
+   كل الأرقام من قاعدة البيانات الفعلية للسنة المختارة، السجل الواحد يُحسب مرة واحدة، والجداول الغير متاحة تُتخطّى.
+   ============================================================ */
+const AR_MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+const AR_SRC = [
+  ['faults','reported_at','الأعطال المسجلة'],['camera_modifications','created_at','كاميرات للتعديل'],['added_cameras','created_at','كاميرات مضافة'],
+  ['replaced_cameras','created_at','كاميرات تم تبديلها'],['room_entry_reports','report_date','تقارير دخول الغرفة'],['preventive_maintenance','scheduled_date','الصيانة الوقائية'],
+  ['maintenance_log','fault_date','سجل الصيانة'],['lighting_repairs','created_at','إصلاحات الإضاءة'],['room_needs','created_at','احتياجات الغرفة'],
+  ['shift_handovers','created_at','تسليم واستلام الشيفت'],['tasks','created_at','المهام'],['fence_reports','created_at','تأمين الأسوار']
+];
+async function arFetchYear(table, col, y){
+  let all=[], p=0;
+  while(p<60){ const {data,error} = await supa.from(table).select('*').gte(col,`${y}-01-01`).lt(col,`${y+1}-01-01`).range(p*1000,p*1000+999);
+    if(error) return null; all = all.concat(data||[]); if(!data||data.length<1000) break; p++; }
+  const m = new Map(); all.forEach(r=>m.set(r.id||JSON.stringify(r), r)); return [...m.values()];
+}
+async function arCollect(y){
+  const out = { year:y, src:{} };
+  const res = await Promise.all(AR_SRC.map(([t,c])=>arFetchYear(t,c,y)));
+  AR_SRC.forEach(([t,c,label],i)=>{ if(res[i]) out.src[t] = { label, col:c, rows:res[i] }; });
+  const re = out.src.room_entry_reports;
+  if(re){ out.events = re.rows.reduce((a,r)=>a+((r.events||[]).length),0); out.reviews = re.rows.reduce((a,r)=>a+((r.review_results||[]).length),0); }
+  return out;
+}
+const arMonth = (r,c)=>{ const d = new Date(r[c]); return isNaN(d)? -1 : d.getMonth(); };
+const arFn = id=> factoriesData.find(x=>x.id===id)?.name || 'غير محدد';
+function arCount(rows, fn){ const m={}; rows.forEach(r=>{ const k=fn(r)||'غير محدد'; m[k]=(m[k]||0)+1; }); return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
+function arByMonth(d, t){ const v=new Array(12).fill(0); const s=d.src[t]; if(s) s.rows.forEach(r=>{ const m=arMonth(r,s.col); if(m>=0) v[m]++; }); return v; }
+function arBuildSlides(d){
+  const y=d.year, c=tpCtx('blue','التقرير السنوي '+y,'التقرير السنوي الشامل '+y); const {th,R,T}=c; let n=1;
+  const chrome=(s,title)=>{ s.ops.push(R(0,0,13.333,0.12,th.brand), T(title,0.6,0.35,12.13,0.8,30,th.ink,{bold:true,min:18}), T(`${TP_SYS}  ·  التقرير السنوي ${y}  ·  1/1 – 31/12/${y}`,3.0,7.02,9.73,0.3,10,th.mute,{noFit:true}), T(String(++n),0.5,7.02,1,0.3,10,th.brand,{bold:true,align:'left',noFit:true})); };
+  const kpi=(s,x,yy,w,val,lab)=>{ s.ops.push(R(x,yy,w,1.5,th.soft,{r:0.12}), T(String(val),x+0.15,yy+0.1,w-0.3,0.85,40,th.brand,{bold:true,align:'center',min:20}), T(lab,x+0.15,yy+0.95,w-0.3,0.45,14,th.ink,{bold:true,align:'center',min:9})); };
+  const chart=(s,x,yy,w,h,pairs,kind)=> s.ops.push({t:'chart',kind,x,y:yy,w,h,cats:pairs.map(p=>p[0]),vals:pairs.map(p=>p[1]),color:th.brand,gap:45,labelColor:th.ink,catColor:th.mute,valSize:13,catSize:12,grid:th.line});
+  const table=(s,headers,rows,yy)=> s.ops.push(tpTableSlide(c,{x:0.6,y:yy||1.4,w:12.13,headers,rows,headH:0.5,rowH:0.46,headFill:th.brand,headColor:'FFFFFF',headSize:13,bodySize:13,zebra:th.soft,bb:th.line}));
+  const has=t=>d.src[t] && d.src[t].rows.length;
+  // الغلاف
+  let s=c.newSlide(th.bg); s.ops.push(R(0,0,13.333,7.5,th.brand), R(1.2,2.0,10.93,3.3,'FFFFFF',{r:0.2}), T('التقرير السنوي الشامل',1.6,2.2,10.13,1.2,44,th.ink,{bold:true,align:'center',min:24}), T('لغرفة المراقبة المركزية',1.6,3.3,10.13,0.8,28,th.brand,{bold:true,align:'center',min:16}), T(`عن عام ${y}  ·  من 1 يناير إلى 31 ديسمبر ${y}`,1.6,4.2,10.13,0.6,18,th.mute,{align:'center',min:12}), T(TP_SYS+'  ·  '+TP_BY,1.2,6.4,10.93,0.4,12,'FFFFFF',{align:'center',noFit:true}));
+  // الملخص التنفيذي
+  const f=d.src.faults, fr=f?f.rows:[]; const closed=fr.filter(r=>['تم الإصلاح','مغلق'].includes(r.status)).length;
+  s=c.newSlide(th.bg); chrome(s,'الملخص التنفيذي وأهم المؤشرات');
+  const ks=[]; if(f) ks.push([fr.length,'أعطال مسجلة']); if(f&&fr.length) ks.push([Math.round(closed/fr.length*100)+'%','نسبة إغلاق الأعطال']); if(d.events!=null) ks.push([d.events,'أحداث في تقارير الدخول']); if(d.reviews!=null) ks.push([d.reviews,'نتائج مراجعة وفحص']);
+  ['replaced_cameras','added_cameras','camera_modifications','preventive_maintenance','tasks'].forEach(t=>{ if(has(t)) ks.push([d.src[t].rows.length,d.src[t].label]); });
+  ks.slice(0,8).forEach((k,i)=> kpi(s,0.6+(i%4)*3.1,1.5+Math.floor(i/4)*1.8,2.9,k[0],k[1]));
+  const tot=computeTotals(factoriesData.map(computeFactory)); s.ops.push(T(`الوضع الحالي (لحظة إعداد التقرير، مؤشر مختلف عن أعطال العام): ${tot.camerasTotal} كاميرا — منقطعة حاليًا ${tot.camerasDown} — نسبة التشغيل ${tpN(tot.camUptime)}%`,0.6,5.3,12.13,0.8,16,th.ink,{bold:true,min:11}), T('جميع الأرقام محسوبة من السجلات الفعلية المسجلة خلال السنة، ولا تتضمن أي بيانات تقديرية.',0.6,6.1,12.13,0.5,13,th.mute,{min:10}));
+  // نطاق العمل
+  s=c.newSlide(th.bg); chrome(s,'نطاق العمل والمصانع المشمولة');
+  table(s,['المصنع','الكاميرات (حاليًا)','المنقطعة (حاليًا)','نسبة التشغيل','الشاشات'],factoriesData.map(computeFactory).slice(0,10).map(x=>[x.name,x.camerasTotal,x.camerasDown,tpN(x.camUptime)+'%',x.screens]));
+  // الأعطال: شهريًا + حسب المصنع + النوع
+  if(fr.length){
+    s=c.newSlide(th.bg); chrome(s,'الأعطال المسجلة شهريًا'); chart(s,0.6,1.4,12.13,5.3,AR_MONTHS.map((m,i)=>[m,arByMonth(d,'faults')[i]]),'col');
+    s=c.newSlide(th.bg); chrome(s,'الأعطال حسب المصنع'); chart(s,0.6,1.4,12.13,5.3,arCount(fr,r=>arFn(r.factory_id)).slice(0,10),'hbar');
+    s=c.newSlide(th.bg); chrome(s,'أكثر أنواع الأعطال تكرارًا'); chart(s,0.6,1.4,6.0,5.3,arCount(fr,r=>r.fault_type).slice(0,8),'hbar'); chart(s,6.8,1.4,5.93,5.3,arCount(fr,r=>r.device_name).slice(0,8),'hbar'); s.ops.push(T('أنواع الأعطال',3.6,1.0,3.0,0.4,13,th.mute,{noFit:true}), T('الأجهزة الأكثر تكرارًا للأعطال',8.8,1.0,3.93,0.4,13,th.mute,{noFit:true}));
+    const q=[0,0,0,0]; arByMonth(d,'faults').forEach((v,i)=>q[Math.floor(i/3)]+=v);
+    s=c.newSlide(th.bg); chrome(s,'مقارنة الأرباع'); chart(s,0.6,1.4,12.13,5.3,['الربع الأول','الربع الثاني','الربع الثالث','الربع الرابع'].map((l,i)=>[l,q[i]]),'col');
+  }
+  // تقارير دخول الغرفة
+  const re=d.src.room_entry_reports;
+  if(re&&re.rows.length){ s=c.newSlide(th.bg); chrome(s,'تقارير دخول غرفة التحكم والمراجعات'); chart(s,0.6,1.4,7.4,5.3,AR_MONTHS.map((m,i)=>[m,arByMonth(d,'room_entry_reports')[i]]),'col');
+    kpi(s,8.4,1.5,4.33,re.rows.length,'تقرير دخول'); kpi(s,8.4,3.2,4.33,d.events,'حدث للمراجعة'); kpi(s,8.4,4.9,4.33,d.reviews,'نتيجة مراجعة وفحص'); }
+  // الكاميرات: تبديل/تعديل/إضافة
+  const camRows=[['replaced_cameras'],['camera_modifications'],['added_cameras']].filter(t=>has(t[0])).map(t=>[d.src[t[0]].label,d.src[t[0]].rows.length]);
+  if(camRows.length){ s=c.newSlide(th.bg); chrome(s,'أعمال الكاميرات خلال العام'); chart(s,0.6,1.4,7.4,5.3,camRows,'hbar');
+    const rc=d.src.replaced_cameras; if(rc&&rc.rows.length) chart(s,8.2,1.4,4.53,5.3,arCount(rc.rows,r=>arFn(r.factory_id)).slice(0,8),'hbar'); }
+  // الصيانة والعمليات
+  const ops=['preventive_maintenance','maintenance_log','lighting_repairs','room_needs','shift_handovers','tasks','fence_reports'].filter(has).map(t=>{ const rs=d.src[t].rows; const done=rs.filter(r=>/تم|مكتمل|مغلق|منفذ/.test(r.status||'')).length; const hasSt=rs.some(r=>r.status); return [d.src[t].label,rs.length,hasSt?done:'—',hasSt?Math.round(done/rs.length*100)+'%':'—']; });
+  if(ops.length){ s=c.newSlide(th.bg); chrome(s,'الصيانة والمتابعة والأعمال التشغيلية'); table(s,['القسم','عدد السجلات','المنجز','نسبة الإنجاز'],ops); }
+  // التوصيات (مستنتجة آليًا من الأرقام فقط)
+  const rec=[]; if(fr.length){ const tf=arCount(fr,r=>arFn(r.factory_id))[0], tt=arCount(fr,r=>r.fault_type)[0], td=arCount(fr,r=>r.device_name)[0];
+    rec.push(`أعلى المصانع تسجيلًا للأعطال: ${tf[0]} (${tf[1]} عطل) — يُنصح بمراجعة أسباب التكرار فيه.`); rec.push(`أكثر الأعطال تكرارًا: ${tt[0]} (${tt[1]} مرة) — وضع خطة صيانة وقائية لها.`); rec.push(`أكثر الأجهزة تعطلًا: ${td[0]} (${td[1]} مرة) — دراسة الاستبدال أو الفحص الدوري.`);
+    rec.push(`نسبة إغلاق الأعطال ${Math.round(closed/fr.length*100)}% — ${closed/fr.length<0.9?'العمل على رفعها بتسريع الإصلاح والتوثيق.':'مستوى جيد يُحافَظ عليه.'}`); }
+  if(tot.camerasDown>0) rec.push(`يوجد حاليًا ${tot.camerasDown} كاميرا منقطعة — متابعة إعادتها للخدمة أولوية للربع القادم.`);
+  if(!rec.length) rec.push('لا توجد بيانات كافية لاستنتاج توصيات لهذه السنة.');
+  s=c.newSlide(th.bg); chrome(s,'أبرز المشكلات والتوصيات'); rec.slice(0,6).forEach((t,i)=> s.ops.push(R(0.6,1.4+i*0.9,12.13,0.78,th.soft,{r:0.1}), T(t,0.85,1.4+i*0.9,11.63,0.78,16,th.ink,{bold:true,min:10})));
+  // الخاتمة
+  s=c.newSlide(th.brand); s.ops.push(T('تم إعداد هذا التقرير تلقائيًا من '+TP_SYS,1.2,2.8,10.93,1.0,28,'FFFFFF',{bold:true,align:'center',min:16}), T(`التقرير السنوي الشامل ${y}  ·  ${tpDate()}`,1.2,3.9,10.93,0.6,16,'FFFFFF',{align:'center',min:11}));
+  return c.slides;
+}
+async function openAnnualReportModal(){
+  const cur=new Date().getFullYear(), yrs=[0,1,2,3,4].map(i=>cur-i);
+  openModal(`<div class="modal-head"><h3>📊 التقرير السنوي الشامل</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+    <div class="field"><label>السنة</label><select class="input" id="ar_year">${yrs.map(y=>`<option>${y}</option>`).join('')}</select></div>
+    <button class="btn primary block" onclick="arPrepare()">إنشاء التقرير السنوي</button><div id="ar_box" style="margin-top:12px"></div>`);
+}
+async function arPrepare(){
+  const y=parseInt(document.getElementById('ar_year').value), box=document.getElementById('ar_box');
+  box.innerHTML='<div class="empty">⏳ جاري استخراج بيانات السنة من قاعدة البيانات...</div>';
+  try{ const d=await arCollect(y); window.__arData=d; const lines=Object.values(d.src).map(x=>`<div>• ${x.label}: <b>${x.rows.length}</b></div>`).join('');
+    const miss=AR_SRC.filter(a=>!d.src[a[0]]).map(a=>a[2]).join('، ');
+    box.innerHTML=`<div style="font-size:13px;line-height:1.9"><b>ملخص بيانات ${y}:</b>${lines}${d.events!=null?`<div>• أحداث تقارير الدخول: <b>${d.events}</b> — نتائج المراجعة: <b>${d.reviews}</b></div>`:''}${miss?`<div style="color:var(--muted-2)">أقسام غير متاحة وتم تخطيها: ${miss}</div>`:''}</div>
+      <button class="btn primary block" style="margin-top:10px" onclick="arExport('pptx')">⬇️ تنزيل PowerPoint (.pptx)</button><button class="btn block" style="margin-top:6px" onclick="arExport('pdf')">⬇️ تنزيل PDF</button>`;
+  }catch(e){ console.error(e); box.innerHTML='<div class="empty">🚫 تعذّر استخراج البيانات: '+esc((e&&e.message)||'')+'</div>'; }
+}
+async function arExport(fmt){
+  const box=document.getElementById('ar_box'); const y=parseInt(document.getElementById('ar_year').value);
+  try{ toast('⏳ جاري إنشاء الملف...'); if(fmt==='pptx' && !(await ensurePptxLib())) throw new Error('تعذّر تحميل مكتبة PowerPoint');
+    const d=await arCollect(y); const slides=arBuildSlides(d); const title='التقرير السنوي الشامل لغرفة المراقبة المركزية '+y;
+    const out=await tpOutput(fmt,slides,title); await saveOrShareFile(out.blob, `${title}.${out.ext}`); toast('✅ تم إنشاء الملف');
+  }catch(e){ console.error(e); toast('🚫 فشل إنشاء التقرير: '+((e&&e.message)||'')); }
+}
+
 async function exportRoomEntryReport(reportId){
   const r = roomEntryReportsData.find(x=>x.id===reportId);
   if(!r){ toast('التقرير غير موجود'); return; }
@@ -13782,6 +13883,7 @@ function renderReportsCenterView(){
       <button class="qbtn" onclick="exportSectionPicker('recurring_faults')"><span class="qicon">⚠️</span> أجهزة متكررة الأعطال</button>
       <button class="qbtn" onclick="exportSectionPicker('shift_handovers')"><span class="qicon">🔄</span> تسليم واستلام الشيفت</button>
       <button class="qbtn" onclick="exportSectionPicker('tasks')"><span class="qicon">📋</span> المهام</button>
+      <button class="qbtn" onclick="openAnnualReportModal()"><span class="qicon">📊</span> التقرير السنوي الشامل</button>
       <button class="qbtn" onclick="exportSectionPicker('oncall')"><span class="qicon">🧑‍🔧</span> جدول المناوبات</button>
       <button class="qbtn" onclick="exportSectionPicker('towers')"><span class="qicon">📡</span> أبراج الشبكة</button>
       <button class="qbtn" onclick="exportSectionPicker('wireless_links')"><span class="qicon">📶</span> الروابط اللاسلكية</button>
@@ -13956,13 +14058,30 @@ async function exportSectionPicker(section, factoryId, __collect){
         getImageUrl: i=> rows[i].photo_url };
     },
     downcams_current: async()=>{
-      const {data} = await supa.from('cameras').select('*');
-      const rows=(data||[]).filter(c=>c.status && c.status!=='تعمل');
-      const byFactory = {}; rows.forEach(c=>{ const fn=factoriesData.find(x=>x.id===c.factory_id)?.name||'—'; byFactory[fn]=(byFactory[fn]||0)+1; });
-      const chartImages = [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات المنقطعة حاليًا: ${rows.length}`)].filter(Boolean);
-      return { title:'الكاميرات المنقطعة حاليًا', headers:['المصنع','الكاميرا','الحالة','تاريخ الانقطاع','الموقع','ملاحظات'],
-        data: rows.map(c=>[factoriesData.find(x=>x.id===c.factory_id)?.name||'', c.camera_name, c.status, c.fault_date?fmtDateAr(c.fault_date):'', c.location||'', c.notes||'']), raw:rows,
-        chartImages, getImageUrls: i=> rows[i].photo_url ? [{label:'صورة', url:rows[i].photo_url}] : [] };
+      // المصادر الفعلية في النظام: (1) سجلات الأعطال المفتوحة لكاميرا (هي مصدر شاشة "الكاميرات المنقطعة")، (2) جدول الكاميرات بحالة غير "تعمل"، (3) الرقم الإجمالي اليدوي للمصنع
+      const [{data:fl}, {data:cm}] = await Promise.all([
+        supa.from('faults').select('*').eq('device_type','camera').in('status', DOWNCAM_OPEN_STATUSES),
+        supa.from('cameras').select('*') ]);
+      const cams = cm||[], camById = new Map(cams.map(c=>[c.id,c]));
+      const fname = id=> factoriesData.find(x=>x.id===id)?.name||'—';
+      const list = [], seen = new Set();
+      (fl||[]).forEach(f=>{ const cam = camById.get(f.camera_id)||{}; const k = f.camera_id || (f.factory_id+'::'+camModNameKey(f.device_name)); if(seen.has(k)) return; seen.add(k);
+        list.push({factory_id:f.factory_id, name:f.device_name||cam.camera_name||'', location:f.location||cam.location||'', ip:cam.ip_address||cam.ip||'', status:f.status||'مفتوح', since:f.reported_at, notes:f.fault_type||f.description||'', photo:f.camera_photo_url||cam.photo_url||''}); });
+      cams.filter(c=>c.status && c.status!=='تعمل').forEach(c=>{ const k = c.id; const k2 = c.factory_id+'::'+camModNameKey(c.camera_name); if(seen.has(k)||seen.has(k2)) return; seen.add(k);
+        list.push({factory_id:c.factory_id, name:c.camera_name, location:c.location||'', ip:c.ip_address||c.ip||'', status:c.status, since:c.fault_date||c.updated_at, notes:c.notes||'', photo:c.photo_url||''}); });
+      // مصانع رقمها الإجمالي اليدوي أكبر من المسجّل تفصيليًا → صف "غير مفصّل" عشان التقرير يطابق النظام
+      factoriesData.forEach(f=>{ const down = computeFactory(f).camerasDown, listed = list.filter(x=>x.factory_id===f.id).length;
+        if(down>listed) list.push({factory_id:f.id, name:`${down-listed} كاميرا (غير مفصّلة في السجلات)`, location:'', ip:'', status:'منقطعة', since:null, notes:'مسجّلة في الإجمالي اليدوي للمصنع', photo:''}); });
+      list.sort((x,y)=> fname(x.factory_id).localeCompare(fname(y.factory_id),'ar'));
+      const byFactory = {}; list.forEach(x=>{ byFactory[fname(x.factory_id)] = (byFactory[fname(x.factory_id)]||0) + (/^\d+ كاميرا/.test(x.name)? parseInt(x.name) : 1); });
+      const totalDown = Object.values(byFactory).reduce((a,b)=>a+b,0);
+      const fmt = d=> d? new Date(d).toLocaleString('ar-EG',{dateStyle:'short',timeStyle:'short'}) : '';
+      const rows = list.length ? list : [{factory_id:null, name:'لا توجد كاميرات منقطعة حاليًا', location:'', ip:'', status:'', since:null, notes:'', photo:''}];
+      const chartImages = totalDown ? [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات المنقطعة حاليًا: ${totalDown}`)].filter(Boolean) : [];
+      const summary = Object.entries(byFactory).map(([k,v])=>`${k}: ${v}`).join(' | ');
+      return { title:'الكاميرات المنقطعة حاليًا'+(totalDown?` (${totalDown})`:''), headers:['المصنع','الكاميرا','الموقع','IP','الحالة','تاريخ/وقت الانقطاع','ملاحظات'],
+        data: rows.map(x=>[x.factory_id?fname(x.factory_id):'—', x.name, x.location, x.ip, x.status, fmt(x.since), x.notes]), raw:rows, chartImages, summary,
+        getImageUrls: i=> rows[i].photo ? [{label:'صورة', url:rows[i].photo}] : [] };
     },
     replaced_cameras: async()=>{
       const {data, error} = await supa.from('replaced_cameras').select('*').order('created_at',{ascending:false});
@@ -17663,6 +17782,7 @@ function tpIndigoClosing(c,title){
 /* ===== ربط كل قسم بتصميمه + نقطة الدخول من نافذة التصدير ===== */
 const TP_SIGS = {
   'المصنع|اسم الكاميرا|النوع|الشركة المصنعة|الدقة|IP|الموقع|الحالة':'cameras',
+  'المصنع|الرقم|الاسم|الحالة':'screens',
   'المصنع|الجهاز|النوع|الخطورة|الحالة|التاريخ':'faults',
   'المصنع|المكان|المشكلة|الحالة':'lighting',
   'المصنع|الاسم|الموقع|الحالة':'ups',
@@ -17693,6 +17813,7 @@ const TP_CFG = {
   lighting:     {theme:'radar',cards:{kind:'radar',nameH:'المكان',nameLabel:'المكان',fields:['المشكلة']}, stats:{pageTitle:'الرسوم البيانية',chart:n=>`إجمالي الأماكن المسجّلة: ${n}`,order:'insert'}, panels:[['الحالة','الحالة'],['المشكلة','المشكلة']]},
   servers:      {theme:'navy', table:true, stats:{pageTitle:'ملخص إحصائي',order:'desc',status:true}},
   roomentry:    {theme:'indigo',table:true, stats:{pageTitle:'الرسوم البيانية',order:'insert'}},
+  screens:      {theme:'blue', screensLayout:true},
   camtypes:     {theme:'blue', table:true, stats:{pageTitle:'الرسوم البيانية',order:'insert'}, special:'camtypes'}
 };
 
@@ -17849,11 +17970,48 @@ function tpBuildRoomEntry(cfg, title, opts){
         s.ops.push(c.R(x,6.12,aw,0.8,th.white,{r:0.1}), c.T(a2[0],x+0.15,6.16,aw-0.3,0.24,10,th.mute,{noFit:true}), c.T(str(a2[1]),x+0.15,6.4,aw-0.3,0.46,16,th.ink,{bold:true,min:9}));
       });
     }
+    s.ops.forEach(op=>{ if(op.t==='text'){ op.bold=true; if(op.size<12) op.size=12; } else if(op.t==='table'){ op.rows.forEach(r=>r.forEach(c2=>{ c2.bold=true; if(!c2.size||c2.size<12) c2.size=12; })); } });
   });
   tpIndigoClosing(c,title);
   return c.slides;
 }
+/* 🖥️ تقرير الشاشات: كل مصنع = صفحات (4 شاشات في الصفحة) على شكل أجهزة عرض + بطاقة إحصاء — خلفية بيضاء، في PDF / Word / PowerPoint */
+function tpBuildScreens(cfg, title, headers, rows, opts){
+  const c = tpCtx('blue', title, title); c.title = title; c.date = tpDate();
+  const {th,R,E,T} = c;
+  const groups = new Map();
+  rows.forEach((r,i)=>{ const g = groups.get(r[0]) || []; g.push({number:r[1], name:r[2], status:String(r[3]||''), photo:(opts&&opts.getImageUrl)?opts.getImageUrl(i):''}); groups.set(r[0], g); });
+  groups.forEach(g=> g.sort((a,b)=> (parseInt(a.number)||0)-(parseInt(b.number)||0)));
+  const bad = st=> /لا\s*تعمل|منقطع|متوقف|معطل|عطل/.test(st);
+  let s = c.newSlide(th.bg);
+  s.ops.push(R(0,0,13.333,7.5,th.brand), R(1.2,2.2,10.93,3.0,'FFFFFF',{r:0.2}), T('الشاشات',1.6,2.45,10.13,1.1,48,th.ink,{bold:true,align:'center',min:24}),
+    T(`${rows.length} شاشة  ·  ${groups.size} مصنع  ·  ${c.date}`,1.6,3.7,10.13,0.6,20,th.mute,{align:'center',min:12}), T(TP_SYS,1.2,6.4,10.93,0.4,13,'FFFFFF',{align:'center',noFit:true}));
+  let n = 2;
+  groups.forEach((list, fname)=>{
+    const f = factoriesData.find(x=>x.name===fname), cf = f ? computeFactory(f) : null;
+    const down = list.filter(x=>bad(x.status)).length;
+    for(let p=0; p<list.length; p+=4){
+      const chunk = list.slice(p,p+4); s = c.newSlide(th.bg);
+      tpBlueChrome(c, s, `الشاشات — ${fname}`, 'table', n++);
+      s.ops.push(tpCardBox(c,9.45,1.35,3.28,5.3),
+        T(cf?String(cf.camerasUp):'—',9.65,1.75,2.88,1.4,80,th.brand,{bold:true,align:'center',min:36}), T('كاميرا تعمل',9.65,3.2,2.88,0.5,20,th.ink,{align:'center',min:12}),
+        T(`${list.length} شاشات`,9.65,3.95,2.88,0.6,28,th.brand,{bold:true,align:'center',min:14}), T(fname,9.65,4.6,2.88,0.5,16,th.mute,{align:'center',min:10}),
+        R(9.85,5.5,2.48,0.55,down?th.amber:th.green,{r:0.27}), T(down?`${down} شاشة متوقفة`:'كل الشاشات تعمل',9.95,5.5,2.28,0.55,13,'FFFFFF',{bold:true,align:'center',min:9}));
+      chunk.forEach((m,k)=>{
+        const col = Math.floor(k/2), row = k%2, x = 4.95-col*4.35, y0 = 1.3+row*2.85, w = 4.0, h = 2.25, ok = !bad(m.status);
+        s.ops.push(R(x,y0,w,h,th.soft,{r:0.1,line:{c:th.line,w:1.5}}));
+        if(m.photo) s.ops.push({t:'img',url:m.photo,x:x+0.1,y:y0+0.1,w:w-0.2,h:h-0.6});
+        else s.ops.push(R(x+0.1,y0+0.1,w-0.2,h-0.6,th.line,{r:0.04}), T('لا توجد صورة',x+0.1,y0+0.1,w-0.2,h-0.6,13,th.mute,{align:'center',noFit:true}));
+        s.ops.push(E(x+0.2,y0+h-0.38,0.2,0.2,ok?th.green:th.red), T(`${m.number?m.number+'  ·  ':''}${m.name}`,x+0.5,y0+h-0.46,w-0.7,0.36,13,th.ink,{bold:true,align:'center',min:9}),
+          R(x+w/2-0.2,y0+h,0.4,0.18,th.line), R(x+w/2-0.8,y0+h+0.18,1.6,0.12,th.line,{r:0.06}));
+      });
+    }
+  });
+  tpBlueClosing(c,title);
+  return c.slides;
+}
 function tpBuild(key, cfg, title, headers, rows, opts){
+  if(key==='screens') return tpBuildScreens(cfg, title, headers, rows, opts);
   if(key==='roomentry' && opts && Array.isArray(opts.rawObjects) && opts.rawObjects.length) return tpBuildRoomEntry(cfg, title, opts);
   const D = tpPrepData(key,cfg,headers,rows,opts);
   const c = tpCtx(cfg.theme, title, title); c.title = title; c.date = tpDate();
