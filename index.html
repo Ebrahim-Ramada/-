@@ -13857,6 +13857,7 @@ function renderReportsCenterView(){
     <div class="section-title"><h2 style="font-size:13px">حسب القسم (كل الصيغ متاحة لكل قسم)</h2></div>
     <div class="quickgrid">
       <button class="qbtn" onclick="openFactoryReportPicker()"><span class="qicon">🏭</span> تقرير مصنع محدد</button>
+      <button class="qbtn" onclick="exportSectionPicker('netinfra')"><span class="qicon">🗄️</span> البنية التحتية للشبكة (كل الصيغ)</button>
       <button class="qbtn" onclick="openNetworkReportPicker()"><span class="qicon">🗄️</span> تقرير البنية التحتية للشبكة</button>
       <button class="qbtn" onclick="exportSectionPicker('faults')"><span class="qicon">📋</span> الأعطال</button>
       <button class="qbtn" onclick="exportSectionPicker('maintenance')"><span class="qicon">🛠️</span> الصيانة</button>
@@ -14019,6 +14020,18 @@ async function exportSectionPicker(section, factoryId, __collect){
       const balanceOf = itemId => transactions.filter(t=>t.item_id===itemId).reduce((a,t)=>a+(t.in_qty||0)-(t.out_qty||0),0);
       return { title:'مخزن الكونتينر', headers:['الصنف','النوع','الرصيد','ملاحظات'], data: rows.map(it=>[it.item_name, it.item_type||'', balanceOf(it.id), it.notes||'']), raw:rows,
         getImageUrls: i=> itemImgs.filter(im=>im.item_id===rows[i].id).map((im,k)=>({label:`صورة ${k+1}`, url:im.image_url})) };
+    },
+    netinfra: async()=>{
+      const T4=['factory_racks','factory_switches','factory_ups','factory_servers'];
+      const [rk,sw,up,sv] = await Promise.all(T4.map(t=>supa.from(t).select('*')));
+      let dr=[]; try{ const {data}=await supa.from('server_drives').select('*'); dr=data||[]; }catch(e){}
+      const svs=sv.data||[], fn=id=>factoriesData.find(x=>x.id===id)?.name||'', rows=[];
+      (sw.data||[]).forEach(x=>rows.push([fn(x.factory_id),'Switch',x.switch_name,x.total_ports?`${x.total_ports} Port`:'']));
+      svs.forEach(x=>rows.push([fn(x.factory_id),'Server',x.server_name,x.status||'']));
+      (up.data||[]).forEach(x=>rows.push([fn(x.factory_id),'UPS',x.ups_name,x.status||x.location||'']));
+      (rk.data||[]).forEach(x=>rows.push([fn(x.factory_id),'Rack',x.rack_name,x.location||'']));
+      dr.forEach(d=>rows.push([fn((svs.find(s2=>s2.id===d.server_id)||{}).factory_id),'Hard drive',d.drive_name||d.name||'Hard drive','']));
+      return { title:'البنية التحتية للشبكة', headers:['المصنع','النوع','الاسم','التفاصيل'], data:rows, raw:rows.map(()=>({})) };
     },
     roomneeds: async()=>{
       const {data} = await supa.from('room_needs').select('*');
@@ -17783,6 +17796,12 @@ function tpIndigoClosing(c,title){
 const TP_SIGS = {
   'المصنع|اسم الكاميرا|النوع|الشركة المصنعة|الدقة|IP|الموقع|الحالة':'cameras',
   'المصنع|الرقم|الاسم|الحالة':'screens',
+  'المصنع|الكاميرا|الموقع|IP|الحالة|تاريخ/وقت الانقطاع|ملاحظات':'downcamsnow',
+  'المصنع|الكاميرا الأولى|الكاميرا الثانية|تاريخ التبديل|ملاحظات':'replacedcams',
+  'المصنع|البرج|الرقم|الحالة|الموقع|النوع|الارتفاع|عدد الأنتن|التردد|IP|الطرف الآخر':'towers',
+  'المصنع|الرابط|من|إلى|Frequency|Channel|Bandwidth|Speed|الإشارة|الجودة|الحالة|آخر فحص':'wireless',
+  'العنوان|النوع|الكمية|الوحدة|الوصف|الأولوية|سبب الاحتياج|الحالة|ملاحظات':'needs',
+  'المصنع|النوع|الاسم|التفاصيل':'netinfra',
   'المصنع|الجهاز|النوع|الخطورة|الحالة|التاريخ':'faults',
   'المصنع|المكان|المشكلة|الحالة':'lighting',
   'المصنع|الاسم|الموقع|الحالة':'ups',
@@ -17814,6 +17833,7 @@ const TP_CFG = {
   servers:      {theme:'navy', table:true, stats:{pageTitle:'ملخص إحصائي',order:'desc',status:true}},
   roomentry:    {theme:'indigo',table:true, stats:{pageTitle:'الرسوم البيانية',order:'insert'}},
   screens:      {theme:'blue', screensLayout:true},
+  downcamsnow:{theme:'blue'}, replacedcams:{theme:'blue'}, towers:{theme:'blue'}, wireless:{theme:'blue'}, needs:{theme:'blue'}, netinfra:{theme:'blue'},
   camtypes:     {theme:'blue', table:true, stats:{pageTitle:'الرسوم البيانية',order:'insert'}, special:'camtypes'}
 };
 
@@ -18011,7 +18031,112 @@ function tpBuildScreens(cfg, title, headers, rows, opts){
   tpBlueClosing(c,title);
   return c.slides;
 }
+
+/* ===== تصاميم من ملفات PowerPoint المرفقة: منقطعة #3 · مبدَّلة #3 · روابط لاسلكية #3 · أبراج #2 · احتياجات الغرفة #12 · البنية التحتية #12 ===== */
+const TPD_S = 4/3, tpdF = v=>v*TPD_S;
+const tpdUrls = (opts,i)=> (typeof unifiedRowImages==='function' && opts) ? unifiedRowImages(opts,i).map(x=>x.url).filter(Boolean) : [];
+function tpdHead(c,s,title,sub){ s.ops.push(c.T(title,0.667,0.33,12.0,0.8,40,'0F2A47',{bold:true,min:20}), c.T(sub,0.667,1.07,12.0,0.4,17,'64748B',{min:10})); }
+// جدول بتصميم الأصل (ترويسة ملوّنة + صفوف متبادلة) مع خلايا نص/ملوّنة/صور
+function tpdTable(c,title,sub,cols,rows,o){
+  const {R,T}=c, x0=0.667, W=12.0, y0=1.73, headH=0.62, rowH=o.rowH, per=Math.max(1,Math.floor((6.95-y0-headH)/rowH));
+  const tw=cols.reduce((a,x)=>a+x.w,0), out=[];
+  for(let p=0;p<Math.max(1,rows.length);p+=per){
+    const s=c.newSlide('FFFFFF'); out.push(s); tpdHead(c,s,title,sub);
+    s.ops.push(R(x0,y0,W,headH,o.head));
+    let x=x0+W; cols.forEach(col=>{ const cw=col.w/tw*W; x-=cw; s.ops.push(T(col.h,x+0.05,y0,cw-0.1,headH,16,'FFFFFF',{bold:true,align:'center',min:9})); col.x=x; col.cw=cw; });
+    rows.slice(p,p+per).forEach((r,i)=>{
+      const y=y0+headH+i*rowH; s.ops.push(R(x0,y,W,rowH,i%2?o.zebra:'FFFFFF',{line:{c:'E2E8F0',w:0.75}}));
+      cols.forEach((col,ci)=>{ const v=r[ci];
+        if(v && v.urls){ const urls=v.urls.slice(0,2), n=urls.length, gap=0.06, ih=rowH-0.16, iw=(col.cw-0.16-(n-1)*gap)/Math.max(n,1);
+          urls.forEach((u,j)=>{ const ix=col.x+col.cw-0.08-(j+1)*iw-j*gap; s.ops.push(R(ix,y+0.08,iw,ih,'F8FAFC',{line:{c:'E2E8F0',w:0.75}}), {t:'img',url:u,x:ix,y:y+0.08,w:iw,h:ih,full:true}); }); }
+        else { const txt=(v&&v.txt!=null)?v.txt:v, color=(v&&v.color)||'1E293B', bold=!!(v&&v.bold)||ci===0; s.ops.push(T(txt==null?'':txt,col.x+0.08,y,col.cw-0.16,rowH,14,color,{bold,align:'center',min:8})); }
+      });
+    });
+  }
+  return out;
+}
+function tpBuildDownCams(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title), real=rows.filter(r=>r[0]!=='—'), n=real.length;
+  const body=rows.map((r,i)=>[r[1], r[0]==='—'?'':r[0], r[5], [r[2],r[3],r[6]].filter(Boolean).join(' · '), {txt:r[4]||'', color:'DC2626', bold:true}, {urls:tpdUrls(opts,i)}]);
+  tpdTable(c,`الكاميرات المنقطعة حاليًا${n?` (${n})`:''}`,`${n} سجل — ${tpDate()}`,
+    [{h:'الاسم',w:2.6},{h:'المصنع',w:1.6},{h:'الانقطاع',w:1.6},{h:'ملاحظات',w:2.5},{h:'الحالة',w:1.1},{h:'صورة',w:1.6}], body, {head:'9B2C2C',zebra:'FDECEC',rowH:0.85});
+  return c.slides;
+}
+function tpBuildReplaced(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title); let imgs=0;
+  const body=rows.map((r,i)=>{ const u=tpdUrls(opts,i); imgs+=u.length; return [`${r[0]} / ${r[2]||r[1]}`, r[1], r[2], r[3], {txt:'تم التبديل', color:'16A34A', bold:true}, {urls:u}]; });
+  tpdTable(c,'الكاميرات التي تم تبديلها',`${rows.length} سجل — ${imgs} صورة — ${tpDate()}`,
+    [{h:'الاسم',w:2.4},{h:'الكاميرا الأولى',w:1.6},{h:'الكاميرا الثانية',w:1.6},{h:'تاريخ التبديل',w:1.5},{h:'الحالة',w:1.2},{h:'الصور',w:2.4}], body, {head:'A24B0E',zebra:'FEF1E8',rowH:1.05});
+  return c.slides;
+}
+function tpBuildWireless(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title);
+  const body=rows.map(r=>[r[1], r[0], r[2], r[3], [r[4],r[5]&&'Ch '+r[5],r[6],r[7],r[8]].filter(Boolean).join(' · '), {txt:r[10]||'', color:/يعمل|تعمل|ممتاز/.test(r[10]||'')?'16A34A':'DC2626', bold:true}]);
+  tpdTable(c,'الروابط اللاسلكية',`${rows.length} سجل — ${tpDate()}`,
+    [{h:'الاسم',w:2.4},{h:'المصنع',w:1.5},{h:'من',w:1.7},{h:'إلى',w:1.7},{h:'التفاصيل',w:2.2},{h:'الحالة',w:1.1}], body, {head:'40429D',zebra:'EFF0FE',rowH:0.8});
+  return c.slides;
+}
+function tpBuildTowers(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title), {R,E,T}=c, xs=[6.6,3.55,0.5], ys=[1.3,3.4];
+  for(let p=0;p<rows.length;p+=6){
+    const s=c.newSlide('F1F5F9'); tpdHead(c,s,'أبراج الشبكة',`${rows.length} سجل — ${tpDate()}`);
+    rows.slice(p,p+6).forEach((r,k)=>{
+      const cx=tpdF(xs[k%3]), cy=tpdF(ys[Math.floor(k/3)]), w=tpdF(2.9), h=tpdF(1.9), ok=/يعمل|تعمل|نشط/.test(r[3]||'');
+      const ht=r[6]!==''&&r[6]!=null?(/^\d+(\.\d+)?$/.test(String(r[6]))?r[6]+' متر':r[6]):'';
+      s.ops.push(R(cx,cy,w,h,'FFFFFF',{r:0.06,line:{c:'E1E8F0',w:0.75}}), T(r[1]||'',cx+tpdF(0.12),cy+tpdF(0.10),tpdF(2.66),tpdF(0.46),17,'0F2A47',{bold:true,min:10}));
+      [`المصنع: ${r[0]}`, ht?`الارتفاع: ${ht}`:'', `عدد الأنتن: ${r[7]??''}`, r[4]?`الموقع: ${r[4]}`:(r[8]?`التردد: ${r[8]}`:'')].filter(Boolean).forEach((t,li)=> s.ops.push(T(t,cx+tpdF(0.12),cy+tpdF(0.60+li*0.20),tpdF(2.66),tpdF(0.20),14,'64748B',{min:8})));
+      s.ops.push(R(cx+tpdF(1.58),cy+tpdF(1.56),tpdF(1.2),tpdF(0.26),ok?'DCFCE7':'FEE2E2',{r:0.13}), T(r[3]||'—',cx+tpdF(1.58),cy+tpdF(1.56),tpdF(1.2),tpdF(0.26),14,ok?'166534':'991B1B',{bold:true,align:'center',min:8}),
+        E(cx-tpdF(0.12),cy-tpdF(0.14),tpdF(0.42),tpdF(0.42),'0C6B68'), T(String(p+k+1),cx-tpdF(0.12),cy-tpdF(0.14),tpdF(0.42),tpdF(0.42),17,'FFFFFF',{bold:true,align:'center',noFit:true}));
+    });
+  }
+  return c.slides;
+}
+function tpDonutPng(pairs,colors){
+  if(typeof document==='undefined') return null;
+  const cv=document.createElement('canvas'); cv.width=640; cv.height=700; const g=cv.getContext('2d'), tot=pairs.reduce((a,p)=>a+p[1],0)||1, cx=320, cy=300, R=270, r=148; let a0=-Math.PI/2;
+  g.fillStyle='#fff'; g.fillRect(0,0,640,700);
+  pairs.forEach((p,i)=>{ const a1=a0+p[1]/tot*2*Math.PI; if(p[1]>0){ g.beginPath(); g.moveTo(cx,cy); g.arc(cx,cy,R,a0,a1); g.closePath(); g.fillStyle='#'+colors[i%colors.length]; g.fill(); const m=(a0+a1)/2; g.fillStyle='#fff'; g.font='bold 38px Arial'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(String(p[1]),cx+Math.cos(m)*(R+r)/2,cy+Math.sin(m)*(R+r)/2); } a0=a1; });
+  g.beginPath(); g.arc(cx,cy,r,0,2*Math.PI); g.fillStyle='#fff'; g.fill();
+  g.font='bold 30px Arial'; g.textBaseline='middle'; g.direction='rtl'; g.textAlign='right';
+  pairs.forEach((p,i)=>{ const col=i%3, row=Math.floor(i/3), lx=620-col*205, ly=630+row*44; g.fillStyle='#'+colors[i%colors.length]; g.fillRect(lx-26,ly-13,26,26); g.fillStyle='#334155'; g.fillText(p[0],lx-34,ly); });
+  return cv.toDataURL('image/png');
+}
+// تصميم #12: بطاقات إحصاء + قائمة بعناصر + رسم دائري (الرسم يمين والقائمة يسار كما في الأصل)
+function tpdStatsPage(c,title,sub,kpis,numColor,items,pairs,colors,pillFn,bg){
+  const {R,T}=c, f=tpdF, out=[], png=tpDonutPng(pairs,colors);
+  for(let p=0;p<Math.max(1,items.length);p+=4){
+    const s=c.newSlide(bg||'F1F5F9'); out.push(s); tpdHead(c,s,title,sub);
+    s.ops.push(R(f(5.9),f(1.25),f(3.6),f(3.85),'FFFFFF',{r:0.04,line:{c:'E1E8F0',w:0.75}}));
+    if(png) s.ops.push({t:'img',url:png,x:f(6.0),y:f(1.35),w:f(3.4),h:f(3.65),full:true});
+    const kw=kpis.length>3?0.94:1.65, gap=kpis.length>3?0.12:0.1, x1=kpis.length>3?4.76:4.05;
+    kpis.forEach((k,i)=>{ const x=f(x1-i*(kw+(kpis.length>3?0.13:0.13+0.0))) ; const xx=kpis.length>3?f(4.76-i*1.065):f(4.05-i*1.775);
+      s.ops.push(R(xx,f(1.25),f(kw),f(0.85),'FFFFFF',{r:0.1,line:{c:'E1E8F0',w:0.75}}), T(String(k[0]),xx,f(1.27),f(kw),f(0.49),30,numColor,{bold:true,align:'center',min:14}), T(k[1],xx+f(0.05),f(1.74),f(kw-0.1),f(0.32),13,'475569',{align:'center',min:8})); });
+    items.slice(p,p+4).forEach((it,i)=>{ const y=f(2.3+i*0.7), pl=pillFn(it);
+      s.ops.push(R(f(0.5),y,f(5.2),f(0.62),'FFFFFF',{r:0.08,line:{c:'E1E8F0',w:0.75}}), T(it.text,f(2.0),y,f(3.6),f(0.62),17,'0F2A47',{bold:true,min:9}),
+        R(f(0.65),y+f(0.17),f(1.2),f(0.28),pl.bg,{r:0.14}), T(pl.t,f(0.65),y+f(0.17),f(1.2),f(0.28),14,pl.fg,{bold:true,align:'center',min:8})); });
+  }
+  return out;
+}
+function tpBuildNeeds(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title), done=r=>/تم/.test(r[7]||'')&&!/لم/.test(r[7]||''), d=rows.filter(done).length, nd=rows.length-d;
+  const items=rows.map(r=>({text:r[2]?`عدد (${r[2]}) ${r[0]}`:r[0], ok:done(r), st:r[7]||''}));
+  tpdStatsPage(c,'احتياجات الغرفة',`${rows.length} سجل — ${tpDate()}`,[[rows.length,'إجمالي الاحتياجات'],[d,'تم التنفيذ'],[nd,'لم يتم التنفيذ']],'9F6707',items,[['تم التنفيذ',d],['لم يتم التنفيذ',nd]],['F59E0B','9F6707'],
+    it=>it.ok?{bg:'DCFCE7',fg:'166534',t:it.st||'تم التنفيذ'}:{bg:'FEE2E2',fg:'991B1B',t:it.st||'لم يتم التنفيذ'});
+  return c.slides;
+}
+function tpBuildInfra(cfg,title,headers,rows,opts){
+  const c=tpCtx('blue',title,title), kinds=['Rack','Switch','Server','UPS','Hard drive'], names=['Racks','Switches','Servers','UPS','هاردات'], groups=new Map();
+  rows.forEach(r=>{ const g=groups.get(r[0])||[]; g.push(r); groups.set(r[0],g); });
+  groups.forEach((g,fname)=>{
+    const cnt=k=>g.filter(r=>r[1]===k).length, order=['Switch','Server','UPS','Rack','Hard drive'];
+    const items=order.flatMap(k=>g.filter(r=>r[1]===k)).map(r=>({text:r[2]||r[1], pill:r[3]||r[1]}));
+    tpdStatsPage(c,'البنية التحتية للشبكة',`${fname||'—'} — ${tpDate()}`,kinds.map((k,i)=>[cnt(k),names[i]]),'5A3CA0',items,kinds.map((k,i)=>[names[i],cnt(k)]),['8B5CF6','5A3CA0','BFA5FA','F59E0B','6366F1'],it=>({bg:'E2E8F0',fg:'334155',t:it.pill}));
+  });
+  return c.slides;
+}
+const TPD_MAP = {downcamsnow:tpBuildDownCams, replacedcams:tpBuildReplaced, towers:tpBuildTowers, wireless:tpBuildWireless, needs:tpBuildNeeds, netinfra:tpBuildInfra};
 function tpBuild(key, cfg, title, headers, rows, opts){
+  if(TPD_MAP[key]) return TPD_MAP[key](cfg, title, headers, rows, opts);
   if(key==='screens') return tpBuildScreens(cfg, title, headers, rows, opts);
   if(key==='roomentry' && opts && Array.isArray(opts.rawObjects) && opts.rawObjects.length) return tpBuildRoomEntry(cfg, title, opts);
   const D = tpPrepData(key,cfg,headers,rows,opts);
