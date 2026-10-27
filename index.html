@@ -18064,9 +18064,9 @@ function tpBuildDownCams(cfg,title,headers,rows,opts){
 }
 function tpBuildReplaced(cfg,title,headers,rows,opts){
   const c=tpCtx('blue',title,title); let imgs=0;
-  const body=rows.map((r,i)=>{ const u=tpdUrls(opts,i); imgs+=u.length; return [`${r[0]} / ${r[2]||r[1]}`, r[1], r[2], r[3], {txt:'تم التبديل', color:'16A34A', bold:true}, {urls:u}]; });
+  const body=rows.map((r,i)=>{ const u=tpdUrls(opts,i); imgs+=u.length; return [`${r[0]} / ${r[2]||r[1]}`, r[1], r[2], r[3], r[4]||'', {txt:'تم التبديل', color:'16A34A', bold:true}, {urls:u}]; });
   tpdTable(c,'الكاميرات التي تم تبديلها',`${rows.length} سجل — ${imgs} صورة — ${tpDate()}`,
-    [{h:'الاسم',w:2.4},{h:'الكاميرا الأولى',w:1.6},{h:'الكاميرا الثانية',w:1.6},{h:'تاريخ التبديل',w:1.5},{h:'الحالة',w:1.2},{h:'الصور',w:2.4}], body, {head:'A24B0E',zebra:'FEF1E8',rowH:1.05});
+    [{h:'الاسم',w:1.9},{h:'الكاميرا الأولى',w:1.4},{h:'الكاميرا الثانية',w:1.4},{h:'تاريخ التبديل',w:1.3},{h:'ملاحظات',w:2.7},{h:'الحالة',w:1.1},{h:'الصور',w:2.3}], body, {head:'A24B0E',zebra:'FEF1E8',rowH:1.05});
   return c.slides;
 }
 function tpBuildWireless(cfg,title,headers,rows,opts){
