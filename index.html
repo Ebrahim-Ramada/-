@@ -14076,25 +14076,28 @@ async function exportSectionPicker(section, factoryId, __collect){
         supa.from('faults').select('*').eq('device_type','camera').in('status', DOWNCAM_OPEN_STATUSES),
         supa.from('cameras').select('*') ]);
       const cams = cm||[], camById = new Map(cams.map(c=>[c.id,c]));
+      // صور كل كاميرا منقطعة: محفوظة في جدول fault_images (نفس مصدر زر "الصور" في الشاشة)
+      let fimgs = []; const fids = (fl||[]).map(f=>f.id);
+      for(let k=0;k<fids.length;k+=100){ try{ const {data:im} = await supa.from('fault_images').select('*').in('fault_id', fids.slice(k,k+100)).order('sort_order'); fimgs = fimgs.concat(im||[]); }catch(e){} }
       const fname = id=> factoriesData.find(x=>x.id===id)?.name||'—';
       const list = [], seen = new Set();
       (fl||[]).forEach(f=>{ const cam = camById.get(f.camera_id)||{}; const k = f.camera_id || (f.factory_id+'::'+camModNameKey(f.device_name)); if(seen.has(k)) return; seen.add(k);
-        list.push({factory_id:f.factory_id, name:f.device_name||cam.camera_name||'', location:f.location||cam.location||'', ip:cam.ip_address||cam.ip||'', status:f.status||'مفتوح', since:f.reported_at, notes:f.fault_type||f.description||'', photo:f.camera_photo_url||cam.photo_url||''}); });
+        list.push({factory_id:f.factory_id, name:f.device_name||cam.camera_name||'', location:f.location||cam.location||'', ip:cam.ip_address||cam.ip||'', status:f.status||'مفتوح', since:f.reported_at, notes:f.fault_type||f.description||'', photos:(()=>{ const p=fimgs.filter(i=>i.fault_id===f.id).map(i=>i.image_url).filter(Boolean); return p.length?p:[f.camera_photo_url||cam.photo_url].filter(Boolean); })()}); });
       cams.filter(c=>c.status && c.status!=='تعمل').forEach(c=>{ const k = c.id; const k2 = c.factory_id+'::'+camModNameKey(c.camera_name); if(seen.has(k)||seen.has(k2)) return; seen.add(k);
-        list.push({factory_id:c.factory_id, name:c.camera_name, location:c.location||'', ip:c.ip_address||c.ip||'', status:c.status, since:c.fault_date||c.updated_at, notes:c.notes||'', photo:c.photo_url||''}); });
+        list.push({factory_id:c.factory_id, name:c.camera_name, location:c.location||'', ip:c.ip_address||c.ip||'', status:c.status, since:c.fault_date||c.updated_at, notes:c.notes||'', photos:[c.photo_url].filter(Boolean)}); });
       // مصانع رقمها الإجمالي اليدوي أكبر من المسجّل تفصيليًا → صف "غير مفصّل" عشان التقرير يطابق النظام
       factoriesData.forEach(f=>{ const down = computeFactory(f).camerasDown, listed = list.filter(x=>x.factory_id===f.id).length;
-        if(down>listed) list.push({factory_id:f.id, name:`${down-listed} كاميرا (غير مفصّلة في السجلات)`, location:'', ip:'', status:'منقطعة', since:null, notes:'مسجّلة في الإجمالي اليدوي للمصنع', photo:''}); });
+        if(down>listed) list.push({factory_id:f.id, name:`${down-listed} كاميرا (غير مفصّلة في السجلات)`, location:'', ip:'', status:'منقطعة', since:null, notes:'مسجّلة في الإجمالي اليدوي للمصنع', photos:[]}); });
       list.sort((x,y)=> fname(x.factory_id).localeCompare(fname(y.factory_id),'ar'));
       const byFactory = {}; list.forEach(x=>{ byFactory[fname(x.factory_id)] = (byFactory[fname(x.factory_id)]||0) + (/^\d+ كاميرا/.test(x.name)? parseInt(x.name) : 1); });
       const totalDown = Object.values(byFactory).reduce((a,b)=>a+b,0);
       const fmt = d=> d? new Date(d).toLocaleString('ar-EG',{dateStyle:'short',timeStyle:'short'}) : '';
-      const rows = list.length ? list : [{factory_id:null, name:'لا توجد كاميرات منقطعة حاليًا', location:'', ip:'', status:'', since:null, notes:'', photo:''}];
+      const rows = list.length ? list : [{factory_id:null, name:'لا توجد كاميرات منقطعة حاليًا', location:'', ip:'', status:'', since:null, notes:'', photos:[]}];
       const chartImages = totalDown ? [buildGenericBarChartPng(byFactory, `إجمالي الكاميرات المنقطعة حاليًا: ${totalDown}`)].filter(Boolean) : [];
       const summary = Object.entries(byFactory).map(([k,v])=>`${k}: ${v}`).join(' | ');
       return { title:'الكاميرات المنقطعة حاليًا'+(totalDown?` (${totalDown})`:''), headers:['المصنع','الكاميرا','الموقع','IP','الحالة','تاريخ/وقت الانقطاع','ملاحظات'],
         data: rows.map(x=>[x.factory_id?fname(x.factory_id):'—', x.name, x.location, x.ip, x.status, fmt(x.since), x.notes]), raw:rows, chartImages, summary,
-        getImageUrls: i=> rows[i].photo ? [{label:'صورة', url:rows[i].photo}] : [] };
+        getImageUrls: i=> (rows[i].photos||[]).map((u,k)=>({label:'صورة '+(k+1), url:u})) };
     },
     replaced_cameras: async()=>{
       const {data, error} = await supa.from('replaced_cameras').select('*').order('created_at',{ascending:false});
