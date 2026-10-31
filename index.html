@@ -18196,21 +18196,25 @@ function tpBuild(key, cfg, title, headers, rows, opts){
 
 /* 🍩 تقرير أنواع الكاميرات: شريحة لكل مصنع بمخطط دائري يلخص كاميرات المصنع حسب النوع والدقة */
 function tpCamTypeFactoryDonuts(slides, rows, headers){
-  const H=n=>headers.indexOf(n), fI=H('المصنع'), nI=H('العدد'), rI=H('الدقة'), tI=H('النوع'); if(fI<0||nI<0) return;
-  const groups=new Map();
-  rows.forEach(r=>{ const f=r[fI]||'—', g=groups.get(f)||new Map(); const k=[r[tI],r[rI]].filter(x=>x&&x!=='—').join(' · ')||'غير مُصنَّف'; g.set(k,(g.get(k)||0)+(Number(r[nI])||0)); groups.set(f,g); });
+  const H=n=>headers.indexOf(n), fI=H('المصنع'), nI=H('العدد'), bI=H('الشركة المصنعة'), rI=H('الدقة'), tI=H('النوع'); if(fI<0||nI<0) return;
+  const ok=x=>x&&x!=='—', groups=new Map(), brands=new Map();
+  rows.forEach(r=>{ const f=r[fI]||'—', cnt=Number(r[nI])||0, g=groups.get(f)||new Map(), bm=brands.get(f)||new Map();
+    const k=[r[bI],r[tI],r[rI]].filter(ok).join(' · ')||'غير مُصنَّف'; g.set(k,(g.get(k)||0)+cnt); groups.set(f,g);
+    if(ok(r[bI])) bm.set(r[bI],(bm.get(r[bI])||0)+cnt); brands.set(f,bm); });
   const c=tpCtx('blue','أنواع الكاميرات','أنواع الكاميرات'); c.date=tpDate(); c.footLabel='أنواع الكاميرات حسب المصنع';
   const {th,R,T}=c, pal=['2563EB','0EA5E9','14B8A6','F59E0B','EF4444','8B5CF6','EC4899','84CC16','64748B','F97316']; let n=slides.length;
   groups.forEach((g,fname)=>{
-    let items=[...g.entries()].filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]); if(items.length>9){ const rest=items.slice(8).reduce((a,x)=>a+x[1],0); items=items.slice(0,8).concat([['أخرى',rest]]); }
+    let items=[...g.entries()].filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]); if(items.length>10){ const rest=items.slice(9).reduce((a,x)=>a+x[1],0); items=items.slice(0,9).concat([['أخرى',rest]]); }
     const tot=items.reduce((a,x)=>a+x[1],0); if(!tot) return;
-    const s=c.newSlide(th.bg); tpBlueChrome(c,s,`أنواع ودقة الكاميرات — ${fname}`,'chart',n++);
+    const s=c.newSlide(th.bg); tpBlueChrome(c,s,`الشركة والنوع والدقة — ${fname}`,'chart',n++);
     const png=tpDonutPng(items,pal,true);
     s.ops.push(R(0.6,1.35,5.6,5.4,'FFFFFF',{r:0.1,line:{c:th.line,w:1}}));
     if(png) s.ops.push({t:'img',url:png,x:0.75,y:1.5,w:5.3,h:5.1,full:true});
-    s.ops.push(R(6.6,1.35,6.13,5.4,'FFFFFF',{r:0.1,line:{c:th.line,w:1}}), T(`إجمالي كاميرات ${fname}: ${tot}`,6.8,1.45,5.73,0.55,18,th.ink,{bold:true,min:10}));
-    items.forEach((it,i)=>{ const y=2.1+i*0.5;
-      s.ops.push(R(12.2,y+0.13,0.24,0.24,pal[i%pal.length],{r:0.04}), T(it[0],8.2,y,3.9,0.5,15,th.ink,{bold:true,min:8}), T(String(it[1]),7.35,y,0.85,0.5,15,th.brand,{bold:true,align:'center',noFit:true}), T(Math.round(it[1]/tot*100)+'%',6.8,y,0.6,0.5,14,th.mute,{align:'center',noFit:true})); });
+    const bl=[...(brands.get(fname)||new Map()).entries()].sort((a,b)=>b[1]-a[1]).map(x=>`${x[0]}: ${x[1]}`).join('   ·   ');
+    s.ops.push(R(6.6,1.35,6.13,5.4,'FFFFFF',{r:0.1,line:{c:th.line,w:1}}), T(`إجمالي كاميرات ${fname}: ${tot}`,6.8,1.42,5.73,0.5,18,th.ink,{bold:true,min:10}));
+    if(bl) s.ops.push(T('الشركات المصنعة — '+bl,6.8,1.9,5.73,0.4,13,th.mute,{min:8}));
+    items.forEach((it,i)=>{ const y=2.4+i*0.43;
+      s.ops.push(R(12.2,y+0.1,0.22,0.22,pal[i%pal.length],{r:0.04}), T(it[0],7.9,y,4.2,0.43,14,th.ink,{bold:true,min:7}), T(String(it[1]),7.1,y,0.8,0.43,14,th.brand,{bold:true,align:'center',noFit:true}), T(Math.round(it[1]/tot*100)+'%',6.7,y,0.55,0.43,13,th.mute,{align:'center',noFit:true})); });
   });
   if(c.slides.length) slides.splice(Math.max(1,slides.length-1),0,...c.slides);
 }
