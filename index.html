@@ -7871,12 +7871,13 @@ function renderCameraModsList(){
         <select class="input" style="font-size:12px;padding:6px 8px;width:auto" onchange="updateModStatus('${c.id}', this.value)">
           ${['تحتاج تعديل','جاري التعديل','تم التعديل'].map(s=>`<option ${c.status===s?'selected':''}>${s}</option>`).join('')}
         </select>
-        <button class="btn sm" onclick="openCameraModForm('${c.id}')">✏️</button>
+        <button class="btn sm" onclick="openCameraModForm('${c.factory_id}','${c.id}')">✏️</button>
         <button class="btn sm danger" onclick="deleteCameraMod('${c.id}')">🗑</button>
       </div>`:''}
     </div>`).join('');
 }
 function openCameraModForm(factoryId, id){
+  if(!id){ const hit = cameraModsData.find(x=>x.id===factoryId); if(hit){ id = hit.id; factoryId = hit.factory_id; } }
   const c = id ? cameraModsData.find(x=>x.id===id) : null;
   const isNew = !c;
   const currentFactory = factoriesData.find(f=>f.id===factoryId);
