@@ -7186,6 +7186,8 @@ function deleteFaultImage(imageId, faultId){
     toast('✅ تم الحذف'); openFaultGallery(faultId); renderFaultsList();
   }, 'صورة عطل');
 }
+// يحوّل أي تاريخ إلى صيغة حقل datetime-local بالتوقيت المحلي (YYYY-MM-DDTHH:mm)
+function toLocalInput(v){ const d = v? new Date(v) : new Date(); if(isNaN(d)) return ''; const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
 function openFaultForm(id){
   const f = id ? faultsData.find(x=>x.id===id) : null;
   const isNew = !f;
@@ -7205,6 +7207,7 @@ function openFaultForm(id){
     </div>
     <div class="field"><label>اسم/رقم الجهاز</label><input class="input" id="ft_devname" value="${d.device_name}" placeholder="مثال: كاميرا بوابة الملح"></div>
     <div class="field"><label>نوع العطل</label><input class="input" id="ft_type" value="${d.fault_type||''}" placeholder="مثال: انقطاع الصورة"></div>
+    <div class="field"><label>📅 تاريخ ووقت الانقطاع</label><input class="input" type="datetime-local" id="ft_outage" value="${toLocalInput(d.reported_at)}"></div>
     <div class="field"><label>الوصف</label><textarea class="input" id="ft_desc">${esc(d.description||'')}</textarea></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="ft_resp" value="${d.responsible||''}"></div>
     <button class="btn primary block" onclick="saveFaultForm('${isNew?'':id}')">💾 ${isNew?'تسجيل العطل':'حفظ التعديل'}</button>
@@ -7221,6 +7224,10 @@ async function saveFaultForm(id){
     responsible: document.getElementById('ft_resp').value.trim()
   };
   if(!payload.device_name){ toast('أدخل اسم الجهاز'); return; }
+  { // تاريخ/وقت الانقطاع → يُحفظ في reported_at (نفس الحقل الذي تعتمد عليه التقارير ومهلة الاستجابة)
+    const ov = document.getElementById('ft_outage')?.value, orig = id ? (faultsData.find(x=>x.id===id)||{}).reported_at : null;
+    if(ov && !(id && orig && ov===toLocalInput(orig))){ const dt=new Date(ov); if(isNaN(dt)){ toast('تاريخ الانقطاع غير صالح'); return; } if(dt > new Date(Date.now()+5*60000)){ toast('⚠️ وقت الانقطاع في المستقبل'); return; } payload.reported_at = dt.toISOString(); }
+  }
   let cameraId = null;
   if(payload.device_type==='camera'){
     try{ const {data} = await supa.from('cameras').select('id').eq('factory_id',payload.factory_id).eq('camera_name',payload.device_name).maybeSingle(); cameraId = data?data.id:null; }catch(e){ cameraId = null; }
@@ -7283,6 +7290,7 @@ async function renderBulkFaultForm(factoryId){
     <div class="field"><label>نوع العطل</label><input class="input" id="bf_type" placeholder="مثال: انقطاع الصورة والتسجيل"></div>
     <div class="field"><label>الوصف</label><textarea class="input" id="bf_desc"></textarea></div>
     <div class="field"><label>المسؤول عن المتابعة</label><input class="input" id="bf_resp"></div>
+    <div class="field"><label>📅 تاريخ ووقت الانقطاع</label><input class="input" type="datetime-local" id="bf_outage" value="${toLocalInput()}"></div>
 
     <div id="bf_summary" style="font-size:11px;color:var(--muted-2);margin:8px 0"></div>
     <button class="btn primary block" id="bf_saveBtn" onclick="this.disabled=true; this.textContent='جاري الحفظ...'; saveBulkFaultForm('${factoryId}')">💾 تسجيل الأعطال لكل الأجهزة المحدَّدة</button>
@@ -7309,6 +7317,8 @@ async function saveBulkFaultForm(factoryId){
     description: document.getElementById('bf_desc').value.trim(), responsible: document.getElementById('bf_resp').value.trim(),
     created_by: currentProfile.id
   };
+  const bov = document.getElementById('bf_outage')?.value;
+  if(bov){ const dt=new Date(bov); if(isNaN(dt)){ toast('تاريخ الانقطاع غير صالح'); const b=document.getElementById('bf_saveBtn'); if(b){b.disabled=false; b.textContent='💾 تسجيل الأعطال لكل الأجهزة المحدَّدة';} return; } if(dt > new Date(Date.now()+5*60000)){ toast('⚠️ وقت الانقطاع في المستقبل'); const b=document.getElementById('bf_saveBtn'); if(b){b.disabled=false; b.textContent='💾 تسجيل الأعطال لكل الأجهزة المحدَّدة';} return; } shared.reported_at = dt.toISOString(); }
   let ok=0, failed=[];
   for(const name of deviceNames){
     try{
