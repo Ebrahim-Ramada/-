@@ -4720,11 +4720,9 @@ const CAM_STATUS_COLORS = {'تعمل':'ok','عطل':'bad','تحت الصيانة
    لشاشة إدارة الكاميرات. غير كده → عرض القائمة القديمة + رفع صور
    مباشرة إلى factories.camera_photos (متوافق قبل الترقية المعمارية)
    ============================================================ */
+let downCamsIndivCount = 0;
 async function openDownCamerasDetail(factoryId){
-  try{
-    const {count, error} = await supa.from('cameras').select('id',{count:'exact', head:true}).eq('factory_id', factoryId);
-    if(!error && count>0){ goTo('cameras', factoryId); return; }
-  }catch(e){ /* الجدول قد لا يكون مفعّلًا بعد — استمر بالنظام الموحَّد */ }
+  // 🎯 كل المصانع تفتح نفس شاشة "الكاميرات المنقطعة" (بغض النظر عن وجود كاميرات فردية مسجّلة)
   await openUnifiedDownCamerasModal(factoryId);
 }
 async function openUnifiedDownCamerasModal(factoryId){
@@ -4732,6 +4730,8 @@ async function openUnifiedDownCamerasModal(factoryId){
   if(!f) return;
   openModal(`<div class="modal-head"><h3>📷 الكاميرات المنقطعة — ${f.name}</h3><button class="x-close" onclick="closeModal()">✕</button></div><div class="empty">جاري التحميل...</div>`);
   await reloadUnifiedDownCams(factoryId);
+  downCamsIndivCount = 0;
+  try{ const {count, error} = await supa.from('cameras').select('id',{count:'exact', head:true}).eq('factory_id', factoryId); if(!error) downCamsIndivCount = count||0; }catch(e){}
   renderUnifiedDownCamerasModal(factoryId);
 }
 async function reloadUnifiedDownCams(factoryId){
@@ -4751,6 +4751,7 @@ function renderUnifiedDownCamerasModal(factoryId){
     <div class="modal-head"><h3>📷 الكاميرات المنقطعة — ${f.name}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
     <p style="font-size:11px;color:var(--muted-2);margin-top:-6px;margin-bottom:10px">${f.cameras_down||0} كاميرا منقطعة (إجمالي المصنع) من أصل ${f.cameras_total||0} — نسبة التشغيل ${fmtPct2(computeFactory(f).camUptime)}</p>
     ${isAdmin()? `<button class="btn primary sm block" style="margin-bottom:10px" onclick="openDownCamFormInline('${factoryId}')">+ تسجيل كاميرا منقطعة</button>`:''}
+    ${downCamsIndivCount>0? `<button class="btn sm block" style="margin-bottom:10px" onclick="closeModal(); goTo('cameras','${factoryId}')">📷 فتح إدارة الكاميرات المسجّلة (${downCamsIndivCount})</button>`:''}
     ${list.length===0? `<div class="empty">لا توجد كاميرات مسجّلة تفصيليًا بعد. ${isAdmin()?'اضغط "+ تسجيل كاميرا منقطعة" فوق لتسجيل كل كاميرا باسمها وصورتها (بيانات هذا السجل نفسها تظهر في "الأعطال").':''}</div>` :
       list.map(c=>{
         const photo = getDownCamPhoto(c.id);
@@ -8480,19 +8481,25 @@ async function removeDownCamPhoto(id){
     toast('✅ تم حذف الصورة'); renderDownCamsList();
   }catch(e){ toast('🚫 تعذّر الحذف'); }
 }
-async function uploadLightingPhoto(id, inputEl){
-  const file = inputEl.files[0]; if(!file) return;
+async function uploadLightingPhoto(id, kind, inputEl){
+  if(kind && kind.files && !inputEl){ inputEl = kind; kind = 'before'; }   // توافق مع الاستدعاء القديم
+  const file = inputEl && inputEl.files && inputEl.files[0]; if(!file) return;
   toast('جاري رفع الصورة...');
   try{
     const compressed = await compressImageFile(file);
-    const path = `lighting/${id}-${Date.now()}.jpg`;
+    const path = `lighting/${id}-${kind}-${Date.now()}.jpg`;
     const {error: upErr} = await supa.storage.from('camera-photos').upload(path, compressed, {contentType:'image/jpeg', upsert:true});
     if(upErr) throw upErr;
     const {data: pub} = supa.storage.from('camera-photos').getPublicUrl(path);
-    const {error} = await supa.from('lighting_needs').update({photo_url: pub.publicUrl}).eq('id', id);
+    const patch = kind==='after' ? {photo_after_url: pub.publicUrl} : {photo_url: pub.publicUrl};   // "قبل" يُحفظ في photo_url (يقرؤه الكارت والتقارير)
+    const {error} = await supa.from('lighting_needs').update(patch).eq('id', id);
     if(error) throw error;
     toast('✅ تم رفع الصورة'); loadLightingNeeds(currentViewCtx);
-  }catch(e){ console.error(e); toast('🚫 تعذّر رفع الصورة: '+(e.message||'')); }
+  }catch(e){ console.error(e);
+    const missing = /photo_after_url|schema cache|column/i.test((e&&e.message)||'');
+    toast(missing ? '⚠️ شغّل ملف lighting_photos.sql في Supabase مرة واحدة لتفعيل صورة "بعد"' : '🚫 تعذّر رفع الصورة: '+((e&&e.message)||''));
+  }
+  try{ inputEl.value=''; }catch(e){}
 }
 async function removeLightingPhoto(id){
   try{
@@ -14047,7 +14054,7 @@ async function exportSectionPicker(section, factoryId, __collect){
     roomneeds: async()=>{
       const {data} = await supa.from('room_needs').select('*');
       const rows=(data||[]); return { title:'احتياجات الغرفة', headers:['العنوان','النوع','الكمية','الوحدة','الوصف','الأولوية','سبب الاحتياج','الحالة','ملاحظات'],
-        data: rows.map(n=>[n.title||'', n.item_type||'', n.quantity??'', n.unit||'', n.description||'', n.priority||'', n.reason||'', n.status||'', n.notes||'']), raw:rows };
+        data: rows.map(n=>[n.title||'', n.item_type||'', n.quantity??'', n.unit||'', n.description||'', n.priority||'', n.reason||'', n.status||'', n.notes||'']), raw:rows, getImageUrl: i=>rows[i].photo_url };
     },
     cameramods: async()=>{
       const {data} = await supa.from('camera_modifications').select('*');
@@ -18127,14 +18134,15 @@ function tpdStatsPage(c,title,sub,kpis,numColor,items,pairs,colors,pillFn,bg){
     kpis.forEach((k,i)=>{ const x=f(x1-i*(kw+(kpis.length>3?0.13:0.13+0.0))) ; const xx=kpis.length>3?f(4.76-i*1.065):f(4.05-i*1.775);
       s.ops.push(R(xx,f(1.25),f(kw),f(0.85),'FFFFFF',{r:0.1,line:{c:'E1E8F0',w:0.75}}), T(String(k[0]),xx,f(1.27),f(kw),f(0.49),30,numColor,{bold:true,align:'center',min:14}), T(k[1],xx+f(0.05),f(1.74),f(kw-0.1),f(0.32),13,'475569',{align:'center',min:8})); });
     items.slice(p,p+4).forEach((it,i)=>{ const y=f(2.3+i*0.7), pl=pillFn(it);
-      s.ops.push(R(f(0.5),y,f(5.2),f(0.62),'FFFFFF',{r:0.08,line:{c:'E1E8F0',w:0.75}}), T(it.text,f(2.0),y,f(3.6),f(0.62),17,'0F2A47',{bold:true,min:9}),
-        R(f(0.65),y+f(0.17),f(1.2),f(0.28),pl.bg,{r:0.14}), T(pl.t,f(0.65),y+f(0.17),f(1.2),f(0.28),14,pl.fg,{bold:true,align:'center',min:8})); });
+      s.ops.push(R(f(0.5),y,f(5.2),f(0.62),'FFFFFF',{r:0.08,line:{c:'E1E8F0',w:0.75}}), T(it.text,f(2.0),y,f(it.img?3.05:3.6),f(0.62),17,'0F2A47',{bold:true,min:9}),
+        R(f(0.65),y+f(0.17),f(1.2),f(0.28),pl.bg,{r:0.14}), T(pl.t,f(0.65),y+f(0.17),f(1.2),f(0.28),14,pl.fg,{bold:true,align:'center',min:8}));
+      if(it.img) s.ops.push(R(f(5.12),y+f(0.06),f(0.5),f(0.5),'0F172A',{r:0.04}), {t:'img',url:it.img,x:f(5.12),y:y+f(0.06),w:f(0.5),h:f(0.5),full:true}); });
   }
   return out;
 }
 function tpBuildNeeds(cfg,title,headers,rows,opts){
   const c=tpCtx('blue',title,title), done=r=>/تم/.test(r[7]||'')&&!/لم/.test(r[7]||''), d=rows.filter(done).length, nd=rows.length-d;
-  const items=rows.map(r=>({text:r[2]?`عدد (${r[2]}) ${r[0]}`:r[0], ok:done(r), st:r[7]||''}));
+  const items=rows.map((r,i)=>({text:r[2]?`عدد (${r[2]}) ${r[0]}`:r[0], ok:done(r), st:r[7]||'', img:(tpdUrls(opts,i)||[])[0]||''}));
   tpdStatsPage(c,'احتياجات الغرفة',`${rows.length} سجل — ${tpDate()}`,[[rows.length,'إجمالي الاحتياجات'],[d,'تم التنفيذ'],[nd,'لم يتم التنفيذ']],'9F6707',items,[['تم التنفيذ',d],['لم يتم التنفيذ',nd]],['F59E0B','9F6707'],
     it=>it.ok?{bg:'DCFCE7',fg:'166534',t:it.st||'تم التنفيذ'}:{bg:'FEE2E2',fg:'991B1B',t:it.st||'لم يتم التنفيذ'});
   return c.slides;
