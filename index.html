@@ -18141,10 +18141,26 @@ function tpdStatsPage(c,title,sub,kpis,numColor,items,pairs,colors,pillFn,bg){
   return out;
 }
 function tpBuildNeeds(cfg,title,headers,rows,opts){
-  const c=tpCtx('blue',title,title), done=r=>/تم/.test(r[7]||'')&&!/لم/.test(r[7]||''), d=rows.filter(done).length, nd=rows.length-d;
-  const items=rows.map((r,i)=>({text:r[2]?`عدد (${r[2]}) ${r[0]}`:r[0], ok:done(r), st:r[7]||'', img:(tpdUrls(opts,i)||[])[0]||''}));
-  tpdStatsPage(c,'احتياجات الغرفة',`${rows.length} سجل — ${tpDate()}`,[[rows.length,'إجمالي الاحتياجات'],[d,'تم التنفيذ'],[nd,'لم يتم التنفيذ']],'9F6707',items,[['تم التنفيذ',d],['لم يتم التنفيذ',nd]],['F59E0B','9F6707'],
-    it=>it.ok?{bg:'DCFCE7',fg:'166534',t:it.st||'تم التنفيذ'}:{bg:'FEE2E2',fg:'991B1B',t:it.st||'لم يتم التنفيذ'});
+  // 🖼️ احتياجات الغرفة: بطاقات بصور كبيرة (3 في الصفحة) على خلفية بيضاء — مناسبة لطباعة A4
+  const c=tpCtx('blue',title,title), {R,T}=c, done=r=>/تم/.test(r[7]||'')&&!/لم/.test(r[7]||''), d=rows.filter(done).length, nd=rows.length-d;
+  const W=3.95, G=0.2, X0=0.55, Y0=1.95, H=5.0, PH=3.0, N=rows.length;
+  for(let p=0;p<Math.max(1,N);p+=3){
+    const s=c.newSlide('FFFFFF'); tpdHead(c,s,'احتياجات الغرفة',`${N} سجل — ${tpDate()}`);
+    [[N,'إجمالي الاحتياجات','0F2A47'],[d,'تم التنفيذ','166534'],[nd,'لم يتم التنفيذ','991B1B']].forEach((k,i)=>{ const x=0.55+i*2.05;
+      s.ops.push(R(x,1.25,1.9,0.62,'F8FAFC',{r:0.1,line:{c:'E2E8F0',w:0.75}}), T(String(k[0]),x+1.15,1.25,0.7,0.62,24,k[2],{bold:true,align:'center',min:12}), T(k[1],x+0.05,1.25,1.1,0.62,12,'475569',{align:'center',min:7})); });
+    rows.slice(p,p+3).forEach((r,kk)=>{
+      const i=p+kk, x=X0+(2-kk)*(W+G), ok=done(r), ty=Y0+PH+0.2, u=(tpdUrls(opts,i)||[])[0];
+      s.ops.push(R(x,Y0,W,H,'FFFFFF',{r:0.08,line:{c:'E2E8F0',w:1}}), R(x+0.12,Y0+0.12,W-0.24,PH,'F1F5F9',{r:0.05}));
+      if(u) s.ops.push({t:'img',url:u,x:x+0.12,y:Y0+0.12,w:W-0.24,h:PH,full:true});
+      else s.ops.push(T('لا توجد صورة',x+0.12,Y0+0.12,W-0.24,PH,16,'94A3B8',{align:'center',noFit:true}));
+      s.ops.push(T(`${String(i+1).padStart(2,'0')} / ${String(N).padStart(2,'0')}`,x+0.15,ty,1.2,0.3,12,'64748B',{align:'left',noFit:true}),
+        T(r[2]?`عدد (${r[2]}) ${r[0]}`:(r[0]||''),x+0.15,ty+0.05,W-0.3,0.62,20,'0F2A47',{bold:true,min:10}),
+        R(x+W-1.65,ty+0.74,1.5,0.34,ok?'DCFCE7':'FEE2E2',{r:0.17}), T(r[7]||(ok?'تم التنفيذ':'لم يتم التنفيذ'),x+W-1.65,ty+0.74,1.5,0.34,13,ok?'166534':'991B1B',{bold:true,align:'center',min:8}));
+      if(r[5]) s.ops.push(R(x+W-3.25,ty+0.74,1.5,0.34,'FEF3C7',{r:0.17}), T('الأولوية: '+r[5],x+W-3.25,ty+0.74,1.5,0.34,12,'92400E',{bold:true,align:'center',min:7}));
+      const det=[r[6]&&('السبب: '+r[6]), r[4], r[8]&&('ملاحظات: '+r[8])].filter(Boolean).join(' — ');
+      if(det) s.ops.push(T(det,x+0.15,ty+1.15,W-0.3,Y0+H-(ty+1.15)-0.08,13,'475569',{min:8}));
+    });
+  }
   return c.slides;
 }
 function tpBuildInfra(cfg,title,headers,rows,opts){
